@@ -1,0 +1,54 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../**/*.blade.php';
+@source '../**/*.js';
+@source '../**/*.vue';
+
+/*
+ * Design tokens. In Tailwind v4 anything under `@theme` becomes both a CSS
+ * variable and a utility namespace — so `--color-primary` powers `bg-primary`,
+ * `text-primary`, `border-primary`, etc. These mirror the kpn-coi palette.
+ */
+@theme {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
+        'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+
+    /* Brand */
+    --color-primary: #ab2f2b;
+    --color-primary-hover: #8a2522;
+
+    /* Surfaces */
+    --color-page: #f4f6f8;
+    --color-surface: #ffffff;
+
+    /* Text */
+    --color-text: #555555;
+    --color-muted: #94a3b8;
+
+    /* Lines */
+    --color-border: #e2e8f0;
+
+    /* Status */
+    --color-success: #2f855a;
+    --color-danger: #c53030;
+    --color-warning: #b45309;
+}
+
+/*
+ * Plain layout variables (not a color namespace). The sidebar logo block and
+ * the topbar both take their height from here so their bottom borders line up
+ * as one continuous rule across the page.
+ */
+:root {
+    --topbar-height: 64px;
+    --sidebar-width: 260px;
+}
+
+body {
+    background-color: var(--color-page);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
