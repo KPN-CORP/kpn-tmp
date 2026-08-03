@@ -4,7 +4,7 @@ import type { LocaleMessages } from './index'
 // missing or misspelled key here is a compile-time error.
 const id: LocaleMessages = {
     app: {
-        name: 'KPN Console',
+        name: 'KPN TMP',
         version: 'v1.0.0',
     },
 

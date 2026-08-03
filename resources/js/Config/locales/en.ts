@@ -1,6 +1,6 @@
 export default {
     app: {
-        name: 'KPN Console',
+        name: 'KPN TMP',
         version: 'v1.0.0',
     },
 
