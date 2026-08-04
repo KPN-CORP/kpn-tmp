@@ -8,6 +8,7 @@ import { useLocale } from '@/Composables/useLocale'
 
 defineProps<{
     canResetPassword?: boolean
+    canDevLogin?: boolean
     status?: string
 }>()
 
@@ -173,5 +174,19 @@ function submit() {
                 {{ form.processing ? t.auth.signingIn : t.auth.signIn }}
             </button>
         </form>
+
+        <!-- Local/QA impersonation entry point -->
+        <div
+            v-if="canDevLogin"
+            class="mt-6 border-t border-border pt-4 text-center"
+        >
+            <Link
+                href="/dev-login"
+                class="text-sm font-medium text-slate-500 hover:text-primary hover:underline"
+            >
+                <i class="fa-solid fa-user-gear mr-1" />
+                {{ t.auth.devLoginLink }}
+            </Link>
+        </div>
     </AuthLayout>
 </template>

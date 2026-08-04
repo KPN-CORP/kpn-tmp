@@ -2,28 +2,13 @@
 
 namespace App\Http\Requests;
 
-use Illuminate\Contracts\Validation\ValidationRule;
-use Illuminate\Foundation\Http\FormRequest;
-
-class UpdateIndividualDevelopmentPlanRequest extends FormRequest
+/**
+ * Same rules as create, minus employee_id (the plan is resolved from the route).
+ */
+class UpdateIndividualDevelopmentPlanRequest extends StoreIndividualDevelopmentPlanRequest
 {
-    /**
-     * Determine if the user is authorized to make this request.
-     */
-    public function authorize(): bool
-    {
-        return false;
-    }
-
-    /**
-     * Get the validation rules that apply to the request.
-     *
-     * @return array<string, ValidationRule|array<mixed>|string>
-     */
     public function rules(): array
     {
-        return [
-            //
-        ];
+        return $this->planRules();
     }
 }

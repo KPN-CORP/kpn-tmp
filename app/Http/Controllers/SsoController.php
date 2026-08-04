@@ -2,91 +2,103 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use App\Models\User;
-use App\Http\Requests\Auth\LoginRequest;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use RealRashid\SweetAlert\Facades\Alert;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
+/**
+ * SSO entry point. An external portal redirects here with an encrypted `data`
+ * query param carrying the user's email + a Darwinbox token. We decrypt it,
+ * verify the token against the SSO service, then log the matching local user in.
+ */
 class SsoController extends Controller
 {
-    public function dbauth(Request $request)
+    public function dbauth(Request $request): RedirectResponse
     {
-        return $this->handleDbauth($request, route('employee.history', absolute: false), 'kpncoi');
-    }
+        $payload = $this->decryptPayload((string) $request->query('data'));
 
-    private function handleDbauth(Request $request, $redirectRoute, $sessionValue)
-    {
-        $encryptedData = $request->data;
-        $decodedData = base64_decode($encryptedData);
-
-        $key = '666666';
-        $decryptedDataxor = $this->xorDecrypt($decodedData, $key);
-        $decryptedData = base64_decode($decryptedDataxor);
-
-        $decryptedDataArray = json_decode($decryptedData, true);
-        $email = $decryptedDataArray['email'];
-        $token = $decryptedDataArray['token'];
-
-        $curl = curl_init();
-
-        curl_setopt_array($curl, array(
-            CURLOPT_URL => 'https://kpncorporation.darwinbox.com/checkToken',
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => '',
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 0,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => json_encode(array(
-                "api_key" => "3bbfc6dfa28df2a81bd45192bf4f96b72628ae0ec9921a062aef937b7f25d6c704ccfc9539e70e5939a45cc43f3b7ce61477c7135a83bdbd6f85d5c38b5fc563",
-                "token" => $token,
-            )),
-            CURLOPT_HTTPHEADER => array(
-                'Content-Type: application/json',
-                'Authorization: Basic S1BOX1NTTzpUTXNfJDU2T3BzJXB3',
-                'Cookie: __cf_bm=4uUEj1zmjV.MExppSaO8PotAtVYX3j1LC37K7VZbRrA-1712303016-1.0.1.1-t6I22efQWtYGVIwVMpn7P63eop_5tmi8pU7n_ju6i2_AD1YM846eQF2VlfbZKoC.ZwvzWCyaXDISwvp.JP2TPQ; _cfuvid=kEL.TVWTCuZAsepIdMuvd7X9.q7rTz4SP9.769IZWFQ-1712126032738-0.0.1.1-604800000; session=83c35e478c2cafccac60fced59ff2f30'
-            ),
-        ));
-
-        $response = curl_exec($curl);
-        curl_close($curl);
-
-        $responseData = json_decode($response, true);
-        $status = $responseData['status'];
-
-        if($status==1){
-            $user = User::where('email', $email)->first();
-            if ($user) {
-                Auth::login($user);
-                $user->token = $token;
-                $user->email_log = $email;
-                $user->save();
-                $request->session()->put('system', $sessionValue);
-                $request->session()->regenerate();
-                return redirect()->intended($redirectRoute);
-            } else {
-                Alert::error('Login Failed, Please Contact Administrator')->showConfirmButton('OK');
-                return redirect('https://kpncorporation.darwinbox.com/');
-            }
-        } else {
-            Alert::error('Login Failed, Please Contact Administrator')->showConfirmButton('OK');
-            return redirect('https://kpncorporation.darwinbox.com/');
+        if (! $payload || empty($payload['email']) || empty($payload['token'])) {
+            return $this->failure('Malformed SSO payload.');
         }
+
+        if (! $this->tokenIsValid($payload['token'])) {
+            return $this->failure('SSO token rejected.');
+        }
+
+        $user = User::where('email', $payload['email'])->first();
+
+        if (! $user) {
+            return $this->failure("No local account for {$payload['email']}.");
+        }
+
+        Auth::login($user);
+        $request->session()->regenerate();
+
+        return redirect()->intended(route('dashboard'));
     }
 
+    /**
+     * base64 -> XOR(xor_key) -> base64 -> JSON.
+     */
+    private function decryptPayload(string $data): ?array
+    {
+        if ($data === '') {
+            return null;
+        }
 
-    private function xorDecrypt($data, $key) {
+        $xored = $this->xorCipher(base64_decode($data), (string) config('services.sso.xor_key'));
+        $json = base64_decode($xored);
+
+        $decoded = json_decode($json, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function tokenIsValid(string $token): bool
+    {
+        try {
+            $response = Http::timeout(15)
+                ->withHeaders(['Authorization' => (string) config('services.sso.authorization')])
+                ->post((string) config('services.sso.check_token_url'), [
+                    'api_key' => (string) config('services.sso.api_key'),
+                    'token' => $token,
+                ]);
+        } catch (\Throwable $e) {
+            Log::warning('SSO token check failed', ['message' => $e->getMessage()]);
+
+            return false;
+        }
+
+        return (int) $response->json('status') === 1;
+    }
+
+    private function failure(string $reason): RedirectResponse
+    {
+        Log::warning('SSO login failed', ['reason' => $reason]);
+
+        return redirect()->away((string) config('services.sso.failure_redirect'))
+            ->with('error', 'Login failed. Please contact your administrator.');
+    }
+
+    /**
+     * Symmetric XOR — same routine encrypts and decrypts.
+     */
+    private function xorCipher(string $data, string $key): string
+    {
+        if ($key === '') {
+            return $data;
+        }
+
         $keyLength = strlen($key);
-        $dataLength = strlen($data);
-        $decrypted = '';
-    
-        // Loop melalui data dan melakukan XOR dengan key
-        for ($i = 0; $i < $dataLength; $i++) {
-            $decrypted .= $data[$i] ^ $key[$i % $keyLength];
+        $out = '';
+
+        for ($i = 0, $len = strlen($data); $i < $len; $i++) {
+            $out .= $data[$i] ^ $key[$i % $keyLength];
         }
-    
-        return $decrypted;
+
+        return $out;
     }
 }

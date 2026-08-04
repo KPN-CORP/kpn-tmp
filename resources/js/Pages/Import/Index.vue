@@ -1,0 +1,186 @@
+<script setup lang="ts">
+import { ref } from 'vue'
+import { Head, router, useForm } from '@inertiajs/vue3'
+import AppLayout from '@/Layouts/AppLayout.vue'
+import PageHeader from '@/Components/UI/PageHeader.vue'
+import Pagination from '@/Components/UI/Pagination.vue'
+import { useLocale } from '@/Composables/useLocale'
+
+const { t } = useLocale()
+
+interface Log {
+    id: number
+    data_type: string
+    import_date: string
+    status: string
+    result: string
+    original_file_path: string | null
+    user?: { name: string } | null
+}
+interface Paginator {
+    data: Log[]
+    links: { url: string | null; label: string; active: boolean }[]
+    total: number
+    from: number | null
+    to: number | null
+    per_page: number
+}
+
+const props = defineProps<{
+    dataTypes: { value: string; label: string }[]
+    logs: Paginator
+}>()
+
+const fileInput = ref<HTMLInputElement | null>(null)
+
+const form = useForm<{ data_type: string; file: File | null }>({
+    data_type: props.dataTypes[0]?.value ?? '',
+    file: null,
+})
+
+function onFile(e: Event) {
+    form.file = (e.target as HTMLInputElement).files?.[0] ?? null
+}
+
+function submit() {
+    form.post('/import-center/process', {
+        preserveScroll: true,
+        forceFormData: true,
+        onSuccess: () => {
+            form.reset('file')
+            if (fileInput.value) fileInput.value.value = ''
+        },
+    })
+}
+
+function remove(log: Log) {
+    if (confirm(t.value.import.confirmDelete)) {
+        router.delete(`/import/${log.id}`, { preserveScroll: true })
+    }
+}
+
+function clearAll() {
+    if (confirm(t.value.import.confirmClear)) {
+        router.delete('/import', { preserveScroll: true })
+    }
+}
+
+function changePerPage(perPage: number) {
+    router.get('/import-center', { per_page: perPage }, { preserveState: true, preserveScroll: true, replace: true })
+}
+
+const statusTone: Record<string, string> = {
+    Success: 'bg-green-50 text-green-700 ring-green-600/20',
+    Pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+    Failed: 'bg-red-50 text-red-700 ring-red-600/20',
+}
+
+function fmt(value: string): string {
+    const d = new Date(value)
+    return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
+}
+</script>
+
+<template>
+    <Head :title="t.import.title" />
+
+    <AppLayout>
+        <PageHeader :title="t.import.title" :subtitle="t.import.subtitle" />
+
+        <!-- Upload -->
+        <form
+            class="mb-8 grid grid-cols-1 gap-4 rounded-xl border border-border bg-white p-5 shadow-sm sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+            @submit.prevent="submit"
+        >
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.import.dataType }}</label>
+                <select v-model="form.data_type" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
+                    <option v-for="d in dataTypes" :key="d.value" :value="d.value">{{ d.label }}</option>
+                </select>
+                <p v-if="form.errors.data_type" class="mt-1 text-xs text-red-600">{{ form.errors.data_type }}</p>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.import.file }}</label>
+                <input
+                    ref="fileInput"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    class="w-full rounded-md border border-border px-3 py-1.5 text-sm file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm"
+                    @change="onFile"
+                >
+                <p v-if="form.errors.file" class="mt-1 text-xs text-red-600">{{ form.errors.file }}</p>
+            </div>
+            <button
+                type="submit"
+                :disabled="form.processing || !form.file"
+                class="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-5 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover disabled:opacity-60"
+            >
+                <i :class="form.processing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-upload'" />
+                {{ t.import.upload }}
+            </button>
+        </form>
+
+        <!-- Logs -->
+        <div class="mb-3 flex items-center justify-between">
+            <h2 class="font-bold text-slate-800">{{ t.import.logs }}</h2>
+            <button
+                v-if="logs.data.length"
+                type="button"
+                class="text-sm font-medium text-red-600 hover:underline"
+                @click="clearAll"
+            >
+                {{ t.import.clearAll }}
+            </button>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-border bg-white shadow-sm">
+            <table class="w-full min-w-[820px] text-left text-sm">
+                <thead>
+                    <tr class="border-b border-border text-xs uppercase tracking-wider text-slate-400">
+                        <th class="px-5 py-3 font-semibold">{{ t.import.dataType }}</th>
+                        <th class="px-5 py-3 font-semibold">{{ t.import.date }}</th>
+                        <th class="px-5 py-3 font-semibold">{{ t.import.status }}</th>
+                        <th class="px-5 py-3 font-semibold">{{ t.import.result }}</th>
+                        <th class="px-5 py-3 text-right font-semibold" />
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="log in logs.data" :key="log.id" class="border-b border-border/60 last:border-0 hover:bg-slate-50">
+                        <td class="px-5 py-3 font-medium text-slate-700">{{ log.data_type }}</td>
+                        <td class="px-5 py-3 text-slate-500">{{ fmt(log.import_date) }}</td>
+                        <td class="px-5 py-3">
+                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset" :class="statusTone[log.status] ?? 'bg-slate-100 text-slate-500 ring-slate-500/20'">
+                                {{ log.status }}
+                            </span>
+                        </td>
+                        <td class="max-w-sm truncate px-5 py-3 text-slate-500" :title="log.result">{{ log.result }}</td>
+                        <td class="px-5 py-3 text-right">
+                            <a
+                                v-if="log.original_file_path"
+                                :href="`/import-download/${log.id}`"
+                                class="mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-primary"
+                            >
+                                <i class="fa-solid fa-download" />
+                            </a>
+                            <button class="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600" @click="remove(log)">
+                                <i class="fa-solid fa-trash" />
+                            </button>
+                        </td>
+                    </tr>
+                    <tr v-if="logs.data.length === 0">
+                        <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400">{{ t.import.noLogs }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <Pagination
+            :links="logs.links"
+            :per-page="logs.per_page"
+            :total="logs.total"
+            :from="logs.from"
+            :to="logs.to"
+            @update:per-page="changePerPage"
+        />
+    </AppLayout>
+</template>

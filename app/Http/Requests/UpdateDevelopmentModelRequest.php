@@ -2,28 +2,28 @@
 
 namespace App\Http\Requests;
 
-use Illuminate\Contracts\Validation\ValidationRule;
+use App\Rules\SumPercentageCheck;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdateDevelopmentModelRequest extends FormRequest
 {
-    /**
-     * Determine if the user is authorized to make this request.
-     */
     public function authorize(): bool
     {
-        return false;
+        return $this->user()?->can('view_idp_master') ?? false;
     }
 
     /**
-     * Get the validation rules that apply to the request.
-     *
-     * @return array<string, ValidationRule|array<mixed>|string>
+     * @return array<string, mixed>
      */
     public function rules(): array
     {
+        $modelId = $this->route('developmentModel')->id;
+
         return [
-            //
+            'name' => ['required', 'string', 'max:255', Rule::unique('development_models', 'name')->ignore($modelId)],
+            'percentage' => ['required', 'integer', 'min:1', new SumPercentageCheck($modelId)],
+            'replace_with' => ['nullable', 'integer', 'exists:development_models,id'],
         ];
     }
 }

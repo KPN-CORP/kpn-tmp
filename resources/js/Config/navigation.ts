@@ -5,8 +5,6 @@ import type { LocaleMessages } from '@/Config/locales'
  * locale keys (resolved in `useNavigation`), not literal strings, so the menu
  * translates for free. `permission`, when set, gates the item against the
  * user's shared permissions — leave it off for always-visible items.
- *
- * Menus are placeholders for now; wire the real routes/permissions here later.
  */
 export interface NavItem {
     section: keyof LocaleMessages['nav']
@@ -17,6 +15,7 @@ export interface NavItem {
 }
 
 export const navigation: NavItem[] = [
+    // --- Main ---
     {
         section: 'main',
         label: 'dashboard',
@@ -25,34 +24,52 @@ export const navigation: NavItem[] = [
     },
     {
         section: 'main',
-        label: 'activity',
-        icon: 'fa-solid fa-clock-rotate-left',
-        href: '/activity',
+        label: 'facecard',
+        icon: 'fa-solid fa-id-card',
+        href: '/facecard',
     },
     {
-        section: 'management',
-        label: 'users',
-        icon: 'fa-solid fa-users',
-        href: '/users',
-        // permission: 'users.view',
+        section: 'main',
+        label: 'idp',
+        icon: 'fa-solid fa-seedling',
+        href: '/idp',
+    },
+
+    // --- Talent ---
+    {
+        section: 'talent',
+        label: 'report',
+        icon: 'fa-solid fa-chart-column',
+        href: '/report',
+        permission: 'view_report_menu',
     },
     {
-        section: 'management',
-        label: 'reports',
-        icon: 'fa-solid fa-file-lines',
-        href: '/reports',
-        // permission: 'reports.view',
+        section: 'talent',
+        label: 'importCenter',
+        icon: 'fa-solid fa-file-import',
+        href: '/import-center',
+        permission: 'view_import_center',
+    },
+
+    // --- Administration ---
+    {
+        section: 'administration',
+        label: 'idpSetting',
+        icon: 'fa-solid fa-sliders',
+        href: '/idp-setting',
+        permission: 'view_idp_master',
     },
     {
-        section: 'system',
-        label: 'settings',
-        icon: 'fa-solid fa-gear',
-        href: '/settings',
+        section: 'administration',
+        label: 'roles',
+        icon: 'fa-solid fa-user-shield',
+        href: '/admin/roles',
+        permission: 'view_admin_setting',
     },
     {
-        section: 'system',
-        label: 'profile',
-        icon: 'fa-solid fa-user',
-        href: '/profile',
+        section: 'administration',
+        label: 'userGuide',
+        icon: 'fa-solid fa-book-open',
+        href: '/user-guide',
     },
 ]

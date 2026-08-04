@@ -1,33 +1,97 @@
 <?php
 
+use App\Http\Controllers\CompetencyAssessmentController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\EmployeeController;
+use App\Http\Controllers\IdpController;
+use App\Http\Controllers\IdpSettingController;
+use App\Http\Controllers\ImportController;
+use App\Http\Controllers\PerformanceAppraisalController;
+use App\Http\Controllers\ResultSummaryController;
+use App\Http\Controllers\RoleController;
+use App\Http\Controllers\UserGuideController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
+/*
+ * Temporary placeholder factory. Renders the shared "coming soon" screen with a
+ * title. Phase 3 swaps each of these for a real controller; the paths, route
+ * names, and permission gates below are already the real ones.
+ */
+$stub = fn (string $title) => fn () => Inertia::render('Placeholder', ['title' => $title]);
+
 // Everything in the app requires a signed-in user.
-Route::middleware('auth')->group(function () {
+Route::middleware('auth')->group(function () use ($stub) {
     Route::get('/', [DashboardController::class, 'index']);
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
-    /*
-     * Placeholder destinations so every sidebar link resolves (and shows its
-     * active state) while the real menus are still being built. Each renders a
-     * simple stub page with its title. Replace these with real controllers as
-     * features land.
-     */
-    $placeholders = [
-        '/activity' => 'Activity',
-        '/users' => 'Users',
-        '/reports' => 'Reports',
-        '/settings' => 'Settings',
-        '/profile' => 'Profile',
-    ];
+    // --- Core (visible to every authenticated user) ---
+    Route::get('/facecard', [EmployeeController::class, 'index'])->name('facecard.list');
+    Route::get('/employee/{employeeId?}', [EmployeeController::class, 'show'])->name('employee.profile');
+    Route::get('/profile', $stub('Profile'))->name('profile');
 
-    foreach ($placeholders as $path => $title) {
-        Route::get($path, fn () => Inertia::render('Placeholder', [
-            'title' => $title,
-        ]));
-    }
+    // --- User Guide (view open to all; manage gated) ---
+    Route::get('/user-guide', [UserGuideController::class, 'index'])->name('user_guide.index');
+    Route::get('/user-guide/{userGuide}/download', [UserGuideController::class, 'download'])->name('user_guide.download');
+    Route::middleware('permission:manage_user_guide')->group(function () {
+        Route::post('/user-guide', [UserGuideController::class, 'store'])->name('user_guide.store');
+        Route::delete('/user-guide/{userGuide}', [UserGuideController::class, 'destroy'])->name('user_guide.destroy');
+    });
+
+    // --- Nine-box / Performance Appraisal (year-on-year) ---
+    Route::middleware('permission:input_year_on_year')->group(function () {
+        Route::post('/ninebox', [PerformanceAppraisalController::class, 'store'])->name('ninebox.store');
+        Route::put('/ninebox/{appraisal}', [PerformanceAppraisalController::class, 'update'])->name('ninebox.update');
+        Route::delete('/ninebox', [PerformanceAppraisalController::class, 'destroy'])->name('ninebox.destroy');
+    });
+
+    // --- Competency assessment & succession summary ---
+    Route::post('/competency-assessment', [CompetencyAssessmentController::class, 'store'])
+        ->middleware('permission:input_competency_assessment')->name('competency.store');
+    Route::post('/result-summary', [ResultSummaryController::class, 'store'])
+        ->middleware('permission:input_successor_position')->name('resultSummary.store');
+
+    // --- IDP (Individual Development Plan) ---
+    Route::get('/idp', [IdpController::class, 'index'])->name('idp.list');
+    Route::get('/idp/{employeeId}', [IdpController::class, 'show'])->name('idp.show');
+    Route::post('/idp', [IdpController::class, 'store'])->name('idp.store');
+    Route::put('/idp/{idp}', [IdpController::class, 'update'])->name('idp.update');
+    Route::delete('/idp/{idp}', [IdpController::class, 'destroy'])->name('idp.destroy');
+
+    // --- Reports ---
+    Route::get('/report', $stub('Report'))
+        ->middleware('permission:view_report_menu')
+        ->name('report.show');
+
+    // --- Import Center ---
+    Route::middleware('permission:view_import_center')->group(function () {
+        Route::get('/import-center', [ImportController::class, 'index'])->name('import.index');
+        Route::post('/import-center/process', [ImportController::class, 'processImport'])->name('import.process');
+        Route::get('/import-download/{log}', [ImportController::class, 'download'])->name('import.download');
+        Route::delete('/import/{log}', [ImportController::class, 'destroy'])->name('import.destroy');
+        Route::delete('/import', [ImportController::class, 'destroyAll'])
+            ->middleware('permission:delete_all_import_logs')->name('import.destroy_all');
+    });
+
+    // --- Administration ---
+    Route::middleware('permission:view_idp_master')->group(function () {
+        Route::get('/idp-setting', [IdpSettingController::class, 'index'])->name('idp.setting.index');
+
+        Route::post('/idp-setting/models', [IdpSettingController::class, 'storeModel'])->name('idp.setting.models.store');
+        Route::put('/idp-setting/models/{developmentModel}', [IdpSettingController::class, 'updateModel'])->name('idp.setting.models.update');
+        Route::delete('/idp-setting/models/{developmentModel}', [IdpSettingController::class, 'destroyModel'])->name('idp.setting.models.destroy');
+
+        Route::post('/idp-setting/masters', [IdpSettingController::class, 'storeMaster'])->name('idp.setting.masters.store');
+        Route::put('/idp-setting/masters/{master}', [IdpSettingController::class, 'updateMaster'])->name('idp.setting.masters.update');
+        Route::delete('/idp-setting/masters/{master}', [IdpSettingController::class, 'destroyMaster'])->name('idp.setting.masters.destroy');
+    });
+
+    Route::middleware('permission:view_admin_setting')->group(function () {
+        Route::get('/admin/roles', [RoleController::class, 'index'])->name('roles.index');
+        Route::post('/admin/roles', [RoleController::class, 'store'])->name('roles.store');
+        Route::put('/admin/roles/{role}', [RoleController::class, 'update'])->name('roles.update');
+        Route::delete('/admin/roles/{role}', [RoleController::class, 'destroy'])->name('roles.destroy');
+    });
 });
 
 require __DIR__.'/auth.php';

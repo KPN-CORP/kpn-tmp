@@ -35,4 +35,24 @@ return [
         ],
     ],
 
+    /*
+     * KPN SSO (Darwinbox) token check. The inbound `data` payload is
+     * base64 -> XOR(xor_key) -> base64 -> JSON with { email, token }; the token
+     * is then verified against `check_token_url`.
+     */
+    'sso' => [
+        'check_token_url' => env('SSO_CHECK_TOKEN_URL', 'https://kpncorporation.darwinbox.com/checkToken'),
+        'api_key' => env('SSO_API_KEY'),
+        'authorization' => env('SSO_AUTHORIZATION'),
+        'xor_key' => env('SSO_XOR_KEY', '666666'),
+        'failure_redirect' => env('SSO_FAILURE_REDIRECT', 'https://kpncorporation.darwinbox.com/'),
+    ],
+
+    /*
+     * Local/QA employee-impersonation login. Disabled unless a key is set.
+     */
+    'dev_login' => [
+        'key' => env('DEV_LOGIN_KEY'),
+    ],
+
 ];

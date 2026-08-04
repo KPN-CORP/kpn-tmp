@@ -19,6 +19,7 @@ class AuthenticatedSessionController extends Controller
     {
         return Inertia::render('Auth/Login', [
             'canResetPassword' => true,
+            'canDevLogin' => ! empty(config('services.dev_login.key')),
             'status' => $request->session()->get('status'),
         ]);
     }

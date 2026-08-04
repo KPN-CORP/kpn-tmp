@@ -2,65 +2,41 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\CompetencyAssessment;
 use App\Http\Requests\StoreCompetencyAssessmentRequest;
-use App\Http\Requests\UpdateCompetencyAssessmentRequest;
+use App\Models\CompetencyAssessment;
+use App\Services\EmployeeScopeService;
+use App\Services\MatrixGradeService;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Carbon;
 
 class CompetencyAssessmentController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
-    {
-        //
+    public function __construct(
+        private readonly EmployeeScopeService $scope,
+        private readonly MatrixGradeService $matrix,
+    ) {
     }
 
     /**
-     * Show the form for creating a new resource.
+     * Create or update the assessment for an employee + period (year).
      */
-    public function create()
+    public function store(StoreCompetencyAssessmentRequest $request): RedirectResponse
     {
-        //
-    }
+        $data = $request->validated();
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(StoreCompetencyAssessmentRequest $request)
-    {
-        //
-    }
+        abort_unless($this->scope->canView($request->user(), $data['employee_id']), 403);
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(CompetencyAssessment $competencyAssessment)
-    {
-        //
-    }
+        $period = Carbon::parse($data['assessment_date'])->year;
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(CompetencyAssessment $competencyAssessment)
-    {
-        //
-    }
+        // Matrix (target) grade is derived server-side from the scores.
+        $data['period'] = $period;
+        $data['matrix_grade'] = $this->matrix->calculate($request->scores(), $period);
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(UpdateCompetencyAssessmentRequest $request, CompetencyAssessment $competencyAssessment)
-    {
-        //
-    }
+        CompetencyAssessment::updateOrCreate(
+            ['employee_id' => $data['employee_id'], 'period' => $period],
+            $data,
+        );
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(CompetencyAssessment $competencyAssessment)
-    {
-        //
+        return back()->with('success', 'Competency assessment saved successfully.');
     }
 }
