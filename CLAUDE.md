@@ -81,8 +81,10 @@ resources/js/
 routes/web.php        real resource routes grouped by permission (no api.php)
 ```
 
-### Missing composer deps to add when their feature lands
-`maatwebsite/excel` (imports/exports), `barryvdh/laravel-dompdf` + `spatie/browsershot` (PDF).
+### Composer deps
+Installed: `barryvdh/laravel-dompdf` (PDF), `maatwebsite/excel` (Excel import/export).
+`spatie/browsershot` was intentionally NOT used — it needs headless Chrome; dompdf covers
+the PDF needs in pure PHP. Add browsershot only if a template needs full CSS/JS rendering.
 
 ## Conventions
 - Frontend is TypeScript + `<script setup lang="ts">`. Match existing UI components in
@@ -127,6 +129,31 @@ competencyAssessments, resultSummary, user). `PerformanceAppraisal` intentionall
 **Seeders** — PermissionSeeder (24 perms w/ metadata), RoleSeeder (Superadmin=all, Superior,
 Admin), DevelopmentModelSeeder (70-20-10), MatrixGradeConfigSeeder (2026 grades). Admin user
 `admin@kpn.co.id` / `password` gets the Superadmin role.
+
+**Later fix** — the `users` table now has an `employee_id` (string 25, nullable, unique). The
+default Laravel migration lacked it even though the whole app keys on `users.employee_id`;
+added when the sample seeders surfaced it.
+
+## Sample data & how to test (local)
+`php artisan migrate:fresh --seed` also loads a realistic dataset (both seeders skip
+gracefully if kpncorp is unreachable):
+- **`EmployeeSampleSeeder`** — ~286 real employees into the **kpncorp** `employees` table
+  (schema + data in `database/seeders/{schema,data}/employees.sql`, straight from the legacy
+  dump) and creates the corporate `performance_appraisals` table (9-box target).
+- **`SampleDataSeeder`** — app-owned talent data for ~27 employees: users (password
+  `password`), IDP master data (competencies/programs/review tools, linked), IDPs, competency
+  assessments (matrix grade computed by `MatrixGradeService`), succession summaries, and
+  2025/2026 9-box rows.
+
+Sign in as `admin@kpn.co.id` / `password` (Superadmin — sees all 286). Named superadmins:
+`01124090037` (Janice) and `01124040023` (Metta); their user emails are
+`<employee_id>@kpn.test` / `password`. Dev-login impersonation works once `DEV_LOGIN_KEY` is
+set in `.env`.
+
+⚠️ **Cross-connection query caveat**: eager/lazy loading a cross-DB relation works
+(`$employee->developmentPlans()->get()`), but `has()`/`whereHas()` on one does NOT — MySQL
+can't correlate a subquery across two databases. Query the related model directly and filter
+by `employee_id` instead (which is what the controllers do).
 
 ## Phase 2 — Auth & shell ✅ DONE
 Verified with `route:list` (permission middleware attached) + `npm run build`.
@@ -258,14 +285,35 @@ Fully app-owned (mysql). Static-verified (lint, autoload, route:list, build).
   matrix, scopes, members) and `Pages/UserGuide/Index.vue` (cards + upload modal).
   `roles`/`guide` locale keys.
 
-### Phase 3 — what's left (needs uninstalled deps)
-- PDF export (facecard single/bulk, IDP template/master) — `barryvdh/laravel-dompdf` +
-  `spatie/browsershot`.
-- Excel Imports/Exports (Import Center parsing, IDP Excel import) — `maatwebsite/excel`.
-- `GenerateIdpZip` bulk-export queue job + status polling (Phase 4).
-- Employee photo upload/download.
-These are the Phase 4 / dependency-gated items; every screen and workflow that does not need
-them is built and wired.
+## Phase 4 — Cross-cutting (Excel / PDF / queue) ✅ MOSTLY DONE
+Deps installed (`barryvdh/laravel-dompdf`, `maatwebsite/excel`). Runtime-verified in
+isolation: dompdf renders a real `%PDF-`, Excel facade + exports + job + ZipArchive resolve.
+Full end-to-end still needs the DBs (kpncorp especially) + a queue worker.
+
+- **PDF (dompdf)**: `resources/views/pdf/facecard.blade.php` + `idp.blade.php`;
+  `EmployeeController@downloadPdf` (`/employee/{id}/pdf`) and `IdpController@downloadPdf`
+  (`/idp/{id}/pdf`), with Download-PDF buttons on the profile and IDP manage pages.
+- **Excel export (maatwebsite)**: `EmployeeExport` (scoped+filtered list →
+  `/facecard/export`, carries current filters) and `IdpExport` (`/idp/{id}/export`), with
+  Export-Excel buttons.
+- **Excel import**: `CompetencyAssessmentImport` (ToCollection + heading row, derives the
+  matrix grade, collects per-row errors) wired into `ImportController@processImport` for the
+  `competency_assessment` type — parses now, writes a Success/Failed `ImportLog`. Other data
+  types still log Pending until their importers are added.
+- **Bulk export job**: `App\Jobs\GenerateIdpZip` (renders each visible employee's IDP PDF
+  into one zip, progress tracked on the uuid `JobStatus`) + `IdpController@bulkDownload`
+  / `bulkStatus` / `bulkFile`; the IDP list has a "Download all (PDF zip)" button that starts
+  the job and polls (`fetch` with the `XSRF-TOKEN` cookie). Needs `php artisan queue:work`.
+
+### Phase 4 — what's left
+- **Tests & Policies** — Pest/PHPUnit feature tests + per-controller Policies are NOT written.
+  Feature tests need the dual-connection test setup (point `mysql` AND `kpncorp` at a shared
+  test DB; `phpunit.xml` already forces sqlite `:memory:` as the default). This is the main
+  remaining Phase 4 work and is best done against a reachable DB.
+- Importers for the non-competency data types (data_master, idp, talent_box, proposed_grade,
+  succession); the Report screen (`/report` still a stub) and its export; employee photo
+  upload/download. Optional: extract `FileUpload`/`FormField` reusable Vue components (upload
+  and form fields are currently inline).
 
 ## Build plan (phased)
 

@@ -4,9 +4,19 @@ import { Head, Link, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Modal from '@/Components/Domain/Modal.vue'
+import DateInput from '@/Components/UI/DateInput.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { formatDate as fmt } from '@/Composables/useDate'
 
-const { t } = useLocale()
+const { t, locale } = useLocale()
+
+// Pick the model description in the active language (fall back to the other).
+function modelDescription(model: Model): string {
+    const primary = locale.value === 'id' ? model.description_id : model.description_en
+    return (primary || model.description_en || model.description_id || '').trim()
+}
+
+const hasDescriptions = computed(() => props.developmentModels.some((m) => modelDescription(m) !== ''))
 
 interface Plan {
     id: number
@@ -26,6 +36,8 @@ interface Model {
     id: number
     name: string
     percentage: number
+    description_en: string | null
+    description_id: string | null
     plans: Plan[]
 }
 
@@ -88,9 +100,9 @@ function openEdit(plan: Plan) {
     form.development_program = plan.development_program
     form.review_tools = plan.review_tools ?? ''
     form.expected_outcome = plan.expected_outcome ?? ''
-    form.time_frame_start = plan.time_frame_start ?? ''
-    form.time_frame_end = plan.time_frame_end ?? ''
-    form.realization_date = plan.realization_date ?? ''
+    form.time_frame_start = plan.time_frame_start?.slice(0, 10) ?? ''
+    form.time_frame_end = plan.time_frame_end?.slice(0, 10) ?? ''
+    form.realization_date = plan.realization_date?.slice(0, 10) ?? ''
     form.result_evidence = plan.result_evidence ?? ''
     modalOpen.value = true
 }
@@ -128,13 +140,6 @@ function doDelete() {
     })
 }
 
-function fmt(value: string | null): string {
-    if (!value) return '—'
-    const d = new Date(value)
-    return Number.isNaN(d.getTime())
-        ? value
-        : d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
-}
 </script>
 
 <template>
@@ -143,6 +148,20 @@ function fmt(value: string | null): string {
     <AppLayout>
         <PageHeader :title="t.idp.manageTitle">
             <template #actions>
+                <a
+                    :href="`/idp/${emp.employee_id}/pdf`"
+                    class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
+                >
+                    <i class="fa-solid fa-file-pdf text-xs" />
+                    {{ t.idp.downloadPdf }}
+                </a>
+                <a
+                    :href="`/idp/${emp.employee_id}/export`"
+                    class="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                >
+                    <i class="fa-solid fa-file-excel text-xs" />
+                    {{ t.idp.exportExcel }}
+                </a>
                 <Link
                     href="/idp"
                     class="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
@@ -157,6 +176,25 @@ function fmt(value: string | null): string {
         <div class="mb-6 rounded-xl border border-border bg-white p-5 shadow-sm">
             <h2 class="text-lg font-bold text-slate-800">{{ emp.fullname }}</h2>
             <p class="text-sm text-slate-500">{{ emp.employee_id }} · {{ emp.designation_name ?? '—' }}</p>
+        </div>
+
+        <!-- 70-20-10 learning model explainer -->
+        <div
+            v-if="hasDescriptions"
+            class="mb-6 grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-border bg-border shadow-sm md:grid-cols-3"
+        >
+            <div
+                v-for="model in developmentModels"
+                :key="model.id"
+                class="bg-white p-5"
+            >
+                <h3 class="font-bold text-slate-800">
+                    {{ model.percentage }}% – {{ model.name }}
+                </h3>
+                <p class="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-500">
+                    {{ modelDescription(model) || '—' }}
+                </p>
+            </div>
         </div>
 
         <!-- Plans grouped by development model -->
@@ -303,34 +341,19 @@ function fmt(value: string | null): string {
 
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.idp.form.start }}</label>
-                    <input
-                        v-model="form.time_frame_start"
-                        type="date"
-                        class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="form.errors.time_frame_start ? 'border-red-500' : 'border-border'"
-                    >
+                    <DateInput v-model="form.time_frame_start" :invalid="!!form.errors.time_frame_start" />
                     <p v-if="form.errors.time_frame_start" class="mt-1 text-xs text-red-600">{{ form.errors.time_frame_start }}</p>
                 </div>
 
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.idp.form.end }}</label>
-                    <input
-                        v-model="form.time_frame_end"
-                        type="date"
-                        class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="form.errors.time_frame_end ? 'border-red-500' : 'border-border'"
-                    >
+                    <DateInput v-model="form.time_frame_end" :invalid="!!form.errors.time_frame_end" />
                     <p v-if="form.errors.time_frame_end" class="mt-1 text-xs text-red-600">{{ form.errors.time_frame_end }}</p>
                 </div>
 
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.idp.form.realization }}</label>
-                    <input
-                        v-model="form.realization_date"
-                        type="date"
-                        class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="form.errors.realization_date ? 'border-red-500' : 'border-border'"
-                    >
+                    <DateInput v-model="form.realization_date" :invalid="!!form.errors.realization_date" />
                     <p v-if="form.errors.realization_date" class="mt-1 text-xs text-red-600">{{ form.errors.realization_date }}</p>
                 </div>
 

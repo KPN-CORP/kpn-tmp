@@ -2,17 +2,23 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ReadsSort;
+use App\Imports\CompetencyAssessmentImport;
 use App\Models\ImportLog;
+use App\Services\MatrixGradeService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
+use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ImportController extends Controller
 {
+    use ReadsSort;
+
     /**
      * Importable data sets. Each maps to a spreadsheet importer (added when
      * maatwebsite/excel lands — see processImport).
@@ -28,27 +34,30 @@ class ImportController extends Controller
 
     public function index(Request $request): Response
     {
+        $sort = $this->readSort($request, ['data_type', 'import_date', 'status'], 'import_date');
+        // Newest-first feels natural for the date column's default.
+        $dir = $sort['key'] === 'import_date' && ! $request->filled('sort') ? 'desc' : $sort['dir'];
+
         return Inertia::render('Import/Index', [
             'dataTypes' => collect(self::DATA_TYPES)->map(fn ($label, $value) => [
                 'value' => $value,
                 'label' => $label,
             ])->values(),
+            'sort' => ['key' => $sort['key'], 'dir' => $dir],
             'logs' => ImportLog::with('user:id,name')
-                ->latest('import_date')
-                ->paginate((int) $request->integer('per_page', 15))
+                ->orderBy($sort['key'], $dir)
+                ->paginate((int) $request->integer('per_page', 10))
                 ->withQueryString(),
         ]);
     }
 
     /**
-     * Accept an upload, store it, and record a log row.
+     * Accept an upload, store it, parse it, and record the outcome.
      *
-     * NOTE: actual spreadsheet parsing is DEFERRED until maatwebsite/excel is
-     * installed. For now the file is stored and logged as "Pending" so the flow,
-     * storage, logging, and download all work end-to-end; wire the per-type
-     * Import classes here when the dependency is added.
+     * `competency_assessment` is parsed now; the other data sets store the file
+     * and log as Pending until their per-type importers are added.
      */
-    public function processImport(Request $request): RedirectResponse
+    public function processImport(Request $request, MatrixGradeService $matrix): RedirectResponse
     {
         $validated = $request->validate([
             'data_type' => ['required', 'string', 'in:'.implode(',', array_keys(self::DATA_TYPES))],
@@ -57,17 +66,37 @@ class ImportController extends Controller
 
         $path = $request->file('file')->store('imports', 'local');
 
-        ImportLog::create([
+        $log = [
             'user_id' => $request->user()->id,
             'data_type' => $validated['data_type'],
             'import_date' => now(),
-            'status' => 'Pending',
-            'result' => 'Uploaded and queued. Spreadsheet processing is not yet enabled '
-                .'(pending maatwebsite/excel).',
             'original_file_path' => $path,
-        ]);
+        ];
 
-        return back()->with('success', 'File uploaded. Processing will run once import parsing is enabled.');
+        if ($validated['data_type'] === 'competency_assessment') {
+            try {
+                $import = new CompetencyAssessmentImport($matrix);
+                Excel::import($import, Storage::disk('local')->path($path));
+
+                $errors = $import->errors();
+                $log['status'] = $errors === [] ? 'Success' : 'Failed';
+                $log['result'] = "Imported {$import->imported()} row(s)."
+                    .($errors === [] ? '' : ' Issues: '.implode(' ', array_slice($errors, 0, 20)));
+            } catch (\Throwable $e) {
+                $log['status'] = 'Failed';
+                $log['result'] = 'Import error: '.$e->getMessage();
+            }
+        } else {
+            $log['status'] = 'Pending';
+            $log['result'] = 'Uploaded. An importer for this data type is not enabled yet.';
+        }
+
+        ImportLog::create($log);
+
+        return back()->with(
+            $log['status'] === 'Failed' ? 'error' : 'success',
+            $log['result'],
+        );
     }
 
     public function download(ImportLog $log): StreamedResponse

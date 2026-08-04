@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { router, useForm } from '@inertiajs/vue3'
 import Modal from '@/Components/Domain/Modal.vue'
 import NineBoxGrid from '@/Components/Domain/NineBoxGrid.vue'
+import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t } = useLocale()
@@ -31,6 +32,17 @@ const TALENT_BOXES = [
     'Effective Employee (7)',
     'Inconsistent Performers (8)',
     'Deadwood (9)',
+]
+
+const potentialOptions: Option[] = [
+    { value: 'High', label: 'High' },
+    { value: 'Medium', label: 'Medium' },
+    { value: 'Low', label: 'Low' },
+]
+const potentialOptionsClearable: Option[] = [{ value: '', label: '—' }, ...potentialOptions]
+const talentBoxOptions: Option[] = [
+    { value: '', label: '—' },
+    ...TALENT_BOXES.map((b) => ({ value: b, label: b })),
 ]
 
 const selectedYear = ref<number | null>(props.appraisals[0]?.appraisal_year ?? null)
@@ -172,19 +184,12 @@ function remove(a: Appraisal) {
                 </div>
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.appraisal.potential }}</label>
-                    <select v-model="addForm.potential" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                        <option value="High">High</option>
-                        <option value="Medium">Medium</option>
-                        <option value="Low">Low</option>
-                    </select>
+                    <SearchableSelect v-model="addForm.potential" :options="potentialOptions" :invalid="!!addForm.errors.potential" />
                     <p v-if="addForm.errors.potential" class="mt-1 text-xs text-red-600">{{ addForm.errors.potential }}</p>
                 </div>
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.appraisal.talentBox }}</label>
-                    <select v-model="addForm.talent_box" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                        <option value="">—</option>
-                        <option v-for="b in TALENT_BOXES" :key="b" :value="b">{{ b }}</option>
-                    </select>
+                    <SearchableSelect v-model="addForm.talent_box" :options="talentBoxOptions" />
                 </div>
             </form>
             <template #footer>
@@ -202,19 +207,11 @@ function remove(a: Appraisal) {
             <form id="ninebox-edit" class="space-y-4" @submit.prevent="submitEdit">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.appraisal.potential }}</label>
-                    <select v-model="editForm.potential" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                        <option value="">—</option>
-                        <option value="High">High</option>
-                        <option value="Medium">Medium</option>
-                        <option value="Low">Low</option>
-                    </select>
+                    <SearchableSelect v-model="editForm.potential" :options="potentialOptionsClearable" />
                 </div>
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.appraisal.talentBox }}</label>
-                    <select v-model="editForm.talent_box" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                        <option value="">—</option>
-                        <option v-for="b in TALENT_BOXES" :key="b" :value="b">{{ b }}</option>
-                    </select>
+                    <SearchableSelect v-model="editForm.talent_box" :options="talentBoxOptions" />
                 </div>
             </form>
             <template #footer>

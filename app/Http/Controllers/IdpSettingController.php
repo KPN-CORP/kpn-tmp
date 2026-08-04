@@ -78,7 +78,12 @@ class IdpSettingController extends Controller
             return back()->with('success', "'{$developmentModel->name}' was replaced successfully.");
         }
 
-        $developmentModel->update(['name' => $data['name'], 'percentage' => $data['percentage']]);
+        $developmentModel->update([
+            'name' => $data['name'],
+            'percentage' => $data['percentage'],
+            'description_en' => $data['description_en'] ?? null,
+            'description_id' => $data['description_id'] ?? null,
+        ]);
 
         return back()->with('success', 'Development model updated successfully.');
     }

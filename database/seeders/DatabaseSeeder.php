@@ -32,5 +32,12 @@ class DatabaseSeeder extends Seeder
         );
 
         $admin->syncRoles(['Superadmin']);
+
+        // Sample dataset for local testing: corporate employees (kpncorp) plus
+        // app-owned talent data. Both skip gracefully if kpncorp is unreachable.
+        $this->call([
+            EmployeeSampleSeeder::class,
+            SampleDataSeeder::class,
+        ]);
     }
 }

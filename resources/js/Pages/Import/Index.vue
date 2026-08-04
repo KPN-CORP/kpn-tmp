@@ -4,7 +4,10 @@ import { Head, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
+import DataTable, { type Column, type Sort } from '@/Components/Domain/DataTable.vue'
+import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { formatDateTime as fmt } from '@/Composables/useDate'
 
 const { t } = useLocale()
 
@@ -29,7 +32,20 @@ interface Paginator {
 const props = defineProps<{
     dataTypes: { value: string; label: string }[]
     logs: Paginator
+    sort: Sort
 }>()
+
+const columns: Column[] = [
+    { key: 'data_type', label: t.value.import.dataType, tdClass: 'font-medium text-slate-700' },
+    { key: 'import_date', label: t.value.import.date },
+    { key: 'status', label: t.value.import.status },
+    { key: 'result', label: t.value.import.result, sortable: false },
+    { key: 'action', label: '', thClass: 'text-right', tdClass: 'text-right' },
+]
+
+function changeSort(sort: Sort) {
+    router.get('/import-center', { sort: sort.key, direction: sort.dir, per_page: props.logs.per_page }, { preserveState: true, preserveScroll: true, replace: true })
+}
 
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -74,11 +90,6 @@ const statusTone: Record<string, string> = {
     Pending: 'bg-amber-50 text-amber-700 ring-amber-600/20',
     Failed: 'bg-red-50 text-red-700 ring-red-600/20',
 }
-
-function fmt(value: string): string {
-    const d = new Date(value)
-    return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
-}
 </script>
 
 <template>
@@ -94,9 +105,7 @@ function fmt(value: string): string {
         >
             <div>
                 <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.import.dataType }}</label>
-                <select v-model="form.data_type" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                    <option v-for="d in dataTypes" :key="d.value" :value="d.value">{{ d.label }}</option>
-                </select>
+                <SearchableSelect v-model="form.data_type" :options="dataTypes" :invalid="!!form.errors.data_type" />
                 <p v-if="form.errors.data_type" class="mt-1 text-xs text-red-600">{{ form.errors.data_type }}</p>
             </div>
             <div>
@@ -133,46 +142,40 @@ function fmt(value: string): string {
             </button>
         </div>
 
-        <div class="overflow-x-auto rounded-xl border border-border bg-white shadow-sm">
-            <table class="w-full min-w-[820px] text-left text-sm">
-                <thead>
-                    <tr class="border-b border-border text-xs uppercase tracking-wider text-slate-400">
-                        <th class="px-5 py-3 font-semibold">{{ t.import.dataType }}</th>
-                        <th class="px-5 py-3 font-semibold">{{ t.import.date }}</th>
-                        <th class="px-5 py-3 font-semibold">{{ t.import.status }}</th>
-                        <th class="px-5 py-3 font-semibold">{{ t.import.result }}</th>
-                        <th class="px-5 py-3 text-right font-semibold" />
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr v-for="log in logs.data" :key="log.id" class="border-b border-border/60 last:border-0 hover:bg-slate-50">
-                        <td class="px-5 py-3 font-medium text-slate-700">{{ log.data_type }}</td>
-                        <td class="px-5 py-3 text-slate-500">{{ fmt(log.import_date) }}</td>
-                        <td class="px-5 py-3">
-                            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset" :class="statusTone[log.status] ?? 'bg-slate-100 text-slate-500 ring-slate-500/20'">
-                                {{ log.status }}
-                            </span>
-                        </td>
-                        <td class="max-w-sm truncate px-5 py-3 text-slate-500" :title="log.result">{{ log.result }}</td>
-                        <td class="px-5 py-3 text-right">
-                            <a
-                                v-if="log.original_file_path"
-                                :href="`/import-download/${log.id}`"
-                                class="mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-primary"
-                            >
-                                <i class="fa-solid fa-download" />
-                            </a>
-                            <button class="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600" @click="remove(log)">
-                                <i class="fa-solid fa-trash" />
-                            </button>
-                        </td>
-                    </tr>
-                    <tr v-if="logs.data.length === 0">
-                        <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400">{{ t.import.noLogs }}</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+        <DataTable
+            :columns="columns"
+            :rows="logs.data"
+            row-key="id"
+            min-width="820px"
+            server-sort
+            :sort="sort"
+            @update:sort="changeSort"
+        >
+            <template #cell-import_date="{ value }">
+                <span class="text-slate-500">{{ fmt(value) }}</span>
+            </template>
+            <template #cell-status="{ value }">
+                <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset" :class="statusTone[value] ?? 'bg-slate-100 text-slate-500 ring-slate-500/20'">
+                    {{ value }}
+                </span>
+            </template>
+            <template #cell-result="{ value }">
+                <span class="block max-w-sm truncate text-slate-500" :title="value">{{ value }}</span>
+            </template>
+            <template #cell-action="{ row }">
+                <a
+                    v-if="row.original_file_path"
+                    :href="`/import-download/${row.id}`"
+                    class="mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-primary"
+                >
+                    <i class="fa-solid fa-download" />
+                </a>
+                <button class="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600" @click="remove(row)">
+                    <i class="fa-solid fa-trash" />
+                </button>
+            </template>
+            <template #empty>{{ t.import.noLogs }}</template>
+        </DataTable>
 
         <Pagination
             :links="logs.links"

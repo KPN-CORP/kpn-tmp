@@ -4,6 +4,7 @@ import { Head, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Modal from '@/Components/Domain/Modal.vue'
+import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t } = useLocale()
@@ -119,11 +120,10 @@ function remove(guide: Guide) {
                 </div>
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.guide.targetRole }}</label>
-                    <select v-model="form.target_role" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                        <option value="all">all</option>
-                        <option value="manager">manager</option>
-                        <option value="admin">admin</option>
-                    </select>
+                    <SearchableSelect
+                        v-model="form.target_role"
+                        :options="[{ value: 'all', label: 'all' }, { value: 'manager', label: 'manager' }, { value: 'admin', label: 'admin' }]"
+                    />
                 </div>
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.guide.file }}</label>

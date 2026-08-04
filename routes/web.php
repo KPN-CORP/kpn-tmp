@@ -27,6 +27,8 @@ Route::middleware('auth')->group(function () use ($stub) {
 
     // --- Core (visible to every authenticated user) ---
     Route::get('/facecard', [EmployeeController::class, 'index'])->name('facecard.list');
+    Route::get('/facecard/export', [EmployeeController::class, 'exportExcel'])->name('facecard.export');
+    Route::get('/employee/{employeeId}/pdf', [EmployeeController::class, 'downloadPdf'])->name('facecard.download_pdf');
     Route::get('/employee/{employeeId?}', [EmployeeController::class, 'show'])->name('employee.profile');
     Route::get('/profile', $stub('Profile'))->name('profile');
 
@@ -53,6 +55,11 @@ Route::middleware('auth')->group(function () use ($stub) {
 
     // --- IDP (Individual Development Plan) ---
     Route::get('/idp', [IdpController::class, 'index'])->name('idp.list');
+    Route::post('/idp/bulk-download', [IdpController::class, 'bulkDownload'])->name('idp.bulk_download');
+    Route::get('/idp/bulk-download/status/{jobStatus}', [IdpController::class, 'bulkStatus'])->name('idp.bulk_status');
+    Route::get('/idp/bulk-download/file/{jobStatus}', [IdpController::class, 'bulkFile'])->name('idp.bulk_file');
+    Route::get('/idp/{employeeId}/pdf', [IdpController::class, 'downloadPdf'])->name('idp.download_pdf');
+    Route::get('/idp/{employeeId}/export', [IdpController::class, 'export'])->name('idp.export');
     Route::get('/idp/{employeeId}', [IdpController::class, 'show'])->name('idp.show');
     Route::post('/idp', [IdpController::class, 'store'])->name('idp.store');
     Route::put('/idp/{idp}', [IdpController::class, 'update'])->name('idp.update');
@@ -90,6 +97,7 @@ Route::middleware('auth')->group(function () use ($stub) {
         Route::get('/admin/roles', [RoleController::class, 'index'])->name('roles.index');
         Route::post('/admin/roles', [RoleController::class, 'store'])->name('roles.store');
         Route::put('/admin/roles/{role}', [RoleController::class, 'update'])->name('roles.update');
+        Route::put('/admin/roles/{role}/members', [RoleController::class, 'updateMembers'])->name('roles.members');
         Route::delete('/admin/roles/{role}', [RoleController::class, 'destroy'])->name('roles.destroy');
     });
 });

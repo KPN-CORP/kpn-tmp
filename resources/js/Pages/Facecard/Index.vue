@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { Head, Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
-import DataTable, { type Column } from '@/Components/Domain/DataTable.vue'
+import DataTable, { type Column, type Sort } from '@/Components/Domain/DataTable.vue'
+import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t } = useLocale()
@@ -34,6 +35,7 @@ const props = defineProps<{
         job_level: string
         designation: string
     }
+    sort: Sort
     filterOptions: {
         businessUnits: string[]
         jobLevels: string[]
@@ -66,8 +68,26 @@ function reload(resetPage = true) {
             business_unit: state.business_unit || undefined,
             job_level: state.job_level || undefined,
             designation: state.designation || undefined,
+            sort: props.sort.key,
+            direction: props.sort.dir,
             per_page: state.per_page,
             ...(resetPage ? {} : { page: currentPage() }),
+        },
+        { preserveState: true, preserveScroll: true, replace: true },
+    )
+}
+
+function changeSort(sort: Sort) {
+    router.get(
+        '/facecard',
+        {
+            search: state.search || undefined,
+            business_unit: state.business_unit || undefined,
+            job_level: state.job_level || undefined,
+            designation: state.designation || undefined,
+            sort: sort.key,
+            direction: sort.dir,
+            per_page: state.per_page,
         },
         { preserveState: true, preserveScroll: true, replace: true },
     )
@@ -103,6 +123,30 @@ function changePerPage(perPage: number) {
 
 const hasActiveFilters = () =>
     !!(state.search || state.business_unit || state.job_level || state.designation)
+
+const toOptions = (allLabel: string, values: string[]): Option[] => [
+    { value: '', label: allLabel },
+    ...values.map((v) => ({ value: v, label: v })),
+]
+
+const businessUnitOptions = computed(() => toOptions(t.value.facecard.allBusinessUnits, props.filterOptions.businessUnits))
+const jobLevelOptions = computed(() => toOptions(t.value.facecard.allJobLevels, props.filterOptions.jobLevels))
+const designationOptions = computed(() => toOptions(t.value.facecard.allDesignations, props.filterOptions.designations))
+
+function onFilter(key: 'business_unit' | 'job_level' | 'designation', value: string) {
+    state[key] = value
+    reload()
+}
+
+function exportUrl(): string {
+    const params = new URLSearchParams()
+    if (state.search) params.set('search', state.search)
+    if (state.business_unit) params.set('business_unit', state.business_unit)
+    if (state.job_level) params.set('job_level', state.job_level)
+    if (state.designation) params.set('designation', state.designation)
+    const qs = params.toString()
+    return `/facecard/export${qs ? `?${qs}` : ''}`
+}
 </script>
 
 <template>
@@ -112,7 +156,17 @@ const hasActiveFilters = () =>
         <PageHeader
             :title="t.facecard.title"
             :subtitle="t.facecard.subtitle"
-        />
+        >
+            <template #actions>
+                <a
+                    :href="exportUrl()"
+                    class="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                >
+                    <i class="fa-solid fa-file-excel text-xs" />
+                    {{ t.facecard.exportExcel }}
+                </a>
+            </template>
+        </PageHeader>
 
         <!-- Filters -->
         <div class="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -124,60 +178,37 @@ const hasActiveFilters = () =>
                     v-model="state.search"
                     type="text"
                     :placeholder="t.facecard.searchPlaceholder"
-                    class="w-full rounded-md border border-border py-2.5 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    class="w-full rounded-md border border-border bg-white py-2.5 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                 >
             </div>
 
-            <select
-                v-model="state.business_unit"
-                class="rounded-md border border-border px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                @change="reload()"
-            >
-                <option value="">{{ t.facecard.allBusinessUnits }}</option>
-                <option
-                    v-for="bu in filterOptions.businessUnits"
-                    :key="bu"
-                    :value="bu"
-                >
-                    {{ bu }}
-                </option>
-            </select>
+            <SearchableSelect
+                :model-value="state.business_unit"
+                :options="businessUnitOptions"
+                :placeholder="t.facecard.allBusinessUnits"
+                @update:model-value="onFilter('business_unit', $event)"
+            />
 
-            <select
-                v-model="state.job_level"
-                class="rounded-md border border-border px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                @change="reload()"
-            >
-                <option value="">{{ t.facecard.allJobLevels }}</option>
-                <option
-                    v-for="jl in filterOptions.jobLevels"
-                    :key="jl"
-                    :value="jl"
-                >
-                    {{ jl }}
-                </option>
-            </select>
+            <SearchableSelect
+                :model-value="state.job_level"
+                :options="jobLevelOptions"
+                :placeholder="t.facecard.allJobLevels"
+                @update:model-value="onFilter('job_level', $event)"
+            />
 
             <div class="flex gap-2">
-                <select
-                    v-model="state.designation"
-                    class="min-w-0 flex-1 rounded-md border border-border px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    @change="reload()"
-                >
-                    <option value="">{{ t.facecard.allDesignations }}</option>
-                    <option
-                        v-for="d in filterOptions.designations"
-                        :key="d"
-                        :value="d"
-                    >
-                        {{ d }}
-                    </option>
-                </select>
+                <SearchableSelect
+                    class="min-w-0 flex-1"
+                    :model-value="state.designation"
+                    :options="designationOptions"
+                    :placeholder="t.facecard.allDesignations"
+                    @update:model-value="onFilter('designation', $event)"
+                />
 
                 <button
                     v-if="hasActiveFilters()"
                     type="button"
-                    class="shrink-0 rounded-md border border-border px-3 text-sm text-slate-500 transition hover:bg-slate-50"
+                    class="shrink-0 rounded-md border border-border bg-white px-3 text-sm text-slate-500 transition hover:bg-slate-50"
                     :title="t.facecard.clearFilters"
                     @click="resetFilters"
                 >
@@ -191,6 +222,9 @@ const hasActiveFilters = () =>
             :columns="columns"
             :rows="employees.data"
             row-key="employee_id"
+            server-sort
+            :sort="sort"
+            @update:sort="changeSort"
         >
             <template #cell-action="{ row }">
                 <Link

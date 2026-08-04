@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\EmployeeExport;
+use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Resources\EmployeeResource;
 use App\Models\CompetencyAssessment;
 use App\Models\FormalEducation;
@@ -11,13 +13,20 @@ use App\Models\ResultSummary;
 use App\Models\TrainingCertification;
 use App\Models\WorkExperience;
 use App\Services\EmployeeScopeService;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
+use Maatwebsite\Excel\Facades\Excel;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Symfony\Component\HttpFoundation\Response as HttpResponse;
 
 class EmployeeController extends Controller
 {
+    use ReadsSort;
+
     public function __construct(private readonly EmployeeScopeService $scope)
     {
     }
@@ -29,31 +38,61 @@ class EmployeeController extends Controller
     {
         $user = $request->user();
 
-        $filters = [
-            'search' => $request->string('search')->trim()->value(),
-            'business_unit' => $request->string('business_unit')->value(),
-            'job_level' => $request->string('job_level')->value(),
-            'designation' => $request->string('designation')->value(),
-        ];
+        $filters = $this->readFilters($request);
+        $sort = $this->readSort($request, [
+            'employee_id', 'fullname', 'group_company', 'job_level', 'designation_name',
+        ], 'fullname');
 
-        $employees = $this->scope->query($user)
-            ->when($filters['search'], fn ($q, $term) => $q->where(function ($sub) use ($term) {
-                $sub->where('fullname', 'like', "%{$term}%")
-                    ->orWhere('employee_id', 'like', "%{$term}%");
-            }))
-            ->when($filters['business_unit'], fn ($q, $v) => $q->where('group_company', $v))
-            ->when($filters['job_level'], fn ($q, $v) => $q->where('job_level', $v))
-            ->when($filters['designation'], fn ($q, $v) => $q->where('designation_name', $v))
-            ->orderBy('fullname')
-            ->paginate((int) $request->integer('per_page', 15))
+        $employees = $this->filteredQuery($user, $filters)
+            ->orderBy($sort['key'], $sort['dir'])
+            ->paginate((int) $request->integer('per_page', 10))
             ->withQueryString()
             ->through(fn ($employee) => (new EmployeeResource($employee))->resolve());
 
         return Inertia::render('Facecard/Index', [
             'employees' => $employees,
             'filters' => $filters,
+            'sort' => $sort,
             'filterOptions' => $this->filterOptions($user),
         ]);
+    }
+
+    /**
+     * Export the current scoped + filtered employee list to Excel.
+     */
+    public function exportExcel(Request $request): BinaryFileResponse
+    {
+        $query = $this->filteredQuery($request->user(), $this->readFilters($request));
+
+        return Excel::download(new EmployeeExport($query), 'facecard_'.now()->format('Ymd_His').'.xlsx');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function readFilters(Request $request): array
+    {
+        return [
+            'search' => $request->string('search')->trim()->value(),
+            'business_unit' => $request->string('business_unit')->value(),
+            'job_level' => $request->string('job_level')->value(),
+            'designation' => $request->string('designation')->value(),
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $filters
+     */
+    private function filteredQuery($user, array $filters)
+    {
+        return $this->scope->query($user)
+            ->when($filters['search'], fn ($q, $term) => $q->where(function ($sub) use ($term) {
+                $sub->where('fullname', 'like', "%{$term}%")
+                    ->orWhere('employee_id', 'like', "%{$term}%");
+            }))
+            ->when($filters['business_unit'], fn ($q, $v) => $q->where('group_company', $v))
+            ->when($filters['job_level'], fn ($q, $v) => $q->where('job_level', $v))
+            ->when($filters['designation'], fn ($q, $v) => $q->where('designation_name', $v));
     }
 
     /**
@@ -115,6 +154,28 @@ class EmployeeController extends Controller
             'canInputCompetency' => $user->can('input_competency_assessment'),
             'canInputSuccession' => $user->can('input_successor_position'),
         ]);
+    }
+
+    /**
+     * Single facecard PDF for one employee.
+     */
+    public function downloadPdf(Request $request, string $employeeId): HttpResponse
+    {
+        $user = $request->user();
+        abort_unless($this->scope->canView($user, $employeeId), 403);
+
+        $employee = $this->scope->query($user)->where('employee_id', $employeeId)->firstOrFail();
+
+        $pdf = Pdf::loadView('pdf.facecard', [
+            'employee' => $employee,
+            'competencyAssessments' => CompetencyAssessment::where('employee_id', $employeeId)
+                ->orderByDesc('period')->get(),
+            'appraisals' => $this->safeGet(fn () => PerformanceAppraisal::where('employee_id', $employeeId)
+                ->orderByDesc('appraisal_year')->get()),
+            'resultSummary' => ResultSummary::where('employee_id', $employeeId)->first(),
+        ]);
+
+        return $pdf->download('facecard_'.Str::slug($employee->fullname).'.pdf');
     }
 
     /**

@@ -53,6 +53,8 @@ class IdpService
                 'id' => $m->id,
                 'name' => $m->name,
                 'percentage' => $m->percentage,
+                'description_en' => $m->description_en,
+                'description_id' => $m->description_id,
                 'plans' => ($plans->get($m->id) ?? collect())->values(),
             ]),
             'options' => [

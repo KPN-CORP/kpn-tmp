@@ -20,6 +20,8 @@ class StoreDevelopmentModelRequest extends FormRequest
         return [
             'name' => ['required', 'string', 'max:255', 'unique:development_models,name'],
             'percentage' => ['required', 'integer', 'min:1', new SumPercentageCheck()],
+            'description_en' => ['nullable', 'string'],
+            'description_id' => ['nullable', 'string'],
         ];
     }
 }

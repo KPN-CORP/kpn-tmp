@@ -23,6 +23,8 @@ class UpdateDevelopmentModelRequest extends FormRequest
         return [
             'name' => ['required', 'string', 'max:255', Rule::unique('development_models', 'name')->ignore($modelId)],
             'percentage' => ['required', 'integer', 'min:1', new SumPercentageCheck($modelId)],
+            'description_en' => ['nullable', 'string'],
+            'description_id' => ['nullable', 'string'],
             'replace_with' => ['nullable', 'integer', 'exists:development_models,id'],
         ];
     }

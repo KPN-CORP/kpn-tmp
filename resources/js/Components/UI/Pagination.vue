@@ -19,7 +19,14 @@ const emit = defineEmits<{
     (e: 'update:perPage', value: number): void
 }>()
 
-const options = computed(() => props.perPageOptions ?? [10, 20, 50, 100])
+// Always include the current page size so the <select> has a matching option
+// (otherwise a default like 15 renders blank against [10,20,50,100]).
+const options = computed(() => {
+    const base = props.perPageOptions ?? [10, 20, 50, 100]
+    return base.includes(props.perPage)
+        ? base
+        : [...base, props.perPage].sort((a, b) => a - b)
+})
 
 const prev = computed(() => props.links[0])
 const next = computed(() => props.links[props.links.length - 1])
@@ -53,7 +60,7 @@ function onPerPageChange(event: Event) {
 
             <select
                 :value="perPage"
-                class="w-20 rounded-md border border-border px-2 py-1.5 text-sm"
+                class="w-20 rounded-md border border-border bg-white px-2 py-1.5 text-sm"
                 @change="onPerPageChange"
             >
                 <option
@@ -81,7 +88,7 @@ function onPerPageChange(event: Event) {
             <!-- Previous -->
             <Link
                 :href="prev.url ?? ''"
-                class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border border-border px-3 text-sm text-slate-600 transition hover:bg-slate-50"
+                class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border border-border bg-white px-3 text-sm text-slate-600 transition hover:bg-slate-50"
                 :class="{ 'pointer-events-none opacity-40': !prev.url }"
                 :aria-label="t.pagination.previous"
             >
@@ -97,7 +104,7 @@ function onPerPageChange(event: Event) {
                 :class="[
                     link.active
                         ? 'border-primary bg-primary text-white'
-                        : 'border-border text-slate-600 hover:bg-slate-50',
+                        : 'border-border bg-white text-slate-600 hover:bg-slate-50',
                     !link.url && 'pointer-events-none opacity-60',
                 ]"
                 v-html="link.label"
@@ -106,7 +113,7 @@ function onPerPageChange(event: Event) {
             <!-- Next -->
             <Link
                 :href="next.url ?? ''"
-                class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border border-border px-3 text-sm text-slate-600 transition hover:bg-slate-50"
+                class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border border-border bg-white px-3 text-sm text-slate-600 transition hover:bg-slate-50"
                 :class="{ 'pointer-events-none opacity-40': !next.url }"
                 :aria-label="t.pagination.next"
             >

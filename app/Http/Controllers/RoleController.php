@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Employee;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
@@ -35,7 +36,44 @@ class RoleController extends Controller
             'permissionGroups' => Permission::orderBy('group')->orderBy('name')->get()
                 ->groupBy('group')
                 ->map(fn ($group) => $group->map(fn ($p) => ['name' => $p->name, 'label' => $p->label ?? $p->name])),
+            'scopeOptions' => $this->scopeOptions(),
+            'users' => User::whereNotNull('employee_id')->orderBy('name')
+                ->get(['employee_id', 'name'])
+                ->map(fn ($u) => ['value' => $u->employee_id, 'label' => "{$u->name} ({$u->employee_id})"]),
         ]);
+    }
+
+    /**
+     * Distinct business unit / company / location values to scope a role by.
+     *
+     * @return array<string, array<int, string>>
+     */
+    private function scopeOptions(): array
+    {
+        try {
+            return [
+                'businessUnits' => Employee::whereNotNull('group_company')->distinct()->orderBy('group_company')->pluck('group_company')->all(),
+                'companies' => Employee::whereNotNull('company_name')->distinct()->orderBy('company_name')->pluck('company_name')->all(),
+                'locations' => Employee::whereNotNull('office_area')->distinct()->orderBy('office_area')->pluck('office_area')->all(),
+            ];
+        } catch (\Throwable $e) {
+            return ['businessUnits' => [], 'companies' => [], 'locations' => []];
+        }
+    }
+
+    /**
+     * Assign this role's members (used by the "assign users" action).
+     */
+    public function updateMembers(Request $request, Role $role): RedirectResponse
+    {
+        $data = $request->validate([
+            'members' => ['nullable', 'array'],
+            'members.*' => ['string'],
+        ]);
+
+        $this->syncMembers($role, $data['members'] ?? []);
+
+        return back()->with('success', "Members updated for \"{$role->name}\".");
     }
 
     public function store(Request $request): RedirectResponse

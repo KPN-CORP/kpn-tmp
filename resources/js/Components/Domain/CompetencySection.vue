@@ -2,6 +2,9 @@
 import { computed, ref } from 'vue'
 import { useForm } from '@inertiajs/vue3'
 import Modal from '@/Components/Domain/Modal.vue'
+import DataTable, { type Column } from '@/Components/Domain/DataTable.vue'
+import DateInput from '@/Components/UI/DateInput.vue'
+import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t } = useLocale()
@@ -28,6 +31,14 @@ const props = defineProps<{
     matrixConfigs: MatrixConfig[]
     canInput: boolean
 }>()
+
+const columns: Column[] = [
+    { key: 'period', label: t.value.competency.period, tdClass: 'font-medium text-slate-700' },
+    { key: 'matrix_grade', label: t.value.competency.matrixGrade },
+    { key: 'proposed_grade', label: t.value.competency.proposedGrade },
+    { key: 'priority_for_development', label: t.value.competency.priority },
+    { key: 'action', label: '', thClass: 'text-right', tdClass: 'text-right' },
+]
 
 const COMPETENCIES = [
     { label: 'Synergized Team', score: 'synergized_team_score', min: 'synergized_team_min' },
@@ -113,41 +124,17 @@ function submit() {
             </button>
         </div>
 
-        <div
-            v-if="assessments.length === 0"
-            class="rounded-xl border border-dashed border-border bg-white py-10 text-center text-sm text-slate-400"
-        >
-            {{ t.competency.empty }}
-        </div>
-
-        <div v-else class="overflow-x-auto rounded-xl border border-border bg-white shadow-sm">
-            <table class="w-full min-w-[720px] text-left text-sm">
-                <thead>
-                    <tr class="border-b border-border text-xs uppercase tracking-wider text-slate-400">
-                        <th class="px-5 py-3 font-semibold">{{ t.competency.period }}</th>
-                        <th class="px-5 py-3 font-semibold">{{ t.competency.matrixGrade }}</th>
-                        <th class="px-5 py-3 font-semibold">{{ t.competency.proposedGrade }}</th>
-                        <th class="px-5 py-3 font-semibold">{{ t.competency.priority }}</th>
-                        <th class="px-5 py-3 text-right font-semibold" />
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr v-for="a in assessments" :key="a.id" class="border-b border-border/60 last:border-0 hover:bg-slate-50">
-                        <td class="px-5 py-3 font-medium text-slate-700">{{ a.period }}</td>
-                        <td class="px-5 py-3">
-                            <span class="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">{{ a.matrix_grade ?? '—' }}</span>
-                        </td>
-                        <td class="px-5 py-3 text-slate-600">{{ a.proposed_grade ?? '—' }}</td>
-                        <td class="px-5 py-3 text-slate-600">{{ a.priority_for_development ?? '—' }}</td>
-                        <td class="px-5 py-3 text-right">
-                            <button v-if="canInput" class="h-8 w-8 rounded-md text-slate-400 hover:bg-slate-100 hover:text-primary" @click="openEdit(a)">
-                                <i class="fa-solid fa-pen" />
-                            </button>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+        <DataTable :columns="columns" :rows="assessments" row-key="id">
+            <template #cell-matrix_grade="{ value }">
+                <span class="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">{{ value ?? '—' }}</span>
+            </template>
+            <template #cell-action="{ row }">
+                <button v-if="canInput" class="h-8 w-8 rounded-md text-slate-400 hover:bg-slate-100 hover:text-primary" @click="openEdit(row)">
+                    <i class="fa-solid fa-pen" />
+                </button>
+            </template>
+            <template #empty>{{ t.competency.empty }}</template>
+        </DataTable>
 
         <!-- Add / edit modal -->
         <Modal :show="modalOpen" :title="t.competency.formTitle" max-width="max-w-2xl" @close="modalOpen = false">
@@ -155,12 +142,7 @@ function submit() {
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.competency.assessmentDate }}</label>
-                        <input
-                            v-model="form.assessment_date"
-                            type="date"
-                            class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                            :class="form.errors.assessment_date ? 'border-red-500' : 'border-border'"
-                        >
+                        <DateInput v-model="form.assessment_date" :invalid="!!form.errors.assessment_date" />
                         <p v-if="form.errors.assessment_date" class="mt-1 text-xs text-red-600">{{ form.errors.assessment_date }}</p>
                     </div>
                     <div>
@@ -171,10 +153,10 @@ function submit() {
                     </div>
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.competency.priority }}</label>
-                        <select v-model="form.priority_for_development" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                            <option value="No">No</option>
-                            <option value="Yes">Yes</option>
-                        </select>
+                        <SearchableSelect
+                            v-model="form.priority_for_development"
+                            :options="[{ value: 'No', label: 'No' }, { value: 'Yes', label: 'Yes' }]"
+                        />
                     </div>
                 </div>
 

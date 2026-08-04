@@ -14,6 +14,8 @@ class DevelopmentModel extends Model
     protected $fillable = [
         'name',
         'percentage',
+        'description_en',
+        'description_id',
     ];
 
     /**

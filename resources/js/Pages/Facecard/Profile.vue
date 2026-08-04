@@ -7,6 +7,7 @@ import NineBoxSection from '@/Components/Domain/NineBoxSection.vue'
 import CompetencySection from '@/Components/Domain/CompetencySection.vue'
 import ResultSummarySection from '@/Components/Domain/ResultSummarySection.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { formatDate as fmtDate } from '@/Composables/useDate'
 
 const { t } = useLocale()
 
@@ -49,14 +50,6 @@ const props = defineProps<{
 }>()
 
 const emp = props.employee.data
-
-function fmtDate(value: string | null): string {
-    if (!value) return '—'
-    const d = new Date(value)
-    return Number.isNaN(d.getTime())
-        ? value
-        : d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
-}
 
 const details = [
     { label: t.value.facecard.profile.employeeId, value: emp.employee_id },
@@ -105,6 +98,13 @@ const initials = emp.fullname
     <AppLayout>
         <PageHeader :title="t.facecard.profile.title">
             <template #actions>
+                <a
+                    :href="`/employee/${emp.employee_id}/pdf`"
+                    class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
+                >
+                    <i class="fa-solid fa-file-pdf text-xs" />
+                    {{ t.facecard.profile.downloadPdf }}
+                </a>
                 <Link
                     href="/facecard"
                     class="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
