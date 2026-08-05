@@ -15,6 +15,12 @@ const props = defineProps<{
     options: Option[]
     placeholder?: string
     invalid?: boolean
+    /**
+     * When true, selected items are rendered as a removable list *below* the
+     * control instead of as chips inside it. The box then acts purely as a
+     * search-and-add trigger.
+     */
+    selectedBelow?: boolean
 }>()
 
 const emit = defineEmits<{ (e: 'update:modelValue', value: string[]): void }>()
@@ -69,18 +75,23 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
             :class="invalid ? 'border-red-500' : 'border-border'"
             @click="openDropdown"
         >
-            <span
-                v-for="option in selectedOptions"
-                :key="option.value"
-                class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-            >
-                {{ option.label }}
-                <button type="button" class="hover:text-primary-hover" @click.stop="remove(option.value)">
-                    <i class="fa-solid fa-xmark text-[10px]" />
-                </button>
-            </span>
+            <template v-if="!selectedBelow">
+                <span
+                    v-for="option in selectedOptions"
+                    :key="option.value"
+                    class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                >
+                    {{ option.label }}
+                    <button type="button" class="hover:text-primary-hover" @click.stop="remove(option.value)">
+                        <i class="fa-solid fa-xmark text-[10px]" />
+                    </button>
+                </span>
+            </template>
 
-            <span v-if="selectedOptions.length === 0" class="text-slate-400">
+            <span
+                v-if="selectedBelow || selectedOptions.length === 0"
+                class="text-slate-400"
+            >
                 {{ placeholder || 'Select…' }}
             </span>
 
@@ -123,5 +134,26 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
                 </li>
             </ul>
         </div>
+
+        <!-- Selected items listed below the control -->
+        <ul
+            v-if="selectedBelow && selectedOptions.length"
+            class="mt-2 space-y-1"
+        >
+            <li
+                v-for="option in selectedOptions"
+                :key="option.value"
+                class="flex items-center justify-between gap-2 rounded-md border border-border bg-slate-50 px-3 py-1.5 text-sm text-slate-700"
+            >
+                <span class="truncate">{{ option.label }}</span>
+                <button
+                    type="button"
+                    class="shrink-0 text-slate-400 transition hover:text-red-600"
+                    @click.stop="remove(option.value)"
+                >
+                    <i class="fa-solid fa-xmark text-xs" />
+                </button>
+            </li>
+        </ul>
     </div>
 </template>

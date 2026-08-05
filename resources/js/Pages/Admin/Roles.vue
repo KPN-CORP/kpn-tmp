@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { Head, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
-import Modal from '@/Components/Domain/Modal.vue'
+import Drawer from '@/Components/Domain/Drawer.vue'
 import DataTable, { type Column } from '@/Components/Domain/DataTable.vue'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
@@ -33,6 +33,17 @@ const businessUnitOptions = computed(() => toOptions(props.scopeOptions.business
 const companyOptions = computed(() => toOptions(props.scopeOptions.companies))
 const locationOptions = computed(() => toOptions(props.scopeOptions.locations))
 
+const scopeCount = computed(
+    () => form.business_unit.length + form.company.length + form.location.length,
+)
+const isUnrestricted = computed(() => scopeCount.value === 0)
+
+function clearScope() {
+    form.business_unit = []
+    form.company = []
+    form.location = []
+}
+
 const columns: Column[] = [
     { key: 'name', label: t.value.roles.name, tdClass: 'font-medium text-slate-700' },
     { key: 'scope', label: t.value.roles.scope, sortable: false },
@@ -51,12 +62,14 @@ const form = useForm<{
     company: string[]
     location: string[]
     permissions: string[]
-}>({ name: '', business_unit: [], company: [], location: [], permissions: [] })
+    members: string[]
+}>({ name: '', business_unit: [], company: [], location: [], permissions: [], members: [] })
 
 function openCreate() {
     editingId.value = null
     form.reset()
     form.clearErrors()
+    permissionSearch.value = ''
     roleModal.value = true
 }
 
@@ -68,6 +81,8 @@ function openEdit(role: Role) {
     form.company = [...role.company]
     form.location = [...role.location]
     form.permissions = [...role.permissions]
+    form.members = [...role.members]
+    permissionSearch.value = ''
     roleModal.value = true
 }
 
@@ -83,24 +98,62 @@ function togglePermission(name: string) {
     else form.permissions.splice(i, 1)
 }
 
-// --- Assign users ---
-const membersModal = ref(false)
-const membersRole = ref<Role | null>(null)
-const membersForm = useForm<{ members: string[] }>({ members: [] })
+// --- Permission picker (search + per-group select all) ---
+const permissionSearch = ref('')
 
-function openMembers(role: Role) {
-    membersRole.value = role
-    membersForm.clearErrors()
-    membersForm.members = [...role.members]
-    membersModal.value = true
+const allPermissions = computed(() =>
+    Object.values(props.permissionGroups).flat(),
+)
+
+const filteredGroups = computed(() => {
+    const q = permissionSearch.value.trim().toLowerCase()
+    const out: Record<string, { name: string; label: string }[]> = {}
+    for (const [group, perms] of Object.entries(props.permissionGroups)) {
+        const matched = q
+            ? perms.filter(
+                  (p) =>
+                      p.label.toLowerCase().includes(q) ||
+                      p.name.toLowerCase().includes(q) ||
+                      group.toLowerCase().includes(q),
+              )
+            : perms
+        if (matched.length) out[group] = matched
+    }
+    return out
+})
+
+const hasFilteredGroups = computed(() => Object.keys(filteredGroups.value).length > 0)
+
+function selectedInGroup(perms: { name: string }[]): number {
+    return perms.reduce((n, p) => n + (form.permissions.includes(p.name) ? 1 : 0), 0)
 }
 
-function submitMembers() {
-    if (!membersRole.value) return
-    membersForm.put(`/admin/roles/${membersRole.value.id}/members`, {
-        preserveScroll: true,
-        onSuccess: () => (membersModal.value = false),
-    })
+function groupAllSelected(perms: { name: string }[]): boolean {
+    return perms.length > 0 && selectedInGroup(perms) === perms.length
+}
+
+function groupIndeterminate(perms: { name: string }[]): boolean {
+    const n = selectedInGroup(perms)
+    return n > 0 && n < perms.length
+}
+
+function toggleGroup(perms: { name: string }[]) {
+    if (groupAllSelected(perms)) {
+        const names = new Set(perms.map((p) => p.name))
+        form.permissions = form.permissions.filter((p) => !names.has(p))
+    } else {
+        for (const p of perms) {
+            if (!form.permissions.includes(p.name)) form.permissions.push(p.name)
+        }
+    }
+}
+
+function selectAllPermissions() {
+    form.permissions = allPermissions.value.map((p) => p.name)
+}
+
+function clearAllPermissions() {
+    form.permissions = []
 }
 
 // --- Delete ---
@@ -156,13 +209,6 @@ function scopeChips(role: Role): string[] {
             <template #cell-action="{ row }">
                 <div class="inline-flex items-center gap-1">
                     <button
-                        class="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-primary/40 hover:text-primary"
-                        :title="t.roles.assignUsers"
-                        @click="openMembers(row)"
-                    >
-                        <i class="fa-solid fa-user-plus" /> {{ t.roles.assign }}
-                    </button>
-                    <button
                         class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
                         :title="t.roles.edit"
                         @click="openEdit(row)"
@@ -184,7 +230,7 @@ function scopeChips(role: Role): string[] {
         </DataTable>
 
         <!-- Create / edit role -->
-        <Modal :show="roleModal" :title="editingId ? t.roles.edit : t.roles.add" max-width="max-w-2xl" @close="roleModal = false">
+        <Drawer :show="roleModal" :title="editingId ? t.roles.edit : t.roles.add" max-width="max-w-2xl" @close="roleModal = false">
             <form id="role-form" class="space-y-4" @submit.prevent="submitRole">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.roles.name }}</label>
@@ -196,35 +242,144 @@ function scopeChips(role: Role): string[] {
                     <p v-if="form.errors.name" class="mt-1 text-xs text-red-600">{{ form.errors.name }}</p>
                 </div>
 
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <div>
-                        <label class="mb-1 block text-xs font-medium text-slate-600">{{ t.roles.businessUnit }}</label>
-                        <MultiSelect v-model="form.business_unit" :options="businessUnitOptions" :placeholder="t.roles.any" />
+                <div class="rounded-lg border border-border bg-slate-50/60">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-white px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-shield-halved text-sm text-primary" />
+                            <span class="text-sm font-medium text-slate-700">{{ t.roles.accessScope }}</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span
+                                v-if="isUnrestricted"
+                                class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-600"
+                            >
+                                <i class="fa-solid fa-earth-asia text-[10px]" /> {{ t.roles.unrestrictedBadge }}
+                            </span>
+                            <template v-else>
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-600">
+                                    <i class="fa-solid fa-filter text-[10px]" /> {{ t.roles.restrictedBadge }} · {{ scopeCount }}
+                                </span>
+                                <button type="button" class="text-xs font-medium text-slate-500 hover:text-primary hover:underline" @click="clearScope">
+                                    {{ t.roles.clearScope }}
+                                </button>
+                            </template>
+                        </div>
                     </div>
-                    <div>
-                        <label class="mb-1 block text-xs font-medium text-slate-600">{{ t.roles.company }}</label>
-                        <MultiSelect v-model="form.company" :options="companyOptions" :placeholder="t.roles.any" />
+
+                    <div class="space-y-3 p-3">
+                        <div>
+                            <label class="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                                <i class="fa-solid fa-sitemap text-[11px] text-slate-400" /> {{ t.roles.businessUnit }}
+                                <span v-if="form.business_unit.length" class="ml-auto rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">{{ form.business_unit.length }}</span>
+                            </label>
+                            <MultiSelect v-model="form.business_unit" :options="businessUnitOptions" :placeholder="t.roles.any" />
+                        </div>
+                        <div>
+                            <label class="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                                <i class="fa-solid fa-building text-[11px] text-slate-400" /> {{ t.roles.company }}
+                                <span v-if="form.company.length" class="ml-auto rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">{{ form.company.length }}</span>
+                            </label>
+                            <MultiSelect v-model="form.company" :options="companyOptions" :placeholder="t.roles.any" />
+                        </div>
+                        <div>
+                            <label class="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                                <i class="fa-solid fa-location-dot text-[11px] text-slate-400" /> {{ t.roles.location }}
+                                <span v-if="form.location.length" class="ml-auto rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">{{ form.location.length }}</span>
+                            </label>
+                            <MultiSelect v-model="form.location" :options="locationOptions" :placeholder="t.roles.any" />
+                        </div>
                     </div>
-                    <div>
-                        <label class="mb-1 block text-xs font-medium text-slate-600">{{ t.roles.location }}</label>
-                        <MultiSelect v-model="form.location" :options="locationOptions" :placeholder="t.roles.any" />
+                    <p class="px-3 pb-3 text-xs text-slate-400">{{ t.roles.scopeHint }}</p>
+                </div>
+
+                <div class="rounded-lg border border-border bg-slate-50/60">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-white px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-users text-sm text-primary" />
+                            <span class="text-sm font-medium text-slate-700">{{ t.roles.assignUsers }}</span>
+                        </div>
+                        <span
+                            v-if="form.members.length"
+                            class="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary"
+                        >
+                            {{ form.members.length }}
+                        </span>
+                    </div>
+                    <div class="p-3">
+                        <MultiSelect v-model="form.members" :options="users" :placeholder="t.roles.searchUsers" />
+                        <p class="mt-2 text-xs text-slate-400">{{ t.roles.membersHint }}</p>
                     </div>
                 </div>
-                <p class="text-xs text-slate-400">{{ t.roles.scopeHint }}</p>
 
                 <div>
-                    <label class="mb-2 block text-sm font-medium text-slate-700">{{ t.roles.permissions }}</label>
-                    <div class="max-h-64 space-y-4 overflow-y-auto rounded-md border border-border p-3">
-                        <div v-for="(perms, group) in permissionGroups" :key="group">
-                            <div class="mb-1 text-xs font-bold uppercase tracking-wider text-slate-400">{{ group }}</div>
-                            <div class="grid grid-cols-1 gap-1 sm:grid-cols-2">
-                                <label v-for="p in perms" :key="p.name" class="flex items-center gap-2 text-sm text-slate-600">
-                                    <input type="checkbox" :checked="form.permissions.includes(p.name)" class="rounded border-slate-300 text-primary focus:ring-primary" @change="togglePermission(p.name)">
+                    <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <label class="text-sm font-medium text-slate-700">
+                            {{ t.roles.permissions }}
+                            <span class="ml-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                                {{ form.permissions.length }} / {{ allPermissions.length }} {{ t.roles.selectedCount }}
+                            </span>
+                        </label>
+                        <div class="flex items-center gap-3 text-xs font-medium">
+                            <button type="button" class="text-primary hover:underline" @click="selectAllPermissions">
+                                {{ t.roles.selectAll }}
+                            </button>
+                            <span class="text-slate-300">|</span>
+                            <button type="button" class="text-slate-500 hover:underline" @click="clearAllPermissions">
+                                {{ t.roles.clearAll }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="relative mb-3">
+                        <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400" />
+                        <input
+                            v-model="permissionSearch"
+                            type="search"
+                            :placeholder="t.roles.searchPermissions"
+                            class="w-full rounded-md border border-border bg-white py-2 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                    </div>
+
+                    <div v-if="hasFilteredGroups" class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div
+                            v-for="(perms, group) in filteredGroups"
+                            :key="group"
+                            class="flex flex-col rounded-lg border border-border bg-slate-50/60"
+                        >
+                            <label class="flex cursor-pointer items-center gap-2 rounded-t-lg border-b border-border bg-white px-3 py-2">
+                                <input
+                                    type="checkbox"
+                                    class="rounded border-slate-300 text-primary focus:ring-primary"
+                                    :checked="groupAllSelected(perms)"
+                                    :indeterminate="groupIndeterminate(perms)"
+                                    @change="toggleGroup(perms)"
+                                >
+                                <span class="flex-1 text-xs font-bold uppercase tracking-wider text-slate-500">{{ group }}</span>
+                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                                    {{ selectedInGroup(perms) }}/{{ perms.length }}
+                                </span>
+                            </label>
+                            <div class="flex flex-col gap-0.5 p-1.5">
+                                <label
+                                    v-for="p in perms"
+                                    :key="p.name"
+                                    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-600 transition hover:bg-white"
+                                    :class="form.permissions.includes(p.name) ? 'bg-white font-medium text-slate-800' : ''"
+                                >
+                                    <input
+                                        type="checkbox"
+                                        :checked="form.permissions.includes(p.name)"
+                                        class="rounded border-slate-300 text-primary focus:ring-primary"
+                                        @change="togglePermission(p.name)"
+                                    >
                                     {{ p.label }}
                                 </label>
                             </div>
                         </div>
                     </div>
+                    <p v-else class="rounded-md border border-dashed border-border py-6 text-center text-sm text-slate-400">
+                        {{ t.roles.noPermissionsMatch }}
+                    </p>
                 </div>
             </form>
             <template #footer>
@@ -235,23 +390,6 @@ function scopeChips(role: Role): string[] {
                     {{ t.roles.save }}
                 </button>
             </template>
-        </Modal>
-
-        <!-- Assign users -->
-        <Modal :show="membersModal" :title="`${t.roles.assignUsers} — ${membersRole?.name ?? ''}`" @close="membersModal = false">
-            <form id="members-form" @submit.prevent="submitMembers">
-                <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.roles.membersLabel }}</label>
-                <MultiSelect v-model="membersForm.members" :options="users" :placeholder="t.roles.searchUsers" />
-                <p class="mt-2 text-xs text-slate-400">{{ t.roles.membersHint }}</p>
-            </form>
-            <template #footer>
-                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="membersModal = false">
-                    {{ t.roles.cancel }}
-                </button>
-                <button type="submit" form="members-form" :disabled="membersForm.processing" class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
-                    {{ t.roles.save }}
-                </button>
-            </template>
-        </Modal>
+        </Drawer>
     </AppLayout>
 </template>

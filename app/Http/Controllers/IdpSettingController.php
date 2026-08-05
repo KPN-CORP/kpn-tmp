@@ -26,10 +26,11 @@ class IdpSettingController extends Controller
 
         $competencies = DevelopmentPlanMaster::where('type', 'competency_name')
             ->orderBy('value')
-            ->get(['id', 'value', 'related_program'])
+            ->get(['id', 'value', 'description', 'related_program'])
             ->map(fn ($c) => [
                 'id' => $c->id,
                 'value' => $c->value,
+                'description' => $c->description,
                 'related_program' => collect($c->related_program ?? [])->map(fn ($id) => (int) $id)->values(),
                 'linked_programs' => collect($c->related_program ?? [])
                     ->map(fn ($id) => $programValues->get($id)?->value)
@@ -111,6 +112,9 @@ class IdpSettingController extends Controller
         $master = DevelopmentPlanMaster::create([
             'type' => $data['type'],
             'value' => $data['value'],
+            'description' => $data['type'] === 'competency_name'
+                ? ($data['description'] ?? null)
+                : null,
             'development_model_id' => $data['development_model_id'] ?? null,
             'related_program' => $data['type'] === 'competency_name'
                 ? array_map('strval', $request->input('related_programs', []))
@@ -133,7 +137,14 @@ class IdpSettingController extends Controller
         $master->development_model_id = $data['development_model_id'] ?? null;
 
         if ($master->type === 'competency_name') {
-            $master->related_program = array_map('strval', $request->input('related_programs', []));
+            $master->description = $data['description'] ?? null;
+
+            // Only touch the program links when the form actually sent them,
+            // so editing a competency's name/description never wipes links
+            // that are now managed from the program side.
+            if ($request->has('related_programs')) {
+                $master->related_program = array_map('strval', $request->input('related_programs', []));
+            }
         }
 
         $master->save();
@@ -182,6 +193,7 @@ class IdpSettingController extends Controller
                     ->where('development_model_id', $request->input('development_model_id'))
                     ->ignore($master?->id),
             ],
+            'description' => ['nullable', 'string'],
             'development_model_id' => ['nullable', 'integer', 'exists:development_models,id'],
             'related_programs' => ['nullable', 'array'],
             'related_competencies' => ['nullable', 'array'],

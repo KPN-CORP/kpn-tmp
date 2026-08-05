@@ -61,21 +61,6 @@ class RoleController extends Controller
         }
     }
 
-    /**
-     * Assign this role's members (used by the "assign users" action).
-     */
-    public function updateMembers(Request $request, Role $role): RedirectResponse
-    {
-        $data = $request->validate([
-            'members' => ['nullable', 'array'],
-            'members.*' => ['string'],
-        ]);
-
-        $this->syncMembers($role, $data['members'] ?? []);
-
-        return back()->with('success', "Members updated for \"{$role->name}\".");
-    }
-
     public function store(Request $request): RedirectResponse
     {
         $data = $this->validateRole($request);

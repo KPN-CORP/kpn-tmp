@@ -97,7 +97,6 @@ Route::middleware('auth')->group(function () use ($stub) {
         Route::get('/admin/roles', [RoleController::class, 'index'])->name('roles.index');
         Route::post('/admin/roles', [RoleController::class, 'store'])->name('roles.store');
         Route::put('/admin/roles/{role}', [RoleController::class, 'update'])->name('roles.update');
-        Route::put('/admin/roles/{role}/members', [RoleController::class, 'updateMembers'])->name('roles.members');
         Route::delete('/admin/roles/{role}', [RoleController::class, 'destroy'])->name('roles.destroy');
     });
 });
