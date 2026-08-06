@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useForm } from '@inertiajs/vue3'
-import Modal from '@/Components/Domain/Modal.vue'
+import Drawer from '@/Components/Domain/Drawer.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t } = useLocale()
@@ -69,7 +69,7 @@ const items = () => [
             </div>
         </dl>
 
-        <Modal :show="modalOpen" :title="t.result.title" @close="modalOpen = false">
+        <Drawer :show="modalOpen" :title="t.result.title" @close="modalOpen = false">
             <form id="result-form" class="space-y-4" @submit.prevent="submit">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.result.criticalPosition }}</label>
@@ -92,6 +92,6 @@ const items = () => [
                     {{ t.result.save }}
                 </button>
             </template>
-        </Modal>
+        </Drawer>
     </section>
 </template>

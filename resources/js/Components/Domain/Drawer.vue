@@ -46,7 +46,7 @@ onUnmounted(() => {
         >
             <div
                 v-if="show"
-                class="fixed inset-0 z-50 bg-black/50"
+                class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm"
                 @click.self="close"
             />
         </Transition>
@@ -62,34 +62,34 @@ onUnmounted(() => {
         >
             <div
                 v-if="show"
-                class="fixed inset-y-0 right-0 z-50 flex w-full flex-col bg-white shadow-2xl"
+                class="fixed inset-y-0 right-0 z-50 flex w-full flex-col rounded-l-2xl bg-white shadow-2xl ring-1 ring-black/5"
                 :class="maxWidth"
                 role="dialog"
                 aria-modal="true"
             >
                 <div
                     v-if="title || $slots.header"
-                    class="flex items-center justify-between border-b border-border px-5 py-4"
+                    class="flex items-start justify-between gap-4 border-b border-border bg-slate-50/70 px-6 py-4"
                 >
                     <slot name="header">
                         <h3 class="font-bold text-slate-800">{{ title }}</h3>
                     </slot>
                     <button
                         type="button"
-                        class="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-200/70 hover:text-slate-600"
                         @click="close"
                     >
                         <i class="fa-solid fa-xmark" />
                     </button>
                 </div>
 
-                <div class="flex-1 overflow-y-auto px-5 py-4">
+                <div class="flex-1 overflow-y-auto px-6 py-5">
                     <slot />
                 </div>
 
                 <div
                     v-if="$slots.footer"
-                    class="flex justify-end gap-2 border-t border-border px-5 py-4"
+                    class="flex justify-end gap-2 border-t border-border bg-slate-50/70 px-6 py-4"
                 >
                     <slot name="footer" />
                 </div>

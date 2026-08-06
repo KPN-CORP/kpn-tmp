@@ -8,6 +8,8 @@ class MovementTransaction extends Model
 {
     protected $connection = 'kpncorp';
 
+    protected $table = 'employee_movements';
+
     protected $guarded = ['id'];
 
     public function employee(): BelongsTo

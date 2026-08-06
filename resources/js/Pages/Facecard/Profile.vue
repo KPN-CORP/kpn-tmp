@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { Head, Link } from '@inertiajs/vue3'
+import { computed, ref } from 'vue'
+import { Head, Link, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
-import PageHeader from '@/Components/UI/PageHeader.vue'
-import DataTable, { type Column } from '@/Components/Domain/DataTable.vue'
+import Drawer from '@/Components/Domain/Drawer.vue'
 import NineBoxSection from '@/Components/Domain/NineBoxSection.vue'
 import CompetencySection from '@/Components/Domain/CompetencySection.vue'
-import ResultSummarySection from '@/Components/Domain/ResultSummarySection.vue'
+import InternalMovementSection from '@/Components/Domain/InternalMovementSection.vue'
+import IdpPanel from '@/Components/Domain/IdpPanel.vue'
+import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
-import { formatDate as fmtDate } from '@/Composables/useDate'
+import { formatDate as fmtDate, formatDateTime } from '@/Composables/useDate'
 
 const { t } = useLocale()
 
@@ -15,6 +17,7 @@ interface Employee {
     employee_id: string
     fullname: string
     email: string | null
+    personal_email: string | null
     gender: string | null
     group_company: string | null
     company_name: string | null
@@ -25,6 +28,11 @@ interface Employee {
     unit: string | null
     office_area: string | null
     date_of_joining: string | null
+    date_of_birth: string | null
+    marital_status: string | null
+    nationality: string | null
+    homebase: string | null
+    language_ability: string[] | null
 }
 
 interface Appraisal {
@@ -35,139 +43,477 @@ interface Appraisal {
     talent_box: string | null
 }
 
+interface ResultSummary {
+    critical_position: string | null
+    successor_type: string | null
+    successor_to_position: string | null
+}
+
+interface Movement {
+    effective_from: string | null
+    effective_to: string | null
+    type: string | null
+    detail: string | null
+    from: string | null
+    to: string | null
+    status: string | null
+}
+
 const props = defineProps<{
     employee: { data: Employee }
+    photoUrl: string | null
     formalEducations: Array<Record<string, any>>
     workExperiences: Array<Record<string, any>>
     trainings: Array<Record<string, any>>
     appraisals: Appraisal[]
     competencyAssessments: Array<Record<string, any>>
-    resultSummary: Record<string, any> | null
+    resultSummary: ResultSummary | null
+    successorLabel: string | null
+    movements: Movement[]
+    movementAttributes: string[]
     matrixGradeConfigs: Array<Record<string, any>>
     canInputNineBox: boolean
     canInputCompetency: boolean
     canInputSuccession: boolean
+    // IDP tab (rendered inline via IdpPanel)
+    developmentModels: any[]
+    options: {
+        competencyNames: string[]
+        developmentPrograms: string[]
+        reviewTools: string[]
+    }
+    competencyMap: Record<string, Array<{ value: string; model_id: number | null }>>
 }>()
 
 const emp = props.employee.data
 
-const details = [
-    { label: t.value.facecard.profile.employeeId, value: emp.employee_id },
-    { label: t.value.facecard.profile.email, value: emp.email },
-    { label: t.value.facecard.profile.businessUnit, value: emp.group_company },
-    { label: t.value.facecard.profile.company, value: emp.company_name },
-    { label: t.value.facecard.profile.designation, value: emp.designation_name },
-    { label: t.value.facecard.profile.jobLevel, value: emp.job_level },
-    { label: t.value.facecard.profile.unit, value: emp.unit },
-    { label: t.value.facecard.profile.employeeType, value: emp.employee_type },
-    { label: t.value.facecard.profile.officeArea, value: emp.office_area },
-    { label: t.value.facecard.profile.joinDate, value: fmtDate(emp.date_of_joining) },
-]
+// Face Card / IDP tab switch (rendered on the same page, like the legacy).
+const tab = ref<'facecard' | 'idp'>('facecard')
 
-const educationColumns: Column[] = [
-    { key: 'from_date', label: t.value.facecard.profile.from },
-    { key: 'to_date', label: t.value.facecard.profile.to },
-    { key: 'degree', label: t.value.facecard.profile.degree },
-    { key: 'institution', label: t.value.facecard.profile.institution },
-    { key: 'major', label: t.value.facecard.profile.major },
-    { key: 'gpa_percentage', label: t.value.facecard.profile.gpa },
-]
-
-const workColumns: Column[] = [
-    { key: 'from_date', label: t.value.facecard.profile.from },
-    { key: 'to_date', label: t.value.facecard.profile.to },
-    { key: 'company', label: t.value.facecard.profile.company },
-    { key: 'position', label: t.value.facecard.profile.position },
-]
-
-const trainingColumns: Column[] = [
-    { key: 'issue_date', label: t.value.facecard.profile.issued },
-    { key: 'completion_date', label: t.value.facecard.profile.completed },
-    { key: 'name', label: t.value.facecard.profile.certification },
-    { key: 'organizer', label: t.value.facecard.profile.organizer },
-]
+// Download PDF follows the active tab (facecard vs IDP).
+const pdfHref = computed(() =>
+    tab.value === 'idp' ? `/idp/${emp.employee_id}/pdf` : `/employee/${emp.employee_id}/pdf`,
+)
+const na = computed(() => t.value.facecard.profile.na)
 
 const initials = emp.fullname
     ? emp.fullname.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase()
     : '?'
+
+const publishDate = computed(() => formatDateTime(new Date().toISOString()))
+
+const age = computed(() => {
+    if (!emp.date_of_birth) return null
+    const dob = new Date(emp.date_of_birth)
+    const diff = Date.now() - dob.getTime()
+    return Math.abs(new Date(diff).getUTCFullYear() - 1970)
+})
+
+const languages = computed(() =>
+    Array.isArray(emp.language_ability) && emp.language_ability.length
+        ? emp.language_ability.join(', ')
+        : null,
+)
+
+const latestPa = computed(() => {
+    const withGrade = props.appraisals.filter((a) => a.grade)
+    return withGrade.length ? withGrade[0] : null
+})
+
+// --- Individual summary rows ---
+const individual = computed(() => [
+    { label: t.value.facecard.profile.fullName, value: emp.fullname },
+    { label: t.value.facecard.profile.dateOfBirth, value: fmtDate(emp.date_of_birth) },
+    { label: t.value.facecard.profile.age, value: age.value ? `${age.value} ${t.value.facecard.profile.yearsOld}` : null },
+    { label: t.value.facecard.profile.maritalStatus, value: emp.marital_status },
+    { label: t.value.facecard.profile.gender, value: emp.gender },
+    { label: t.value.facecard.profile.nationality, value: emp.nationality },
+    { label: t.value.facecard.profile.homebase, value: emp.homebase },
+    { label: t.value.facecard.profile.languageAbility, value: languages.value },
+])
+
+const employmentLeft = computed(() => [
+    { label: t.value.facecard.profile.employeeId, value: emp.employee_id },
+    { label: t.value.facecard.profile.businessUnit, value: emp.group_company },
+    { label: t.value.facecard.profile.position, value: emp.designation_name },
+    { label: t.value.facecard.profile.department, value: emp.unit },
+    { label: t.value.facecard.profile.company, value: emp.company_name },
+])
+
+const employmentRight = computed(() => [
+    { label: t.value.facecard.profile.workLocation, value: emp.office_area },
+    { label: t.value.facecard.profile.joinDateKpn, value: fmtDate(emp.date_of_joining) },
+    { label: t.value.facecard.profile.currentGrade, value: emp.job_level },
+])
+
+// --- Succession drawer ---
+const successionOpen = ref(false)
+const successionForm = useForm({
+    employee_id: emp.employee_id,
+    critical_position: props.resultSummary?.critical_position ?? '',
+    successor_type: props.resultSummary?.successor_type ?? '',
+    successor_to_position: props.resultSummary?.successor_to_position ?? '',
+})
+
+function openSuccession() {
+    successionForm.clearErrors()
+    successionOpen.value = true
+}
+
+function submitSuccession() {
+    successionForm.post('/result-summary', {
+        preserveScroll: true,
+        onSuccess: () => (successionOpen.value = false),
+    })
+}
+
+function gpa(value: any): string {
+    const n = Number(value)
+    return Number.isFinite(n) ? n.toFixed(2) : na.value
+}
+
+// --- Photo upload ---
+const fileInput = ref<HTMLInputElement | null>(null)
+const photoForm = useForm<{ photo: File | null }>({ photo: null })
+
+function pickPhoto() {
+    fileInput.value?.click()
+}
+
+function onPhotoChange(event: Event) {
+    const file = (event.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    photoForm.photo = file
+    photoForm.post(`/employee/${emp.employee_id}/photo`, {
+        forceFormData: true,
+        preserveScroll: true,
+        onFinish: () => {
+            photoForm.reset()
+            if (fileInput.value) fileInput.value.value = ''
+        },
+    })
+}
+
+function deletePhoto() {
+    router.delete(`/employee/${emp.employee_id}/photo`, { preserveScroll: true })
+}
 </script>
 
 <template>
     <Head :title="emp.fullname" />
 
     <AppLayout>
-        <PageHeader :title="t.facecard.profile.title">
-            <template #actions>
-                <a
-                    :href="`/employee/${emp.employee_id}/pdf`"
-                    class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
-                >
-                    <i class="fa-solid fa-file-pdf text-xs" />
-                    {{ t.facecard.profile.downloadPdf }}
-                </a>
-                <Link
-                    href="/facecard"
-                    class="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
-                >
-                    <i class="fa-solid fa-arrow-left text-xs" />
-                    {{ t.facecard.profile.back }}
-                </Link>
-            </template>
-        </PageHeader>
+        <!-- Back -->
+        <div class="mb-4">
+            <Link href="/facecard" class="text-sm font-medium text-primary hover:underline">
+                &laquo; {{ t.facecard.profile.back }}
+            </Link>
+        </div>
 
-        <!-- Header card -->
-        <div class="rounded-xl border border-border bg-white p-6 shadow-sm">
-            <div class="flex flex-col gap-5 sm:flex-row sm:items-center">
-                <div
-                    class="flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-primary/10 text-2xl font-bold text-primary"
+        <!-- Tabs + contextual Download PDF -->
+        <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex gap-2">
+                <button
+                    type="button"
+                    class="rounded-lg px-4 py-2 text-sm font-semibold transition"
+                    :class="tab === 'facecard' ? 'bg-primary text-white' : 'border border-border bg-white text-slate-600 hover:bg-slate-50'"
+                    @click="tab = 'facecard'"
                 >
-                    {{ initials }}
+                    {{ t.facecard.profile.faceCardTab }}
+                </button>
+                <button
+                    type="button"
+                    class="rounded-lg px-4 py-2 text-sm font-semibold transition"
+                    :class="tab === 'idp' ? 'bg-primary text-white' : 'border border-border bg-white text-slate-600 hover:bg-slate-50'"
+                    @click="tab = 'idp'"
+                >
+                    {{ t.facecard.profile.idpTab }}
+                </button>
+            </div>
+
+            <a
+                :href="pdfHref"
+                class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500 px-4 py-2 text-sm font-semibold text-emerald-600 transition hover:bg-emerald-500 hover:text-white"
+            >
+                <i class="fa-solid fa-file-pdf text-xs" />
+                {{ t.facecard.profile.downloadPdf }}
+            </a>
+        </div>
+
+        <!-- ===== Face Card tab ===== -->
+        <div v-show="tab === 'facecard'">
+        <!-- Publish date -->
+        <div class="mb-4 rounded-xl border border-border bg-white p-4 text-sm shadow-sm">
+            <span class="text-slate-500">{{ t.facecard.profile.publishDate }} :</span>
+            <span class="ml-1 font-semibold text-slate-700">{{ publishDate }}</span>
+        </div>
+
+        <!-- Summary row -->
+        <div class="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <!-- Individual Summary -->
+            <div class="overflow-hidden rounded-xl border border-border bg-white shadow-sm lg:col-span-4">
+                <div class="flex items-center gap-2.5 border-b border-border px-5 py-3.5">
+                    <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
+                    <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.individualSummary }}</h3>
                 </div>
-
-                <div class="min-w-0">
-                    <h2 class="text-xl font-bold text-slate-800">{{ emp.fullname }}</h2>
-                    <p class="mt-0.5 text-sm text-slate-500">
-                        {{ emp.designation_name ?? '—' }}
-                        <span v-if="emp.designation_code" class="text-slate-400">
-                            ({{ emp.designation_code }})
-                        </span>
-                    </p>
-                    <p class="mt-1 text-sm text-slate-400">
-                        {{ emp.group_company ?? '—' }} · {{ emp.job_level ?? '—' }}
-                    </p>
+                <div class="px-5 py-4">
+                    <table class="w-full text-sm">
+                        <tbody>
+                            <tr v-for="row in individual" :key="row.label" class="align-top">
+                                <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ row.label }}</td>
+                                <td class="py-1 pr-1 text-slate-300">:</td>
+                                <td class="py-1 text-slate-700">{{ row.value || na }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
-            <!-- Details grid -->
-            <dl class="mt-6 grid grid-cols-1 gap-x-8 gap-y-4 border-t border-border pt-6 sm:grid-cols-2 lg:grid-cols-3">
-                <div v-for="item in details" :key="item.label">
-                    <dt class="text-xs uppercase tracking-wider text-slate-400">{{ item.label }}</dt>
-                    <dd class="mt-0.5 text-sm font-medium text-slate-700">{{ item.value || '—' }}</dd>
+            <!-- Employment Summary -->
+            <div class="overflow-hidden rounded-xl border border-border bg-white shadow-sm lg:col-span-6">
+                <div class="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
+                    <div class="flex items-center gap-2.5">
+                        <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
+                        <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.employmentSummary }}</h3>
+                    </div>
+                    <button
+                        v-if="canInputSuccession"
+                        type="button"
+                        class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-hover"
+                        @click="openSuccession"
+                    >
+                        <i class="fa-solid fa-plus" />
+                        {{ t.facecard.profile.input }}
+                    </button>
                 </div>
-            </dl>
+
+                <div class="px-5 py-4">
+                    <div class="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
+                        <table class="w-full text-sm">
+                            <tbody>
+                                <tr v-for="row in employmentLeft" :key="row.label" class="align-top">
+                                    <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ row.label }}</td>
+                                    <td class="py-1 pr-1 text-slate-300">:</td>
+                                    <td class="py-1 text-slate-700">{{ row.value || na }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <table class="w-full text-sm">
+                            <tbody>
+                                <tr v-for="row in employmentRight" :key="row.label" class="align-top">
+                                    <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ row.label }}</td>
+                                    <td class="py-1 pr-1 text-slate-300">:</td>
+                                    <td class="py-1 text-slate-700">{{ row.value || na }}</td>
+                                </tr>
+                                <tr class="align-top">
+                                    <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ t.facecard.profile.latestPa }}</td>
+                                    <td class="py-1 pr-1 text-slate-300">:</td>
+                                    <td class="py-1 text-slate-700">
+                                        <template v-if="latestPa">{{ latestPa.appraisal_year }} (<strong>{{ latestPa.grade }}</strong>)</template>
+                                        <template v-else>{{ na }}</template>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="my-3 border-t border-border" />
+
+                    <div class="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
+                        <table class="w-full text-sm">
+                            <tbody>
+                                <tr class="align-top">
+                                    <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ t.facecard.profile.criticalPosition }}</td>
+                                    <td class="py-1 pr-1 text-slate-300">:</td>
+                                    <td class="py-1 text-slate-700">{{ resultSummary?.critical_position || na }}</td>
+                                </tr>
+                                <tr class="align-top">
+                                    <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ t.facecard.profile.successorType }}</td>
+                                    <td class="py-1 pr-1 text-slate-300">:</td>
+                                    <td class="py-1 text-slate-700">{{ resultSummary?.successor_type || na }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <table class="w-full text-sm">
+                            <tbody>
+                                <tr class="align-top">
+                                    <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ t.facecard.profile.successorTo }}</td>
+                                    <td class="py-1 pr-1 text-slate-300">:</td>
+                                    <td class="py-1 text-slate-700">{{ successorLabel || na }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Photo -->
+            <div class="overflow-hidden rounded-xl border border-border bg-white shadow-sm lg:col-span-2">
+                <div class="flex items-center gap-2.5 border-b border-border px-5 py-3.5">
+                    <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
+                    <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.photo }}</h3>
+                </div>
+                <div class="flex flex-col items-center justify-center gap-2 px-5 py-4">
+                    <div
+                        class="flex items-center justify-center overflow-hidden rounded-lg border border-border bg-slate-50 text-2xl font-bold text-primary/60"
+                        style="width: 100px; height: 133px;"
+                    >
+                        <img
+                            v-if="photoUrl"
+                            :src="photoUrl"
+                            :alt="emp.fullname"
+                            class="h-full w-full object-cover"
+                        >
+                        <template v-else>{{ initials }}</template>
+                    </div>
+                    <span v-if="!photoUrl" class="text-xs text-slate-400">{{ t.facecard.profile.noPhoto }}</span>
+
+                    <input
+                        ref="fileInput"
+                        type="file"
+                        accept="image/jpeg,image/png"
+                        class="hidden"
+                        @change="onPhotoChange"
+                    >
+
+                    <div class="flex flex-wrap justify-center gap-1.5">
+                        <button
+                            type="button"
+                            :disabled="photoForm.processing"
+                            class="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-primary-hover disabled:opacity-60"
+                            @click="pickPhoto"
+                        >
+                            <i v-if="photoForm.processing" class="fa-solid fa-spinner fa-spin" />
+                            <i v-else class="fa-solid fa-upload" />
+                            {{ photoUrl ? t.facecard.profile.photoChange : t.facecard.profile.photoAdd }}
+                        </button>
+                        <button
+                            v-if="photoUrl"
+                            type="button"
+                            :disabled="photoForm.processing"
+                            class="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-60"
+                            @click="deletePhoto"
+                        >
+                            <i class="fa-solid fa-trash" />
+                            {{ t.facecard.profile.photoDelete }}
+                        </button>
+                    </div>
+
+                    <p v-if="photoForm.errors.photo" class="text-center text-xs text-red-600">{{ photoForm.errors.photo }}</p>
+                    <p v-else class="text-center text-[11px] text-slate-400">{{ t.facecard.profile.photoHint }}</p>
+                </div>
+            </div>
         </div>
 
-        <!-- Succession summary -->
-        <div class="mt-8">
-            <ResultSummarySection
-                :employee-id="emp.employee_id"
-                :result-summary="resultSummary"
-                :can-input="canInputSuccession"
-            />
+        <!-- Education + Training -->
+        <div class="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <!-- Formal Education -->
+            <div class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+                <div class="flex items-center gap-2.5 border-b border-border px-5 py-3.5">
+                    <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
+                    <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.education }}</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.from }}</th>
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.to }}</th>
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.degree }}</th>
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.institution }}</th>
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.major }}</th>
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.gpa }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(edu, i) in formalEducations" :key="i" class="border-b border-border/60 transition last:border-0 hover:bg-slate-50/70">
+                                <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(edu.from_date) }}</td>
+                                <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(edu.to_date) }}</td>
+                                <td class="px-4 py-3 text-slate-700">{{ edu.degree || na }}</td>
+                                <td class="px-4 py-3 text-slate-700">{{ edu.institution || na }}</td>
+                                <td class="px-4 py-3 text-slate-700">{{ edu.major || na }}</td>
+                                <td class="px-4 py-3 text-slate-700">{{ gpa(edu.gpa_percentage) }}</td>
+                            </tr>
+                            <tr v-if="formalEducations.length === 0">
+                                <td colspan="6" class="px-4 py-8 text-center text-slate-400">{{ t.facecard.profile.noEducation }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Training / Certification -->
+            <div class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+                <div class="flex items-center gap-2.5 border-b border-border px-5 py-3.5">
+                    <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
+                    <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.training }}</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.from }}</th>
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.to }}</th>
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.trainingName }}</th>
+                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.organizer }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(tr, i) in trainings" :key="i" class="border-b border-border/60 transition last:border-0 hover:bg-slate-50/70">
+                                <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(tr.issue_date) }}</td>
+                                <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(tr.completion_date) }}</td>
+                                <td class="px-4 py-3 text-slate-700">{{ tr.name || na }}</td>
+                                <td class="px-4 py-3 text-slate-700">{{ tr.organizer || na }}</td>
+                            </tr>
+                            <tr v-if="trainings.length === 0">
+                                <td colspan="4" class="px-4 py-8 text-center text-slate-400">{{ t.facecard.profile.noTraining }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
 
-        <!-- Competency assessment -->
-        <div class="mt-8">
-            <CompetencySection
-                :employee-id="emp.employee_id"
-                :assessments="competencyAssessments"
-                :matrix-configs="matrixGradeConfigs"
-                :can-input="canInputCompetency"
-            />
+        <!-- Work Experience -->
+        <div class="mb-6 overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+            <div class="flex items-center gap-2.5 border-b border-border px-5 py-3.5">
+                <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
+                <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.workExperience }}</h3>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                    <thead>
+                        <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
+                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.from }}</th>
+                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.to }}</th>
+                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.company }}</th>
+                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.deptDivision }}</th>
+                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.position }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="(w, i) in workExperiences" :key="i" class="border-b border-border/60 transition last:border-0 hover:bg-slate-50/70">
+                            <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(w.from_date) }}</td>
+                            <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(w.to_date) }}</td>
+                            <td class="px-4 py-3 text-slate-700">{{ w.company || na }}</td>
+                            <td class="px-4 py-3 text-slate-700">{{ na }}</td>
+                            <td class="px-4 py-3 text-slate-700">{{ w.position || na }}</td>
+                        </tr>
+                        <tr v-if="workExperiences.length === 0">
+                            <td colspan="5" class="px-4 py-8 text-center text-slate-400">{{ t.facecard.profile.noWorkExperience }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
-        <!-- Nine-box (year-on-year) -->
-        <div class="mt-8">
+        <!-- Internal Movement -->
+        <div class="mb-6">
+            <InternalMovementSection :movements="movements" :attributes="movementAttributes" />
+        </div>
+
+        <!-- Year-on-Year 9-Box -->
+        <div class="mb-6">
             <NineBoxSection
                 :employee-id="emp.employee_id"
                 :appraisals="appraisals"
@@ -175,40 +521,53 @@ const initials = emp.fullname
             />
         </div>
 
-        <!-- Formal education -->
-        <section class="mt-8">
-            <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500">
-                {{ t.facecard.profile.education }}
-            </h3>
-            <DataTable :columns="educationColumns" :rows="formalEducations" row-key="institution">
-                <template #cell-from_date="{ value }">{{ fmtDate(value) }}</template>
-                <template #cell-to_date="{ value }">{{ fmtDate(value) }}</template>
-                <template #empty>{{ t.facecard.profile.noEducation }}</template>
-            </DataTable>
-        </section>
+        <!-- Competency Assessment -->
+        <div class="mb-6">
+            <CompetencySection
+                :employee-id="emp.employee_id"
+                :assessments="competencyAssessments"
+                :matrix-configs="matrixGradeConfigs"
+                :can-input="canInputCompetency"
+            />
+        </div>
+        </div>
+        <!-- ===== End Face Card tab ===== -->
 
-        <!-- Work experience -->
-        <section class="mt-8">
-            <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500">
-                {{ t.facecard.profile.workExperience }}
-            </h3>
-            <DataTable :columns="workColumns" :rows="workExperiences" row-key="company">
-                <template #cell-from_date="{ value }">{{ fmtDate(value) }}</template>
-                <template #cell-to_date="{ value }">{{ fmtDate(value) }}</template>
-                <template #empty>{{ t.facecard.profile.noWorkExperience }}</template>
-            </DataTable>
-        </section>
+        <!-- ===== Individual Development Plan tab ===== -->
+        <div v-show="tab === 'idp'">
+            <IdpPanel
+                :employee="{ employee_id: emp.employee_id, fullname: emp.fullname, designation_name: emp.designation_name }"
+                :development-models="developmentModels"
+                :options="options"
+                :competency-map="competencyMap"
+                :can-edit="false"
+            />
+        </div>
 
-        <!-- Training & certification -->
-        <section class="mt-8">
-            <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500">
-                {{ t.facecard.profile.training }}
-            </h3>
-            <DataTable :columns="trainingColumns" :rows="trainings" row-key="name">
-                <template #cell-issue_date="{ value }">{{ fmtDate(value) }}</template>
-                <template #cell-completion_date="{ value }">{{ fmtDate(value) }}</template>
-                <template #empty>{{ t.facecard.profile.noTraining }}</template>
-            </DataTable>
-        </section>
+        <!-- Succession drawer -->
+        <Drawer :show="successionOpen" :title="t.facecard.profile.employmentSummary" @close="successionOpen = false">
+            <form id="succession-form" class="space-y-4" @submit.prevent="submitSuccession">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.facecard.profile.criticalPosition }}</label>
+                    <input v-model="successionForm.critical_position" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.facecard.profile.successorType }}</label>
+                    <input v-model="successionForm.successor_type" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.facecard.profile.successorTo }}</label>
+                    <input v-model="successionForm.successor_to_position" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
+                </div>
+            </form>
+            <template #footer>
+                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="successionOpen = false">
+                    {{ t.result.cancel }}
+                </button>
+                <button type="submit" form="succession-form" :disabled="successionForm.processing" class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
+                    {{ t.result.save }}
+                </button>
+            </template>
+        </Drawer>
     </AppLayout>
 </template>

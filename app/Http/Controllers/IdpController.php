@@ -5,9 +5,12 @@ namespace App\Http\Controllers;
 use App\Http\Requests\StoreIndividualDevelopmentPlanRequest;
 use App\Http\Requests\UpdateIndividualDevelopmentPlanRequest;
 use App\Http\Resources\EmployeeResource;
+use App\Models\DevelopmentPlanMaster;
+use App\Models\ImportLog;
 use App\Models\IndividualDevelopmentPlan;
 use App\Exports\IdpExport;
 use App\Http\Controllers\Concerns\ReadsSort;
+use App\Imports\SingleEmployeeDevelopmentPlanImport;
 use App\Jobs\GenerateIdpZip;
 use App\Models\JobStatus;
 use App\Services\EmployeeScopeService;
@@ -41,16 +44,13 @@ class IdpController extends Controller
     public function index(Request $request): Response
     {
         $user = $request->user();
-        $search = $request->string('search')->trim()->value();
+
+        $filters = $this->readFilters($request);
         $sort = $this->readSort($request, [
-            'employee_id', 'fullname', 'group_company', 'designation_name',
+            'employee_id', 'fullname', 'group_company', 'job_level', 'designation_name',
         ], 'fullname');
 
-        $employees = $this->scope->query($user)
-            ->when($search, fn ($q, $term) => $q->where(function ($sub) use ($term) {
-                $sub->where('fullname', 'like', "%{$term}%")
-                    ->orWhere('employee_id', 'like', "%{$term}%");
-            }))
+        $employees = $this->filteredQuery($user, $filters)
             ->orderBy($sort['key'], $sort['dir'])
             ->paginate((int) $request->integer('per_page', 10))
             ->withQueryString()
@@ -58,9 +58,57 @@ class IdpController extends Controller
 
         return Inertia::render('Idp/Index', [
             'employees' => $employees,
-            'filters' => ['search' => $search],
+            'filters' => $filters,
             'sort' => $sort,
+            'filterOptions' => $this->filterOptions($user),
         ]);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function readFilters(Request $request): array
+    {
+        return [
+            'search' => $request->string('search')->trim()->value(),
+            'business_unit' => $request->string('business_unit')->value(),
+            'job_level' => $request->string('job_level')->value(),
+            'designation' => $request->string('designation')->value(),
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $filters
+     */
+    private function filteredQuery($user, array $filters)
+    {
+        return $this->scope->query($user)
+            ->when($filters['search'], fn ($q, $term) => $q->where(function ($sub) use ($term) {
+                $sub->where('fullname', 'like', "%{$term}%")
+                    ->orWhere('employee_id', 'like', "%{$term}%");
+            }))
+            ->when($filters['business_unit'], fn ($q, $v) => $q->where('group_company', $v))
+            ->when($filters['job_level'], fn ($q, $v) => $q->where('job_level', $v))
+            ->when($filters['designation'], fn ($q, $v) => $q->where('designation_name', $v));
+    }
+
+    /**
+     * Distinct filter values within the user's visible employee set.
+     */
+    private function filterOptions($user): array
+    {
+        $pluckDistinct = fn (string $column) => $this->scope->query($user)
+            ->whereNotNull($column)
+            ->distinct()
+            ->orderBy($column)
+            ->pluck($column)
+            ->values();
+
+        return [
+            'businessUnits' => $pluckDistinct('group_company'),
+            'jobLevels' => $pluckDistinct('job_level'),
+            'designations' => $pluckDistinct('designation_name'),
+        ];
     }
 
     /**
@@ -108,6 +156,115 @@ class IdpController extends Controller
         abort_unless($this->scope->canView($request->user(), $employeeId), 403);
 
         return Excel::download(new IdpExport($employeeId), 'idp_'.$employeeId.'.xlsx');
+    }
+
+    /**
+     * Download the pre-built single-employee IDP upload template.
+     */
+    public function downloadTemplate(Request $request, string $employeeId): BinaryFileResponse
+    {
+        abort_unless($this->scope->canView($request->user(), $employeeId), 403);
+
+        $path = public_path('templates/template_idp_single.xlsx');
+        abort_unless(file_exists($path), 404, 'Template file not found.');
+
+        $employee = $this->scope->query($request->user())->where('employee_id', $employeeId)->first();
+        $safeName = $employee ? Str::slug($employee->fullname ?? $employeeId, '_') : $employeeId;
+
+        return response()->download($path, "IDP_Template_{$employeeId}_{$safeName}.xlsx");
+    }
+
+    /**
+     * Download the IDP master-data reference (instructions + valid values) as PDF.
+     */
+    public function downloadMasterPdf(): HttpResponse
+    {
+        // Sort competencies by the legacy S-I-G-A-P priority, then alphabetically.
+        $priority = ['S' => 1, 'I' => 2, 'G' => 3, 'A' => 4, 'P' => 5];
+        $competencyNames = DevelopmentPlanMaster::where('type', 'competency_name')->get()
+            ->sortBy(fn ($item) => [$priority[strtoupper(substr($item->value, 0, 1))] ?? 99, $item->value])
+            ->values();
+
+        $programsById = DevelopmentPlanMaster::where('type', 'development_program')
+            ->with('developmentModel')
+            ->orderBy('value')
+            ->get()
+            ->keyBy('id');
+
+        $competencyGroupedMap = [];
+        foreach ($competencyNames as $comp) {
+            $programs = collect($comp->related_program ?? [])
+                ->map(fn ($pid) => $programsById->get($pid) ?? $programsById->get((int) $pid))
+                ->filter();
+
+            $competencyGroupedMap[$comp->id] = $programs
+                ->groupBy(fn ($item) => $item->developmentModel
+                    ? $item->developmentModel->name.' ('.$item->developmentModel->percentage.'%)'
+                    : 'Uncategorized')
+                ->sortBy(fn ($group, $key) => $key === 'Uncategorized'
+                    ? 999
+                    : ($group->first()->developmentModel->percentage ?? 999));
+        }
+
+        $reviewTools = DevelopmentPlanMaster::where('type', 'review_tools')->orderBy('value')->get();
+
+        $pdf = Pdf::loadView('pdf.idp_master_list', [
+            'competencyNames' => $competencyNames,
+            'competencyGroupedMap' => $competencyGroupedMap,
+            'reviewTools' => $reviewTools,
+        ])->setPaper('a4', 'landscape');
+
+        return $pdf->download('IDP_Master_Data_'.now()->format('Y-m-d').'.pdf');
+    }
+
+    /**
+     * Upload an Excel file that adds new IDP plans for a single employee.
+     */
+    public function import(Request $request, string $employeeId): RedirectResponse
+    {
+        $user = $request->user();
+        abort_unless($this->scope->canView($user, $employeeId), 403);
+
+        $request->validate([
+            'idp_file' => ['required', 'file', 'mimes:xlsx,xls', 'max:10240'],
+        ]);
+
+        $path = $request->file('idp_file')->store('imports', 'local');
+
+        $import = new SingleEmployeeDevelopmentPlanImport($employeeId);
+
+        try {
+            Excel::import($import, Storage::disk('local')->path($path));
+        } catch (\Throwable $e) {
+            ImportLog::create([
+                'user_id' => $user->id,
+                'data_type' => 'idp',
+                'import_date' => now(),
+                'status' => 'Failed',
+                'result' => 'Import error: '.$e->getMessage(),
+                'original_file_path' => $path,
+            ]);
+
+            return back()->with('error', 'Import failed: '.$e->getMessage());
+        }
+
+        $imported = $import->imported();
+        $errors = $import->errors();
+        $failed = count($errors);
+
+        $summary = "{$imported} plan(s) imported".($failed ? ", {$failed} row(s) skipped." : '.');
+        $detail = $failed ? ' '.implode(' ', array_slice($errors, 0, 15)) : '';
+
+        ImportLog::create([
+            'user_id' => $user->id,
+            'data_type' => 'idp',
+            'import_date' => now(),
+            'status' => $failed === 0 ? 'Success' : ($imported > 0 ? 'Partial Success' : 'Failed'),
+            'result' => $summary.$detail,
+            'original_file_path' => $path,
+        ]);
+
+        return back()->with($failed === 0 ? 'success' : 'error', $summary.$detail);
     }
 
     /**

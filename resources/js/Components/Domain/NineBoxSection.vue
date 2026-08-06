@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { router, useForm } from '@inertiajs/vue3'
-import Modal from '@/Components/Domain/Modal.vue'
-import NineBoxGrid from '@/Components/Domain/NineBoxGrid.vue'
+import Drawer from '@/Components/Domain/Drawer.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 
@@ -22,34 +21,30 @@ const props = defineProps<{
     canInput: boolean
 }>()
 
-const TALENT_BOXES = [
-    'Stars (1)',
-    'High Potentials (2)',
-    'High Impact Performers (3)',
-    'Trusted Professional (4)',
-    'Potential Gems (5)',
-    'Core Players (6)',
-    'Effective Employee (7)',
-    'Inconsistent Performers (8)',
-    'Deadwood (9)',
-]
-
-const potentialOptions: Option[] = [
-    { value: 'High', label: 'High' },
-    { value: 'Medium', label: 'Medium' },
-    { value: 'Low', label: 'Low' },
-]
-const potentialOptionsClearable: Option[] = [{ value: '', label: '—' }, ...potentialOptions]
-const talentBoxOptions: Option[] = [
-    { value: '', label: '—' },
-    ...TALENT_BOXES.map((b) => ({ value: b, label: b })),
-]
-
-const selectedYear = ref<number | null>(props.appraisals[0]?.appraisal_year ?? null)
-
-const selected = computed(
-    () => props.appraisals.find((a) => a.appraisal_year === selectedYear.value) ?? null,
+// Options + display labels are locale-driven; the stored values stay in English.
+const potentialOptions = computed<Option[]>(() =>
+    (['High', 'Medium', 'Low'] as const).map((v) => ({
+        value: v,
+        label: t.value.appraisal.potentialLabels[v],
+    })),
 )
+const potentialOptionsClearable = computed<Option[]>(() => [
+    { value: '', label: '—' },
+    ...potentialOptions.value,
+])
+const talentBoxOptions = computed<Option[]>(() => [
+    { value: '', label: '—' },
+    ...Object.entries(t.value.appraisal.talentBoxLabels).map(([value, label]) => ({ value, label })),
+])
+
+function potentialLabel(value: string | null): string {
+    if (!value) return '—'
+    return (t.value.appraisal.potentialLabels as Record<string, string>)[value] ?? value
+}
+function talentBoxLabel(value: string | null): string {
+    if (!value) return '—'
+    return (t.value.appraisal.talentBoxLabels as Record<string, string>)[value] ?? value
+}
 
 // --- Add ---
 const addModal = ref(false)
@@ -101,76 +96,79 @@ function remove(a: Appraisal) {
 </script>
 
 <template>
-    <section>
-        <div class="mb-3 flex items-center justify-between">
-            <h3 class="text-sm font-bold uppercase tracking-wider text-slate-500">
-                {{ t.appraisal.title }}
-            </h3>
+    <section class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+        <div class="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
+            <div class="flex items-center gap-2.5">
+                <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
+                <h3 class="font-semibold text-slate-800">{{ t.appraisal.title }}</h3>
+            </div>
             <button
                 v-if="canInput"
                 type="button"
-                class="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-hover"
+                class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-hover"
                 @click="openAdd"
             >
                 <i class="fa-solid fa-plus" /> {{ t.appraisal.add }}
             </button>
         </div>
 
-        <div
-            v-if="appraisals.length === 0"
-            class="rounded-xl border border-dashed border-border bg-white py-10 text-center text-sm text-slate-400"
-        >
-            {{ t.appraisal.empty }}
-        </div>
-
-        <div v-else class="grid grid-cols-1 gap-5 lg:grid-cols-2">
-            <!-- Year list -->
-            <div class="rounded-xl border border-border bg-white shadow-sm">
-                <div class="divide-y divide-border/60">
-                    <button
-                        v-for="a in appraisals"
-                        :key="a.id"
-                        type="button"
-                        class="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-slate-50"
-                        :class="a.appraisal_year === selectedYear ? 'bg-red-50/40' : ''"
-                        @click="selectedYear = a.appraisal_year"
-                    >
-                        <div>
-                            <div class="text-sm font-semibold text-slate-700">{{ a.appraisal_year }}</div>
-                            <div class="text-xs text-slate-400">
-                                {{ a.talent_box ?? '—' }}
-                                <span v-if="a.potential"> · {{ t.appraisal.potential }}: {{ a.potential }}</span>
-                                <span v-if="a.grade"> · {{ t.appraisal.grade }}: {{ a.grade }}</span>
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+                <thead>
+                    <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
+                        <th class="px-5 py-2.5 font-semibold">{{ t.appraisal.year }}</th>
+                        <th class="px-5 py-2.5 font-semibold">{{ t.appraisal.performanceAppraisal }}</th>
+                        <th class="px-5 py-2.5 font-semibold">{{ t.appraisal.potential }}</th>
+                        <th class="px-5 py-2.5 font-semibold">{{ t.appraisal.talentBox }}</th>
+                        <th v-if="canInput" class="px-5 py-2.5 text-right font-semibold">{{ t.appraisal.action }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr v-for="a in appraisals" :key="a.id" class="group border-b border-border/60 transition last:border-0 hover:bg-slate-50/70">
+                        <td class="px-5 py-3.5 font-medium text-slate-800">{{ a.appraisal_year }}</td>
+                        <td class="px-5 py-3.5 text-slate-700">{{ a.grade ?? '—' }}</td>
+                        <td class="px-5 py-3.5 text-slate-700">{{ potentialLabel(a.potential) }}</td>
+                        <td class="px-5 py-3.5 text-slate-700">{{ talentBoxLabel(a.talent_box) }}</td>
+                        <td v-if="canInput" class="px-5 py-3.5 text-right">
+                            <div class="inline-flex gap-1 opacity-60 transition group-hover:opacity-100">
+                                <button
+                                    type="button"
+                                    class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
+                                    :title="t.appraisal.editBtn"
+                                    @click="openEdit(a)"
+                                >
+                                    <i class="fa-solid fa-pen text-xs" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                                    :title="t.appraisal.deleteBtn"
+                                    @click="remove(a)"
+                                >
+                                    <i class="fa-solid fa-trash text-xs" />
+                                </button>
                             </div>
-                        </div>
-                        <div v-if="canInput" class="flex gap-1">
-                            <span
-                                role="button"
-                                class="flex h-7 w-7 items-center justify-center rounded text-slate-400 hover:text-primary"
-                                @click.stop="openEdit(a)"
-                            >
-                                <i class="fa-solid fa-pen text-xs" />
-                            </span>
-                            <span
-                                role="button"
-                                class="flex h-7 w-7 items-center justify-center rounded text-slate-400 hover:text-red-600"
-                                @click.stop="remove(a)"
-                            >
-                                <i class="fa-solid fa-trash text-xs" />
-                            </span>
-                        </div>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Grid for the selected year -->
-            <div class="rounded-xl border border-border bg-white p-4 shadow-sm">
-                <NineBoxGrid :talent-box="selected?.talent_box" />
-            </div>
+                        </td>
+                    </tr>
+                    <tr v-if="appraisals.length === 0">
+                        <td :colspan="canInput ? 5 : 4" class="px-5 py-8 text-center text-slate-400">
+                            {{ t.appraisal.empty }}
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
 
-        <!-- Add modal -->
-        <Modal :show="addModal" :title="t.appraisal.add" @close="addModal = false">
+        <div class="border-t border-border px-5 py-3 text-xs italic leading-relaxed text-slate-500">
+            <strong>{{ t.appraisal.noteTitle }}</strong><br>
+            {{ t.appraisal.noteBody }}<br>
+            {{ t.appraisal.note2023after }}<br>
+            {{ t.appraisal.note2023 }}<br>
+            {{ t.appraisal.note2023before }}
+        </div>
+
+        <!-- Add drawer -->
+        <Drawer :show="addModal" :title="t.appraisal.add" @close="addModal = false">
             <form id="ninebox-add" class="space-y-4" @submit.prevent="submitAdd">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.appraisal.year }}</label>
@@ -200,10 +198,10 @@ function remove(a: Appraisal) {
                     {{ t.appraisal.save }}
                 </button>
             </template>
-        </Modal>
+        </Drawer>
 
-        <!-- Edit modal -->
-        <Modal :show="editModal" :title="t.appraisal.edit" @close="editModal = false">
+        <!-- Edit drawer -->
+        <Drawer :show="editModal" :title="t.appraisal.edit" @close="editModal = false">
             <form id="ninebox-edit" class="space-y-4" @submit.prevent="submitEdit">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.appraisal.potential }}</label>
@@ -222,6 +220,6 @@ function remove(a: Appraisal) {
                     {{ t.appraisal.save }}
                 </button>
             </template>
-        </Modal>
+        </Drawer>
     </section>
 </template>

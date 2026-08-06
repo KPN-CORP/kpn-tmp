@@ -160,7 +160,7 @@ function exportUrl(): string {
             <template #actions>
                 <a
                     :href="exportUrl()"
-                    class="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                    class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
                 >
                     <i class="fa-solid fa-file-excel text-xs" />
                     {{ t.facecard.exportExcel }}

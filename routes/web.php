@@ -7,6 +7,7 @@ use App\Http\Controllers\IdpController;
 use App\Http\Controllers\IdpSettingController;
 use App\Http\Controllers\ImportController;
 use App\Http\Controllers\PerformanceAppraisalController;
+use App\Http\Controllers\ReportController;
 use App\Http\Controllers\ResultSummaryController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\UserGuideController;
@@ -29,6 +30,8 @@ Route::middleware('auth')->group(function () use ($stub) {
     Route::get('/facecard', [EmployeeController::class, 'index'])->name('facecard.list');
     Route::get('/facecard/export', [EmployeeController::class, 'exportExcel'])->name('facecard.export');
     Route::get('/employee/{employeeId}/pdf', [EmployeeController::class, 'downloadPdf'])->name('facecard.download_pdf');
+    Route::post('/employee/{employeeId}/photo', [EmployeeController::class, 'updatePhoto'])->name('employee.photo.update');
+    Route::delete('/employee/{employeeId}/photo', [EmployeeController::class, 'deletePhoto'])->name('employee.photo.delete');
     Route::get('/employee/{employeeId?}', [EmployeeController::class, 'show'])->name('employee.profile');
     Route::get('/profile', $stub('Profile'))->name('profile');
 
@@ -58,17 +61,21 @@ Route::middleware('auth')->group(function () use ($stub) {
     Route::post('/idp/bulk-download', [IdpController::class, 'bulkDownload'])->name('idp.bulk_download');
     Route::get('/idp/bulk-download/status/{jobStatus}', [IdpController::class, 'bulkStatus'])->name('idp.bulk_status');
     Route::get('/idp/bulk-download/file/{jobStatus}', [IdpController::class, 'bulkFile'])->name('idp.bulk_file');
+    Route::get('/idp/master-pdf', [IdpController::class, 'downloadMasterPdf'])->name('idp.master_pdf');
     Route::get('/idp/{employeeId}/pdf', [IdpController::class, 'downloadPdf'])->name('idp.download_pdf');
     Route::get('/idp/{employeeId}/export', [IdpController::class, 'export'])->name('idp.export');
+    Route::get('/idp/{employeeId}/template', [IdpController::class, 'downloadTemplate'])->name('idp.template.download');
+    Route::post('/idp/{employeeId}/import', [IdpController::class, 'import'])->name('idp.import.single');
     Route::get('/idp/{employeeId}', [IdpController::class, 'show'])->name('idp.show');
     Route::post('/idp', [IdpController::class, 'store'])->name('idp.store');
     Route::put('/idp/{idp}', [IdpController::class, 'update'])->name('idp.update');
     Route::delete('/idp/{idp}', [IdpController::class, 'destroy'])->name('idp.destroy');
 
     // --- Reports ---
-    Route::get('/report', $stub('Report'))
-        ->middleware('permission:view_report_menu')
-        ->name('report.show');
+    Route::middleware('permission:view_report_menu')->group(function () {
+        Route::get('/report', [ReportController::class, 'index'])->name('report.show');
+        Route::get('/report/export', [ReportController::class, 'exportExcel'])->name('report.export');
+    });
 
     // --- Import Center ---
     Route::middleware('permission:view_import_center')->group(function () {

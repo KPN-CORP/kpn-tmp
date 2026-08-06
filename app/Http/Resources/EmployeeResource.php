@@ -16,6 +16,7 @@ class EmployeeResource extends JsonResource
             'employee_id' => $this->employee_id,
             'fullname' => $this->fullname,
             'email' => $this->email,
+            'personal_email' => $this->personal_email,
             'gender' => $this->gender,
             'group_company' => $this->group_company,
             'company_name' => $this->company_name,
@@ -28,6 +29,11 @@ class EmployeeResource extends JsonResource
             'manager_l1_id' => $this->manager_l1_id,
             'manager_l2_id' => $this->manager_l2_id,
             'date_of_joining' => optional($this->date_of_joining)->toDateString(),
+            'date_of_birth' => optional($this->date_of_birth)->toDateString(),
+            'marital_status' => $this->marital_status,
+            'nationality' => $this->nationality,
+            'homebase' => $this->homebase,
+            'language_ability' => $this->language_ability,
         ];
     }
 }
