@@ -11,6 +11,7 @@ use App\Http\Controllers\ReportController;
 use App\Http\Controllers\ResultSummaryController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\UserGuideController;
+use App\Http\Controllers\SsoController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -20,6 +21,9 @@ use Inertia\Inertia;
  * names, and permission gates below are already the real ones.
  */
 $stub = fn (string $title) => fn () => Inertia::render('Placeholder', ['title' => $title]);
+
+
+Route::get('dbauth', [SsoController::class, 'dbauth']);
 
 // Everything in the app requires a signed-in user.
 Route::middleware('auth')->group(function () use ($stub) {
