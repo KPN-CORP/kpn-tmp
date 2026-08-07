@@ -114,7 +114,7 @@ class DevLoginController extends Controller
         $request->session()->forget('dev_login_verified');
         $request->session()->regenerate();
 
-        return redirect()->route('dashboard');
+        return redirect()->route('facecard.list');
     }
 
     private function verified(Request $request): bool

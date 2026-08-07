@@ -18,8 +18,9 @@ class StoreDevelopmentModelRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => ['required', 'string', 'max:255', 'unique:development_models,name'],
-            'percentage' => ['required', 'integer', 'min:1', new SumPercentageCheck()],
+            'name_en' => ['required', 'string', 'max:255', 'unique:development_models,name'],
+            'name_id' => ['nullable', 'string', 'max:255'],
+            'percentage' => ['required', 'integer', 'min:1', new SumPercentageCheck],
             'description_en' => ['nullable', 'string'],
             'description_id' => ['nullable', 'string'],
         ];

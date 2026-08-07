@@ -405,41 +405,86 @@ function submit() {
 
         <!-- Input drawer -->
         <Drawer :show="modalOpen" :title="t.competency.formTitle" max-width="max-w-2xl" @close="modalOpen = false">
-            <form id="competency-form" class="space-y-4" @submit.prevent="submit">
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.competency.assessmentDate }}</label>
-                        <DateInput v-model="form.assessment_date" :invalid="!!form.errors.assessment_date" />
-                        <p v-if="form.errors.assessment_date" class="mt-1 text-xs text-red-600">{{ form.errors.assessment_date }}</p>
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.competency.matrixTarget }}</label>
-                        <div class="rounded-md border border-border bg-slate-50 px-3 py-2 text-sm font-semibold text-primary">
-                            {{ formGrade ?? '—' }}
+            <form id="competency-form" class="space-y-6" @submit.prevent="submit">
+                <!-- Section: Assessment -->
+                <section class="space-y-4">
+                    <h4 class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <i class="fa-regular fa-calendar-check text-slate-300" />
+                        {{ t.competency.sectionAssessment }}
+                    </h4>
+
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">{{ t.competency.assessmentDate }}</label>
+                            <DateInput v-model="form.assessment_date" :invalid="!!form.errors.assessment_date" />
+                            <p v-if="form.errors.assessment_date" class="mt-1 text-xs text-red-600">{{ form.errors.assessment_date }}</p>
+                        </div>
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">{{ t.competency.priority }}</label>
+                            <SearchableSelect
+                                v-model="form.priority_for_development"
+                                :options="[{ value: 'No', label: t.competency.priorityLabels.No }, { value: 'Yes', label: t.competency.priorityLabels.Yes }]"
+                            />
                         </div>
                     </div>
+
+                    <!-- Live matrix target grade -->
+                    <div class="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3">
+                        <div class="min-w-0">
+                            <div class="text-xs font-semibold uppercase tracking-wider text-slate-500">{{ t.competency.matrixTarget }}</div>
+                            <div class="text-xs text-slate-400">{{ t.competency.matrixAuto }}</div>
+                        </div>
+                        <div class="text-2xl font-bold leading-none text-primary">{{ formGrade ?? '—' }}</div>
+                    </div>
+                </section>
+
+                <!-- Section: Competency scores -->
+                <section class="space-y-3 border-t border-border pt-5">
+                    <h4 class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <i class="fa-solid fa-sliders text-slate-300" />
+                        {{ t.competency.sectionScores }}
+                        <span class="ml-auto font-normal normal-case tracking-normal text-slate-400">{{ t.competency.scaleHint }}</span>
+                    </h4>
+
+                    <div class="divide-y divide-border/60 overflow-hidden rounded-lg border border-border">
+                        <div
+                            v-for="c in competencies"
+                            :key="c.key"
+                            class="flex items-center justify-between gap-3 px-3.5 py-2.5 transition hover:bg-slate-50/60"
+                        >
+                            <span class="text-sm text-slate-700">{{ c.label }}</span>
+                            <div class="inline-flex shrink-0 overflow-hidden rounded-lg border border-border">
+                                <button
+                                    v-for="n in [0, 1, 2, 3, 4]"
+                                    :key="n"
+                                    type="button"
+                                    class="h-8 w-9 border-l border-border text-sm font-semibold transition first:border-l-0"
+                                    :class="form[`${c.key}_score`] === n
+                                        ? 'bg-primary text-white'
+                                        : 'bg-white text-slate-500 hover:bg-slate-100'"
+                                    @click="form[`${c.key}_score`] = n"
+                                >
+                                    {{ n }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section: Result -->
+                <section class="space-y-4 border-t border-border pt-5">
+                    <h4 class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <i class="fa-solid fa-award text-slate-300" />
+                        {{ t.competency.sectionResult }}
+                    </h4>
                     <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.competency.priority }}</label>
-                        <SearchableSelect
-                            v-model="form.priority_for_development"
-                            :options="[{ value: 'No', label: t.competency.priorityLabels.No }, { value: 'Yes', label: t.competency.priorityLabels.Yes }]"
-                        />
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">{{ t.competency.proposedGrade }}</label>
+                        <input
+                            v-model="form.proposed_grade"
+                            class="w-full rounded-lg border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <div v-for="c in competencies" :key="c.key">
-                        <label class="mb-1 block text-xs font-medium text-slate-600">{{ c.label }}</label>
-                        <select v-model.number="form[`${c.key}_score`]" class="w-full rounded-md border border-border px-2 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                            <option v-for="n in [0, 1, 2, 3, 4]" :key="n" :value="n">{{ n }}</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.competency.proposedGrade }}</label>
-                    <input v-model="form.proposed_grade" class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary">
-                </div>
+                </section>
             </form>
             <template #footer>
                 <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="modalOpen = false">

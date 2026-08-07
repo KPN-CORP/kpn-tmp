@@ -16,6 +16,8 @@ const { t, locale } = useLocale()
 interface Model {
     id: number
     name: string
+    name_en: string | null
+    name_id: string | null
     percentage: number
     description_en: string | null
     description_id: string | null
@@ -26,7 +28,10 @@ interface Model {
 interface Competency {
     id: number
     value: string
-    description: string | null
+    value_en: string | null
+    value_id: string | null
+    description_en: string | null
+    description_id: string | null
     related_program: number[]
     linked_programs: string[]
 }
@@ -34,6 +39,8 @@ interface Competency {
 interface Program {
     id: number
     value: string
+    value_en: string | null
+    value_id: string | null
     development_model_id: number | null
     model_name: string | null
 }
@@ -96,11 +103,35 @@ function modelDescription(model: Model): string {
         : (fallback ?? '')
 }
 
+// Display the model name in the active UI language, falling back to the
+// canonical `name` when the preferred localized name is empty.
+function modelName(model: {
+    name: string
+    name_en?: string | null
+    name_id?: string | null
+}): string {
+    const preferred = locale.value === 'id' ? model.name_id : model.name_en
+    return (preferred ?? '').trim() !== '' ? (preferred as string) : model.name
+}
+
+const modelById = computed(() => {
+    const m = new Map<number, Model>()
+    for (const mod of props.developmentModels) m.set(mod.id, mod)
+    return m
+})
+
+function modelNameById(id: number | null): string {
+    if (id == null) return ''
+    const m = modelById.value.get(id)
+    return m ? modelName(m) : ''
+}
+
 const modelModal = ref(false)
 const editingModelId = ref<number | null>(null)
 
 const modelForm = useForm({
-    name: '',
+    name_en: '',
+    name_id: '',
     percentage: 10,
     description_en: '',
     description_id: '',
@@ -111,7 +142,8 @@ function openModel(model?: Model) {
 
     modelForm.clearErrors()
 
-    modelForm.name = model?.name ?? ''
+    modelForm.name_en = model?.name_en ?? ''
+    modelForm.name_id = model?.name_id ?? ''
     modelForm.percentage = model?.percentage ?? 10
     modelForm.description_en = model?.description_en ?? ''
     modelForm.description_id = model?.description_id ?? ''
@@ -133,6 +165,12 @@ function submitModel() {
     } else {
         modelForm.post('/idp-setting/models', opts)
     }
+}
+
+// Percentage accepts whole numbers only — block the characters a `number`
+// input would otherwise allow (exponent, sign, decimal point).
+function blockNonNumeric(e: KeyboardEvent) {
+    if (['e', 'E', '+', '-', '.', ','].includes(e.key)) e.preventDefault()
 }
 
 function deleteModel(model: Model) {
@@ -159,13 +197,37 @@ const editingMasterId = ref<number | null>(null)
 
 const masterForm = useForm({
     type: 'competency_name' as MasterType,
-    value: '',
-    description: '',
+    // Canonical `value` tracks the English name (value_en) server-side.
+    value_en: '',
+    value_id: '',
+    description_en: '',
+    description_id: '',
     development_model_id: null as number | null,
     // Program → competencies. Linking now happens from the program side; the
     // competency form only carries name + description.
     related_competencies: [] as number[],
 })
+
+// Localized name for a competency / program, falling back to the canonical value.
+function masterName(item: {
+    value: string
+    value_en?: string | null
+    value_id?: string | null
+}): string {
+    const preferred = locale.value === 'id' ? item.value_id : item.value_en
+    return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
+}
+
+// Localized competency description (falls back to the other language).
+function competencyDescription(c: Competency): string {
+    const preferred =
+        locale.value === 'id' ? c.description_id : c.description_en
+    const fallback =
+        locale.value === 'id' ? c.description_en : c.description_id
+    return (preferred ?? '').trim() !== ''
+        ? (preferred as string)
+        : (fallback ?? '')
+}
 
 function openMaster(
     type: MasterType,
@@ -177,8 +239,12 @@ function openMaster(
     masterForm.clearErrors()
 
     masterForm.type = type
-    masterForm.value = item?.value ?? ''
-    masterForm.description = (item as Competency)?.description ?? ''
+
+    const localized = item as Partial<Competency & Program> | undefined
+    masterForm.value_en = localized?.value_en ?? item?.value ?? ''
+    masterForm.value_id = localized?.value_id ?? ''
+    masterForm.description_en = (item as Competency)?.description_en ?? ''
+    masterForm.description_id = (item as Competency)?.description_id ?? ''
 
     masterForm.development_model_id =
         (item as Program)?.development_model_id ?? null
@@ -259,13 +325,13 @@ const masterTitle = () => {
 const modelOptions = computed<Option[]>(() =>
     props.developmentModels.map((m) => ({
         value: String(m.id),
-        label: `${m.name} (${m.percentage}%)`,
+        label: `${modelName(m)} (${m.percentage}%)`,
     })),
 )
 
 // Competencies as MultiSelect options (string values — MultiSelect binds string[]).
 const competencyOptions = computed<Option[]>(() =>
-    props.competencies.map((c) => ({ value: String(c.id), label: c.value })),
+    props.competencies.map((c) => ({ value: String(c.id), label: masterName(c) })),
 )
 
 // Bridge the numeric related_competencies to MultiSelect's string[] model.
@@ -403,7 +469,9 @@ function programGroups(c: Competency): RelationGroup[] {
 
             groups.set(key, {
                 key,
-                modelName: p.model_name ?? '',
+                modelName:
+                    modelNameById(p.development_model_id) ||
+                    (p.model_name ?? ''),
                 percentage:
                     p.development_model_id == null
                         ? null
@@ -427,14 +495,21 @@ const relationRows = computed(() => {
     const q = competencySearch.value.trim().toLowerCase()
 
     return props.competencies
-        .filter(
-            (c) =>
-                !q ||
-                c.value.toLowerCase().includes(q) ||
-                c.linked_programs.some((lp) =>
-                    lp.toLowerCase().includes(q),
-                ),
-        )
+        .filter((c) => {
+            if (!q) return true
+            if (masterName(c).toLowerCase().includes(q)) return true
+            if (c.value.toLowerCase().includes(q)) return true
+
+            // Also match on any linked development program's name.
+            return c.related_program.some((pid) => {
+                const p = programById.value.get(pid)
+                return (
+                    !!p &&
+                    (masterName(p).toLowerCase().includes(q) ||
+                        p.value.toLowerCase().includes(q))
+                )
+            })
+        })
         .map((c) => {
             const groups = programGroups(c)
 
@@ -464,6 +539,33 @@ const unlinkedPrograms = computed(() => {
         for (const pid of c.related_program) linked.add(pid)
     }
     return props.developmentPrograms.filter((p) => !linked.has(p.id))
+})
+
+// Client-side pagination of the relation table, by competency.
+const competencyPage = ref(1)
+const competencyPerPage = 8
+
+const competencyTotalPages = computed(() =>
+    Math.max(1, Math.ceil(relationRows.value.length / competencyPerPage)),
+)
+
+const pagedRelationRows = computed(() => {
+    const start = (competencyPage.value - 1) * competencyPerPage
+    return relationRows.value.slice(start, start + competencyPerPage)
+})
+
+const competencyFrom = computed(() =>
+    relationRows.value.length === 0
+        ? 0
+        : (competencyPage.value - 1) * competencyPerPage + 1,
+)
+const competencyTo = computed(() =>
+    Math.min(competencyPage.value * competencyPerPage, relationRows.value.length),
+)
+
+watch(competencySearch, () => (competencyPage.value = 1))
+watch(competencyTotalPages, (total) => {
+    if (competencyPage.value > total) competencyPage.value = total
 })
 </script>
 
@@ -598,7 +700,7 @@ const unlinkedPrograms = computed(() => {
                                     class="h-2.5 w-2.5 rounded-full"
                                     :class="colorFor(i).bar"
                                 />
-                                {{ model.name }}
+                                {{ modelName(model) }}
                                 <span class="font-semibold text-slate-700">
                                     {{ model.percentage }}%
                                 </span>
@@ -651,7 +753,7 @@ const unlinkedPrograms = computed(() => {
                     <div class="flex items-start justify-between gap-3 p-5 pb-3">
                         <div class="min-w-0">
                             <h4 class="truncate font-semibold text-slate-800">
-                                {{ model.name }}
+                                {{ modelName(model) }}
                             </h4>
                             <p class="mt-0.5 text-xs text-slate-400">
                                 {{ t.idp.settings.ofTotal }}
@@ -831,7 +933,7 @@ const unlinkedPrograms = computed(() => {
 
                     <tbody>
                         <template
-                            v-for="row in relationRows"
+                            v-for="row in pagedRelationRows"
                             :key="row.competency.id"
                         >
                             <tr
@@ -846,7 +948,7 @@ const unlinkedPrograms = computed(() => {
                                     class="border-r border-border/60 px-5 py-4 align-top"
                                 >
                                     <div class="font-semibold text-slate-800">
-                                        {{ row.competency.value }}
+                                        {{ masterName(row.competency) }}
                                     </div>
                                     <div class="mt-0.5 flex items-center gap-2">
                                         <span class="text-xs text-slate-400">
@@ -867,10 +969,10 @@ const unlinkedPrograms = computed(() => {
                                     </div>
 
                                     <p
-                                        v-if="row.competency.description"
+                                        v-if="competencyDescription(row.competency)"
                                         class="mt-1 whitespace-pre-wrap break-words text-xs text-slate-400"
                                     >
-                                        {{ row.competency.description }}
+                                        {{ competencyDescription(row.competency) }}
                                     </p>
                                 </td>
 
@@ -918,7 +1020,7 @@ const unlinkedPrograms = computed(() => {
                                                 class="fa-solid fa-circle text-[4px] text-slate-300"
                                             />
                                             <span class="flex-1 text-slate-600">
-                                                {{ p.value }}
+                                                {{ masterName(p) }}
                                             </span>
                                             <IconButton
                                                 icon="fa-solid fa-pen"
@@ -935,7 +1037,7 @@ const unlinkedPrograms = computed(() => {
                                                 icon="fa-solid fa-trash"
                                                 variant="delete"
                                                 :title="t.idp.settings.deleteProgram"
-                                                @click="deleteMaster(p.id, p.value)"
+                                                @click="deleteMaster(p.id, masterName(p))"
                                             />
                                         </li>
                                     </ul>
@@ -960,7 +1062,7 @@ const unlinkedPrograms = computed(() => {
                                         @click="
                                             deleteMaster(
                                                 row.competency.id,
-                                                row.competency.value,
+                                                masterName(row.competency),
                                             )
                                         "
                                     />
@@ -982,6 +1084,57 @@ const unlinkedPrograms = computed(() => {
                         </tr>
                     </tbody>
                 </table>
+            </div>
+
+            <!-- ------------------------------------------------------------
+                 Pagination (by competency)
+            ------------------------------------------------------------- -->
+            <div
+                v-if="relationRows.length > competencyPerPage"
+                class="flex flex-col items-center justify-between gap-4 sm:flex-row"
+            >
+                <p class="text-sm text-slate-500">
+                    {{ competencyFrom }}–{{ competencyTo }}
+                    {{ t.pagination.of }}
+                    {{ relationRows.length }}
+                </p>
+
+                <nav class="flex items-center gap-1">
+                    <button
+                        type="button"
+                        class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border border-border bg-white px-3 text-sm text-slate-600 transition hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40"
+                        :disabled="competencyPage === 1"
+                        :aria-label="t.pagination.previous"
+                        @click="competencyPage--"
+                    >
+                        <i class="fa-solid fa-chevron-left text-xs" />
+                    </button>
+
+                    <button
+                        v-for="p in competencyTotalPages"
+                        :key="p"
+                        type="button"
+                        class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border px-3 text-sm transition"
+                        :class="
+                            p === competencyPage
+                                ? 'border-primary bg-primary text-white'
+                                : 'border-border bg-white text-slate-600 hover:bg-slate-50'
+                        "
+                        @click="competencyPage = p"
+                    >
+                        {{ p }}
+                    </button>
+
+                    <button
+                        type="button"
+                        class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border border-border bg-white px-3 text-sm text-slate-600 transition hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-40"
+                        :disabled="competencyPage === competencyTotalPages"
+                        :aria-label="t.pagination.next"
+                        @click="competencyPage++"
+                    >
+                        <i class="fa-solid fa-chevron-right text-xs" />
+                    </button>
+                </nav>
             </div>
 
             <!-- ------------------------------------------------------------
@@ -1012,12 +1165,12 @@ const unlinkedPrograms = computed(() => {
                         :key="p.id"
                         class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-1.5 text-sm text-slate-600"
                     >
-                        <span>{{ p.value }}</span>
+                        <span>{{ masterName(p) }}</span>
                         <span
                             v-if="p.model_name"
                             class="text-xs text-slate-400"
                         >
-                            · {{ p.model_name }}
+                            · {{ modelNameById(p.development_model_id) || p.model_name }}
                         </span>
                         <IconButton
                             icon="fa-solid fa-pen"
@@ -1029,7 +1182,7 @@ const unlinkedPrograms = computed(() => {
                             icon="fa-solid fa-trash"
                             variant="delete"
                             :title="t.idp.settings.deleteProgram"
-                            @click="deleteMaster(p.id, p.value)"
+                            @click="deleteMaster(p.id, masterName(p))"
                         />
                     </li>
                 </ul>
@@ -1235,31 +1388,121 @@ const unlinkedPrograms = computed(() => {
                 class="space-y-4"
                 @submit.prevent="submitModel"
             >
-                <div>
-                    <label
-                        class="mb-1 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.name }}
-                    </label>
+                <!-- English section: name + description -->
+                <div class="rounded-lg border border-border bg-slate-50/60 p-4">
+                    <div class="mb-3 flex items-center gap-2">
+                        <span
+                            class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                        >
+                            EN
+                        </span>
+                        <span class="text-sm font-semibold text-slate-700">
+                            {{ t.idp.settings.english }}
+                        </span>
+                    </div>
 
-                    <input
-                        v-model="modelForm.name"
-                        class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="
-                            modelForm.errors.name
-                                ? 'border-red-500'
-                                : 'border-border'
-                        "
-                    >
+                    <div class="space-y-3">
+                        <div>
+                            <label
+                                class="mb-1 block text-xs font-medium text-slate-500"
+                            >
+                                {{ t.idp.settings.name }}
+                            </label>
+                            <input
+                                v-model="modelForm.name_en"
+                                :placeholder="t.idp.settings.namePlaceholderEn"
+                                class="w-full rounded-md border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="
+                                    modelForm.errors.name_en
+                                        ? 'border-red-500'
+                                        : 'border-border'
+                                "
+                            >
+                            <p
+                                v-if="modelForm.errors.name_en"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ modelForm.errors.name_en }}
+                            </p>
+                        </div>
 
-                    <p
-                        v-if="modelForm.errors.name"
-                        class="mt-1 text-xs text-red-600"
-                    >
-                        {{ modelForm.errors.name }}
-                    </p>
+                        <div>
+                            <label
+                                class="mb-1 block text-xs font-medium text-slate-500"
+                            >
+                                {{ t.idp.settings.description }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+                            <textarea
+                                v-model="modelForm.description_en"
+                                rows="4"
+                                :placeholder="t.idp.settings.descriptionHint"
+                                class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                        </div>
+                    </div>
                 </div>
 
+                <!-- Bahasa Indonesia section: name + description -->
+                <div class="rounded-lg border border-border bg-slate-50/60 p-4">
+                    <div class="mb-3 flex items-center gap-2">
+                        <span
+                            class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                        >
+                            ID
+                        </span>
+                        <span class="text-sm font-semibold text-slate-700">
+                            {{ t.idp.settings.bahasa }}
+                        </span>
+                    </div>
+
+                    <div class="space-y-3">
+                        <div>
+                            <label
+                                class="mb-1 block text-xs font-medium text-slate-500"
+                            >
+                                {{ t.idp.settings.name }}
+                            </label>
+                            <input
+                                v-model="modelForm.name_id"
+                                :placeholder="t.idp.settings.namePlaceholderId"
+                                class="w-full rounded-md border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="
+                                    modelForm.errors.name_id
+                                        ? 'border-red-500'
+                                        : 'border-border'
+                                "
+                            >
+                            <p
+                                v-if="modelForm.errors.name_id"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ modelForm.errors.name_id }}
+                            </p>
+                        </div>
+
+                        <div>
+                            <label
+                                class="mb-1 block text-xs font-medium text-slate-500"
+                            >
+                                {{ t.idp.settings.description }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+                            <textarea
+                                v-model="modelForm.description_id"
+                                rows="4"
+                                :placeholder="t.idp.settings.descriptionHint"
+                                class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Percentage (whole numbers only) -->
                 <div>
                     <label
                         class="mb-1 block text-sm font-medium text-slate-700"
@@ -1267,18 +1510,28 @@ const unlinkedPrograms = computed(() => {
                         {{ t.idp.settings.percentage }}
                     </label>
 
-                    <input
-                        v-model.number="modelForm.percentage"
-                        type="number"
-                        min="1"
-                        max="100"
-                        class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="
-                            modelForm.errors.percentage
-                                ? 'border-red-500'
-                                : 'border-border'
-                        "
-                    >
+                    <div class="relative w-40">
+                        <input
+                            v-model.number="modelForm.percentage"
+                            type="number"
+                            min="1"
+                            max="100"
+                            step="1"
+                            inputmode="numeric"
+                            class="w-full rounded-md border px-3 py-2 pr-8 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            :class="
+                                modelForm.errors.percentage
+                                    ? 'border-red-500'
+                                    : 'border-border'
+                            "
+                            @keydown="blockNonNumeric"
+                        >
+                        <span
+                            class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400"
+                        >
+                            %
+                        </span>
+                    </div>
 
                     <p
                         v-if="modelForm.errors.percentage"
@@ -1286,40 +1539,6 @@ const unlinkedPrograms = computed(() => {
                     >
                         {{ modelForm.errors.percentage }}
                     </p>
-                </div>
-
-                <div>
-                    <label
-                        class="mb-1 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.descriptionEn }}
-                    </label>
-
-                    <textarea
-                        v-model="modelForm.description_en"
-                        rows="4"
-                        :placeholder="
-                            t.idp.settings.descriptionHint
-                        "
-                        class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
-                </div>
-
-                <div>
-                    <label
-                        class="mb-1 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.descriptionId }}
-                    </label>
-
-                    <textarea
-                        v-model="modelForm.description_id"
-                        rows="4"
-                        :placeholder="
-                            t.idp.settings.descriptionHint
-                        "
-                        class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
                 </div>
             </form>
 
@@ -1357,7 +1576,8 @@ const unlinkedPrograms = computed(() => {
                 class="space-y-4"
                 @submit.prevent="submitMaster"
             >
-                <div>
+                <!-- Review tools: single-language name -->
+                <div v-if="masterType === 'review_tools'">
                     <label
                         class="mb-1 block text-sm font-medium text-slate-700"
                     >
@@ -1365,41 +1585,138 @@ const unlinkedPrograms = computed(() => {
                     </label>
 
                     <input
-                        v-model="masterForm.value"
+                        v-model="masterForm.value_en"
                         class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                         :class="
-                            masterForm.errors.value
+                            masterForm.errors.value_en
                                 ? 'border-red-500'
                                 : 'border-border'
                         "
                     >
 
                     <p
-                        v-if="masterForm.errors.value"
+                        v-if="masterForm.errors.value_en"
                         class="mt-1 text-xs text-red-600"
                     >
-                        {{ masterForm.errors.value }}
+                        {{ masterForm.errors.value_en }}
                     </p>
                 </div>
 
-                <!-- Competency -> Description (optional) -->
-                <div v-if="masterType === 'competency_name'">
-                    <label
-                        class="mb-1 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.description }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
+                <!-- Competency & Program: bilingual name (+ description for
+                     competency), grouped by language -->
+                <template v-else>
+                    <!-- English section -->
+                    <div class="rounded-lg border border-border bg-slate-50/60 p-4">
+                        <div class="mb-3 flex items-center gap-2">
+                            <span
+                                class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                            >
+                                EN
+                            </span>
+                            <span class="text-sm font-semibold text-slate-700">
+                                {{ t.idp.settings.english }}
+                            </span>
+                        </div>
 
-                    <textarea
-                        v-model="masterForm.description"
-                        rows="4"
-                        :placeholder="t.idp.settings.descriptionHint"
-                        class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
-                </div>
+                        <div class="space-y-3">
+                            <div>
+                                <label
+                                    class="mb-1 block text-xs font-medium text-slate-500"
+                                >
+                                    {{ t.idp.settings.name }}
+                                </label>
+                                <input
+                                    v-model="masterForm.value_en"
+                                    class="w-full rounded-md border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                    :class="
+                                        masterForm.errors.value_en
+                                            ? 'border-red-500'
+                                            : 'border-border'
+                                    "
+                                >
+                                <p
+                                    v-if="masterForm.errors.value_en"
+                                    class="mt-1 text-xs text-red-600"
+                                >
+                                    {{ masterForm.errors.value_en }}
+                                </p>
+                            </div>
+
+                            <div v-if="masterType === 'competency_name'">
+                                <label
+                                    class="mb-1 block text-xs font-medium text-slate-500"
+                                >
+                                    {{ t.idp.settings.description }}
+                                    <span class="font-normal text-slate-400">
+                                        ({{ t.idp.settings.optional }})
+                                    </span>
+                                </label>
+                                <textarea
+                                    v-model="masterForm.description_en"
+                                    rows="4"
+                                    :placeholder="t.idp.settings.descriptionHint"
+                                    class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bahasa Indonesia section -->
+                    <div class="rounded-lg border border-border bg-slate-50/60 p-4">
+                        <div class="mb-3 flex items-center gap-2">
+                            <span
+                                class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                            >
+                                ID
+                            </span>
+                            <span class="text-sm font-semibold text-slate-700">
+                                {{ t.idp.settings.bahasa }}
+                            </span>
+                        </div>
+
+                        <div class="space-y-3">
+                            <div>
+                                <label
+                                    class="mb-1 block text-xs font-medium text-slate-500"
+                                >
+                                    {{ t.idp.settings.name }}
+                                </label>
+                                <input
+                                    v-model="masterForm.value_id"
+                                    class="w-full rounded-md border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                    :class="
+                                        masterForm.errors.value_id
+                                            ? 'border-red-500'
+                                            : 'border-border'
+                                    "
+                                >
+                                <p
+                                    v-if="masterForm.errors.value_id"
+                                    class="mt-1 text-xs text-red-600"
+                                >
+                                    {{ masterForm.errors.value_id }}
+                                </p>
+                            </div>
+
+                            <div v-if="masterType === 'competency_name'">
+                                <label
+                                    class="mb-1 block text-xs font-medium text-slate-500"
+                                >
+                                    {{ t.idp.settings.description }}
+                                    <span class="font-normal text-slate-400">
+                                        ({{ t.idp.settings.optional }})
+                                    </span>
+                                </label>
+                                <textarea
+                                    v-model="masterForm.description_id"
+                                    rows="4"
+                                    :placeholder="t.idp.settings.descriptionHint"
+                                    class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </template>
 
                 <!-- Development program -> Development model -->
                 <div v-if="masterType === 'development_program'">

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ApprovalSettingController;
 use App\Http\Controllers\CompetencyAssessmentController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EmployeeController;
@@ -27,7 +28,7 @@ Route::get('dbauth', [SsoController::class, 'dbauth']);
 
 // Everything in the app requires a signed-in user.
 Route::middleware('auth')->group(function () use ($stub) {
-    Route::get('/', [DashboardController::class, 'index']);
+    Route::get('/', fn () => redirect()->route('facecard.list'));
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     // --- Core (visible to every authenticated user) ---
@@ -109,6 +110,19 @@ Route::middleware('auth')->group(function () use ($stub) {
         Route::post('/admin/roles', [RoleController::class, 'store'])->name('roles.store');
         Route::put('/admin/roles/{role}', [RoleController::class, 'update'])->name('roles.update');
         Route::delete('/admin/roles/{role}', [RoleController::class, 'destroy'])->name('roles.destroy');
+    });
+
+    // --- Approval Setting (configurable approval workflow) ---
+    Route::middleware('permission:view_approval_setting')->group(function () {
+        Route::get('/approval-setting', [ApprovalSettingController::class, 'index'])->name('approval.setting.index');
+        Route::get('/approval-setting/employees', [ApprovalSettingController::class, 'searchEmployees'])->name('approval.setting.employees');
+
+        Route::put('/approval-setting/flows/{flow}', [ApprovalSettingController::class, 'updateFlow'])->name('approval.setting.flows.update');
+        Route::post('/approval-setting/flows/{flow}/reorder', [ApprovalSettingController::class, 'reorderLayers'])->name('approval.setting.layers.reorder');
+
+        Route::post('/approval-setting/layers', [ApprovalSettingController::class, 'storeLayer'])->name('approval.setting.layers.store');
+        Route::put('/approval-setting/layers/{layer}', [ApprovalSettingController::class, 'updateLayer'])->name('approval.setting.layers.update');
+        Route::delete('/approval-setting/layers/{layer}', [ApprovalSettingController::class, 'destroyLayer'])->name('approval.setting.layers.destroy');
     });
 });
 

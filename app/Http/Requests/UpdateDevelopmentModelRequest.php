@@ -21,7 +21,8 @@ class UpdateDevelopmentModelRequest extends FormRequest
         $modelId = $this->route('developmentModel')->id;
 
         return [
-            'name' => ['required', 'string', 'max:255', Rule::unique('development_models', 'name')->ignore($modelId)],
+            'name_en' => ['required', 'string', 'max:255', Rule::unique('development_models', 'name')->ignore($modelId)],
+            'name_id' => ['nullable', 'string', 'max:255'],
             'percentage' => ['required', 'integer', 'min:1', new SumPercentageCheck($modelId)],
             'description_en' => ['nullable', 'string'],
             'description_id' => ['nullable', 'string'],

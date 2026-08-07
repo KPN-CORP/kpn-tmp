@@ -19,6 +19,7 @@ class DatabaseSeeder extends Seeder
             RoleSeeder::class,
             DevelopmentModelSeeder::class,
             MatrixGradeConfigSeeder::class,
+            ApprovalFlowSeeder::class,
         ]);
 
         // A known account for signing in during development.

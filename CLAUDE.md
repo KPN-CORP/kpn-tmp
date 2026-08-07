@@ -315,6 +315,38 @@ Full end-to-end still needs the DBs (kpncorp especially) + a queue worker.
   upload/download. Optional: extract `FileUpload`/`FormField` reusable Vue components (upload
   and form fields are currently inline).
 
+## Phase 5.1 — Approval Setting (config) ✅ DONE (code + runtime-verified)
+Configurable approval workflow — replaces facecard's hard-coded manager_l1/manager_l2
+signature step. **Only the SETTINGS/config screen is built here**; the runtime that consumes
+these flows (submit → approve/reject, status tracking, notifications) is a later slice.
+
+- **Tables** (app-owned, `mysql`): `approval_flows` (one row per module, `module` unique —
+  `idp` | `appraisal`, plus `name`/`description`/`is_active`) and `approval_layers`
+  (`approval_flow_id` FK cascade, `sequence`, `name`, `approver_type`, `approver_employee_id`,
+  `is_active`). Ordering is app-side (indexed, not unique) so reorder/swap can't clash.
+  `approver_employee_id` is a kpncorp employee_id but intentionally NOT a cross-DB FK.
+- **Models**: `ApprovalFlow` (`MODULES` const, `layers()` ordered by sequence, `forModule`
+  scope) and `ApprovalLayer` (`TYPE_MANAGER_L1|MANAGER_L2|SPECIFIC` consts +
+  `resolveApproverId(Employee)` — the domain helper the future runtime uses to turn a layer
+  into a concrete approver employee_id).
+- **Seeder** `ApprovalFlowSeeder` (registered in `DatabaseSeeder`) seeds both modules with the
+  default 2-layer chain (Direct Superior = manager_l1, Second-Level Manager = manager_l2);
+  idempotent and never clobbers a customized chain.
+- **Permission** `view_approval_setting` (Admin group) added to `PermissionSeeder` + `Admin`
+  role; Superadmin gets it via `Permission::all()`.
+- **Controller** `ApprovalSettingController` (gated `permission:view_approval_setting`): `index`
+  (renders both flows, resolves specific-approver names defensively from kpncorp), `updateFlow`
+  (name/description/active toggle), `storeLayer`/`updateLayer`/`destroyLayer` (auto-append +
+  resequence on delete), `reorderLayers` (persists full ordered id list), `searchEmployees`
+  (live JSON search for the specific-approver picker). Requests: `StoreApprovalLayerRequest`
+  (+ `Update` subclass) — `approver_employee_id` required only when type is `specific_employee`.
+- **Vue** `Pages/Admin/ApprovalSetting.vue`: module tabs (IDP / Appraisal), flow header with
+  active toggle + edit, ordered layer chain with move up/down + edit/delete, add/edit layer
+  Drawer (approver-type radios + inline live employee combobox). Nav item `approvalSetting`
+  (`/approval-setting`); `approval` locale block in `en`/`id`.
+- **Not yet built**: the approval runtime itself (submit/approve/reject + state), any per-layer
+  `is_active`-skip logic in resolution, notifications, and tests/policies.
+
 ## Build plan (phased)
 
 **Phase 0 — Cleanup** (above): rename, delete leftovers, fix class refs, add perm seeder.

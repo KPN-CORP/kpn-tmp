@@ -47,6 +47,7 @@ class RoleSeeder extends Seeder
             'download_idp_progress',
             'view_admin_setting',
             'view_idp_master',
+            'view_approval_setting',
             'input_successor_position',
             'input_competency_assessment',
             'view_year_on_year',

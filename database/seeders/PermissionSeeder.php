@@ -45,6 +45,7 @@ class PermissionSeeder extends Seeder
             // Admin
             ['name' => 'view_admin_setting', 'label' => 'View Admin Setting', 'group' => 'Admin', 'section' => 'View'],
             ['name' => 'view_idp_master', 'label' => 'View IDP Master', 'group' => 'Admin', 'section' => 'View'],
+            ['name' => 'view_approval_setting', 'label' => 'View & Manage Approval Setting', 'group' => 'Admin', 'section' => 'View'],
 
             // User Guide
             ['name' => 'manage_user_guide', 'label' => 'Input User Guide', 'group' => 'User Guide', 'section' => 'Input'],

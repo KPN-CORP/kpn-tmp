@@ -16,12 +16,13 @@ export interface NavItem {
 
 export const navigation: NavItem[] = [
     // --- Main ---
-    {
-        section: 'main',
-        label: 'dashboard',
-        icon: 'fa-solid fa-gauge-high',
-        href: '/dashboard',
-    },
+    // Dashboard is temporarily hidden from the menu (facecard is the default landing).
+    // {
+    //     section: 'main',
+    //     label: 'dashboard',
+    //     icon: 'fa-solid fa-gauge-high',
+    //     href: '/dashboard',
+    // },
     {
         section: 'main',
         label: 'facecard',
@@ -65,6 +66,13 @@ export const navigation: NavItem[] = [
         icon: 'fa-solid fa-user-shield',
         href: '/admin/roles',
         permission: 'view_admin_setting',
+    },
+    {
+        section: 'administration',
+        label: 'approvalSetting',
+        icon: 'fa-solid fa-list-check',
+        href: '/approval-setting',
+        permission: 'view_approval_setting',
     },
     {
         section: 'administration',
