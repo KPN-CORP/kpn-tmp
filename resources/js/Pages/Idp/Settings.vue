@@ -48,6 +48,8 @@ interface Program {
 interface ReviewTool {
     id: number
     value: string
+    value_en: string | null
+    value_id: string | null
 }
 
 const props = defineProps<{
@@ -365,7 +367,11 @@ function toggleReviewSort() {
 const filteredReviewTools = computed(() => {
     const q = reviewSearch.value.trim().toLowerCase()
     return q
-        ? props.reviewTools.filter((r) => r.value.toLowerCase().includes(q))
+        ? props.reviewTools.filter(
+              (r) =>
+                  masterName(r).toLowerCase().includes(q) ||
+                  r.value.toLowerCase().includes(q),
+          )
         : props.reviewTools
 })
 
@@ -374,7 +380,7 @@ const sortedReviewTools = computed(() => {
 
     const dir = reviewSort.value === 'asc' ? 1 : -1
     return [...filteredReviewTools.value].sort(
-        (a, b) => a.value.localeCompare(b.value) * dir,
+        (a, b) => masterName(a).localeCompare(masterName(b)) * dir,
     )
 })
 
@@ -1280,7 +1286,7 @@ watch(competencyTotalPages, (total) => {
                                 {{ reviewFrom + i }}
                             </td>
                             <td class="px-5 py-3 font-medium text-slate-700">
-                                {{ r.value }}
+                                {{ masterName(r) }}
                             </td>
                             <td
                                 class="border-l border-border/60 px-5 py-3 text-center align-middle"
@@ -1296,7 +1302,7 @@ watch(competencyTotalPages, (total) => {
                                         icon="fa-solid fa-trash"
                                         variant="delete"
                                         :title="t.idp.settings.deleteReviewTool"
-                                        @click="deleteMaster(r.id, r.value)"
+                                        @click="deleteMaster(r.id, masterName(r))"
                                     />
                                 </div>
                             </td>
@@ -1577,34 +1583,9 @@ watch(competencyTotalPages, (total) => {
                 @submit.prevent="submitMaster"
             >
                 <!-- Review tools: single-language name -->
-                <div v-if="masterType === 'review_tools'">
-                    <label
-                        class="mb-1 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.name }}
-                    </label>
-
-                    <input
-                        v-model="masterForm.value_en"
-                        class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="
-                            masterForm.errors.value_en
-                                ? 'border-red-500'
-                                : 'border-border'
-                        "
-                    >
-
-                    <p
-                        v-if="masterForm.errors.value_en"
-                        class="mt-1 text-xs text-red-600"
-                    >
-                        {{ masterForm.errors.value_en }}
-                    </p>
-                </div>
-
-                <!-- Competency & Program: bilingual name (+ description for
-                     competency), grouped by language -->
-                <template v-else>
+                <!-- Bilingual name (+ description for competency), grouped by
+                     language. Applies to competency, program and review tool. -->
+                <template>
                     <!-- English section -->
                     <div class="rounded-lg border border-border bg-slate-50/60 p-4">
                         <div class="mb-3 flex items-center gap-2">

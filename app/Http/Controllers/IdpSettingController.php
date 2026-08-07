@@ -56,7 +56,7 @@ class IdpSettingController extends Controller
                 'model_name' => $p->developmentModel?->name,
             ]),
             'reviewTools' => DevelopmentPlanMaster::where('type', 'review_tools')
-                ->orderBy('value')->get(['id', 'value']),
+                ->orderBy('value')->get(['id', 'value', 'value_en', 'value_id']),
         ]);
     }
 
