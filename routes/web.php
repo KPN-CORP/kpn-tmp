@@ -11,8 +11,8 @@ use App\Http\Controllers\PerformanceAppraisalController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\ResultSummaryController;
 use App\Http\Controllers\RoleController;
-use App\Http\Controllers\UserGuideController;
 use App\Http\Controllers\SsoController;
+use App\Http\Controllers\UserGuideController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -22,7 +22,6 @@ use Inertia\Inertia;
  * names, and permission gates below are already the real ones.
  */
 $stub = fn (string $title) => fn () => Inertia::render('Placeholder', ['title' => $title]);
-
 
 Route::get('dbauth', [SsoController::class, 'dbauth']);
 
@@ -34,6 +33,9 @@ Route::middleware('auth')->group(function () use ($stub) {
     // --- Core (visible to every authenticated user) ---
     Route::get('/facecard', [EmployeeController::class, 'index'])->name('facecard.list');
     Route::get('/facecard/export', [EmployeeController::class, 'exportExcel'])->name('facecard.export');
+    Route::post('/facecard/bulk-download', [EmployeeController::class, 'bulkDownload'])->name('facecard.bulk_download');
+    Route::get('/facecard/bulk-download/status/{jobStatus}', [EmployeeController::class, 'bulkStatus'])->name('facecard.bulk_status');
+    Route::get('/facecard/bulk-download/file/{jobStatus}', [EmployeeController::class, 'bulkFile'])->name('facecard.bulk_file');
     Route::get('/employee/{employeeId}/pdf', [EmployeeController::class, 'downloadPdf'])->name('facecard.download_pdf');
     Route::post('/employee/{employeeId}/photo', [EmployeeController::class, 'updatePhoto'])->name('employee.photo.update');
     Route::delete('/employee/{employeeId}/photo', [EmployeeController::class, 'deletePhoto'])->name('employee.photo.delete');

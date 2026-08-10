@@ -92,16 +92,18 @@ function arrow(col: Column): string {
                         class="px-5 py-3 font-semibold"
                         :class="col.thClass"
                     >
-                        <button
-                            v-if="isSortable(col) && col.label"
-                            type="button"
-                            class="inline-flex items-center gap-1.5 uppercase tracking-wider transition hover:text-slate-600"
-                            @click="toggle(col)"
-                        >
-                            {{ col.label }}
-                            <i class="fa-solid text-[10px]" :class="arrow(col)" />
-                        </button>
-                        <template v-else>{{ col.label }}</template>
+                        <slot :name="`head-${col.key}`" :column="col">
+                            <button
+                                v-if="isSortable(col) && col.label"
+                                type="button"
+                                class="inline-flex items-center gap-1.5 uppercase tracking-wider transition hover:text-slate-600"
+                                @click="toggle(col)"
+                            >
+                                {{ col.label }}
+                                <i class="fa-solid text-[10px]" :class="arrow(col)" />
+                            </button>
+                            <template v-else>{{ col.label }}</template>
+                        </slot>
                     </th>
                 </tr>
             </thead>

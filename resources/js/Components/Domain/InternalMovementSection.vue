@@ -37,13 +37,48 @@ const filtered = computed(() =>
     }),
 )
 
-const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / PER_PAGE)))
+// --- Sorting ---
+const sortKey = ref<keyof Movement | ''>('effective_from')
+const sortDir = ref<'asc' | 'desc'>('desc')
+
+function toggleSort(key: keyof Movement) {
+    if (sortKey.value === key) {
+        sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+    } else {
+        sortKey.value = key
+        sortDir.value = 'asc'
+    }
+    page.value = 1
+}
+
+function cmp(a: any, b: any): number {
+    if (a == null || a === '') return b == null || b === '' ? 0 : 1
+    if (b == null || b === '') return -1
+    const ad = Date.parse(a)
+    const bd = Date.parse(b)
+    if (!Number.isNaN(ad) && !Number.isNaN(bd)) return ad - bd
+    return String(a).localeCompare(String(b))
+}
+
+const sorted = computed(() => {
+    if (!sortKey.value) return filtered.value
+    const k = sortKey.value
+    const dir = sortDir.value === 'asc' ? 1 : -1
+    return [...filtered.value].sort((a, b) => cmp(a[k], b[k]) * dir)
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(sorted.value.length / PER_PAGE)))
 
 const pageRows = computed(() => {
     if (page.value > totalPages.value) page.value = 1
     const start = (page.value - 1) * PER_PAGE
-    return filtered.value.slice(start, start + PER_PAGE)
+    return sorted.value.slice(start, start + PER_PAGE)
 })
+
+function sortIcon(key: keyof Movement): string {
+    if (sortKey.value !== key) return 'fa-sort text-slate-300'
+    return sortDir.value === 'asc' ? 'fa-sort-up text-primary' : 'fa-sort-down text-primary'
+}
 
 function resetFilters() {
     statusFilter.value = 'Active'
@@ -156,15 +191,29 @@ function statusBadge(status: string | null): string {
                     <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
                         <th class="px-4 py-2.5 font-semibold" colspan="2">{{ t.facecard.movement.effectiveDate }}</th>
                         <th class="px-4 py-2.5 font-semibold" colspan="2">{{ t.facecard.movement.movement }}</th>
-                        <th class="px-4 py-2.5 font-semibold" rowspan="2">{{ t.facecard.movement.from }}</th>
-                        <th class="px-4 py-2.5 font-semibold" rowspan="2">{{ t.facecard.movement.to }}</th>
-                        <th class="px-4 py-2.5 font-semibold" rowspan="2">{{ t.facecard.movement.status }}</th>
+                        <th class="cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600" rowspan="2" @click="toggleSort('from')">
+                            <span class="inline-flex items-center gap-1">{{ t.facecard.movement.from }} <i class="fa-solid text-[10px]" :class="sortIcon('from')" /></span>
+                        </th>
+                        <th class="cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600" rowspan="2" @click="toggleSort('to')">
+                            <span class="inline-flex items-center gap-1">{{ t.facecard.movement.to }} <i class="fa-solid text-[10px]" :class="sortIcon('to')" /></span>
+                        </th>
+                        <th class="cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600" rowspan="2" @click="toggleSort('status')">
+                            <span class="inline-flex items-center gap-1">{{ t.facecard.movement.status }} <i class="fa-solid text-[10px]" :class="sortIcon('status')" /></span>
+                        </th>
                     </tr>
                     <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
-                        <th class="px-4 py-2 font-semibold">{{ t.facecard.movement.start }}</th>
-                        <th class="px-4 py-2 font-semibold">{{ t.facecard.movement.end }}</th>
-                        <th class="px-4 py-2 font-semibold">{{ t.facecard.movement.type }}</th>
-                        <th class="px-4 py-2 font-semibold">{{ t.facecard.movement.detail }}</th>
+                        <th class="cursor-pointer select-none px-4 py-2 font-semibold hover:text-slate-600" @click="toggleSort('effective_from')">
+                            <span class="inline-flex items-center gap-1">{{ t.facecard.movement.start }} <i class="fa-solid text-[10px]" :class="sortIcon('effective_from')" /></span>
+                        </th>
+                        <th class="cursor-pointer select-none px-4 py-2 font-semibold hover:text-slate-600" @click="toggleSort('effective_to')">
+                            <span class="inline-flex items-center gap-1">{{ t.facecard.movement.end }} <i class="fa-solid text-[10px]" :class="sortIcon('effective_to')" /></span>
+                        </th>
+                        <th class="cursor-pointer select-none px-4 py-2 font-semibold hover:text-slate-600" @click="toggleSort('type')">
+                            <span class="inline-flex items-center gap-1">{{ t.facecard.movement.type }} <i class="fa-solid text-[10px]" :class="sortIcon('type')" /></span>
+                        </th>
+                        <th class="cursor-pointer select-none px-4 py-2 font-semibold hover:text-slate-600" @click="toggleSort('detail')">
+                            <span class="inline-flex items-center gap-1">{{ t.facecard.movement.detail }} <i class="fa-solid text-[10px]" :class="sortIcon('detail')" /></span>
+                        </th>
                     </tr>
                 </thead>
                 <tbody>

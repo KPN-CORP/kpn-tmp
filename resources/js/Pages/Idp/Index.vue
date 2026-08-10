@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { Head, Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -52,6 +52,7 @@ const state = reactive({
 })
 
 const columns: Column[] = [
+    { key: 'select', label: '', sortable: false, thClass: 'w-10', tdClass: 'w-10' },
     { key: 'employee_id', label: t.value.facecard.table.id, tdClass: 'text-slate-400' },
     { key: 'fullname', label: t.value.facecard.table.name, tdClass: 'font-medium text-slate-700' },
     { key: 'group_company', label: t.value.facecard.table.businessUnit },
@@ -59,6 +60,33 @@ const columns: Column[] = [
     { key: 'designation_name', label: t.value.facecard.table.designation },
     { key: 'action', label: '', thClass: 'text-right', tdClass: 'text-right' },
 ]
+
+// --- Row selection (persists across pages while the component stays mounted) ---
+const selected = ref<string[]>([])
+
+const pageIds = computed(() => props.employees.data.map((r) => r.employee_id))
+const allOnPageSelected = computed(
+    () => pageIds.value.length > 0 && pageIds.value.every((id) => selected.value.includes(id)),
+)
+const someOnPageSelected = computed(
+    () => !allOnPageSelected.value && pageIds.value.some((id) => selected.value.includes(id)),
+)
+
+const isSelected = (id: string) => selected.value.includes(id)
+
+function toggleRow(id: string) {
+    selected.value = isSelected(id)
+        ? selected.value.filter((x) => x !== id)
+        : [...selected.value, id]
+}
+
+function toggleAllOnPage() {
+    if (allOnPageSelected.value) {
+        selected.value = selected.value.filter((id) => !pageIds.value.includes(id))
+    } else {
+        selected.value = [...new Set([...selected.value, ...pageIds.value])]
+    }
+}
 
 function reload() {
     router.get(
@@ -151,6 +179,7 @@ async function startBulkDownload() {
                 'Content-Type': 'application/json',
                 'X-XSRF-TOKEN': xsrf,
             },
+            body: JSON.stringify({ employee_ids: selected.value }),
         })
         const { job_id } = await res.json()
         pollStatus(job_id)
@@ -203,7 +232,9 @@ function stopBulk() {
                     @click="startBulkDownload"
                 >
                     <i :class="bulk.running ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-file-zipper'" class="text-xs" />
-                    {{ bulk.running ? `${t.idp.preparing} ${bulk.progress}%` : t.idp.bulkDownload }}
+                    <template v-if="bulk.running">{{ t.idp.preparing }} {{ bulk.progress }}%</template>
+                    <template v-else-if="selected.length">{{ t.idp.downloadSelected }} ({{ selected.length }})</template>
+                    <template v-else>{{ t.idp.bulkDownload }}</template>
                 </button>
             </template>
         </PageHeader>
@@ -269,6 +300,24 @@ function stopBulk() {
             :sort="sort"
             @update:sort="changeSort"
         >
+            <template #head-select>
+                <input
+                    type="checkbox"
+                    class="h-4 w-4 cursor-pointer rounded border-slate-300 text-primary focus:ring-primary"
+                    :checked="allOnPageSelected"
+                    :indeterminate.prop="someOnPageSelected"
+                    :title="t.idp.selectAll"
+                    @change="toggleAllOnPage"
+                >
+            </template>
+            <template #cell-select="{ row }">
+                <input
+                    type="checkbox"
+                    class="h-4 w-4 cursor-pointer rounded border-slate-300 text-primary focus:ring-primary"
+                    :checked="isSelected(row.employee_id)"
+                    @change="toggleRow(row.employee_id)"
+                >
+            </template>
             <template #cell-action="{ row }">
                 <Link
                     :href="`/idp/${row.employee_id}`"

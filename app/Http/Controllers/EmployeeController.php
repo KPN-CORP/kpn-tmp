@@ -5,9 +5,11 @@ namespace App\Http\Controllers;
 use App\Exports\EmployeeExport;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Resources\EmployeeResource;
+use App\Jobs\GenerateFacecardZip;
 use App\Models\CompetencyAssessment;
 use App\Models\Employee;
 use App\Models\FormalEducation;
+use App\Models\JobStatus;
 use App\Models\MatrixGradeConfig;
 use App\Models\MovementTransaction;
 use App\Models\PerformanceAppraisal;
@@ -17,9 +19,9 @@ use App\Models\WorkExperience;
 use App\Services\EmployeeScopeService;
 use App\Services\IdpService;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -27,6 +29,7 @@ use Inertia\Response;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response as HttpResponse;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class EmployeeController extends Controller
 {
@@ -48,8 +51,7 @@ class EmployeeController extends Controller
     public function __construct(
         private readonly EmployeeScopeService $scope,
         private readonly IdpService $idp,
-    ) {
-    }
+    ) {}
 
     /**
      * Paginated, filtered facecard list — scoped to what the user may see.
@@ -308,6 +310,68 @@ class EmployeeController extends Controller
         ]);
 
         return $pdf->download('facecard_'.Str::slug($employee->fullname).'.pdf');
+    }
+
+    /**
+     * Kick off a background zip of the selected employees' facecard PDFs.
+     */
+    public function bulkDownload(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // Selected employee ids from the list (checkboxes). Always intersected with
+        // the user's visible set so a crafted request can't export outside scope.
+        // Empty selection = export everyone visible (the "download all" behaviour).
+        $requested = collect($request->input('employee_ids', []))
+            ->filter()
+            ->map(fn ($id) => (string) $id)
+            ->unique();
+
+        $employeeIds = $this->scope->query($user)
+            ->when($requested->isNotEmpty(), fn ($q) => $q->whereIn('employee_id', $requested->all()))
+            ->orderBy('fullname')
+            ->pluck('employee_id')
+            ->all();
+
+        $status = JobStatus::create([
+            'id' => (string) Str::uuid(),
+            'user_id' => $user->id,
+            'status' => 'pending',
+            'progress' => 0,
+        ]);
+
+        GenerateFacecardZip::dispatch($employeeIds, $status->id);
+
+        return response()->json(['job_id' => $status->id]);
+    }
+
+    /**
+     * Poll a bulk-download job.
+     */
+    public function bulkStatus(Request $request, JobStatus $jobStatus): JsonResponse
+    {
+        abort_unless($jobStatus->user_id === $request->user()->id, 403);
+
+        return response()->json([
+            'status' => $jobStatus->status,
+            'progress' => $jobStatus->progress,
+            'ready' => $jobStatus->status === 'completed' && $jobStatus->file_name,
+            'error' => $jobStatus->error_message,
+        ]);
+    }
+
+    /**
+     * Download the finished zip.
+     */
+    public function bulkFile(Request $request, JobStatus $jobStatus): StreamedResponse
+    {
+        abort_unless($jobStatus->user_id === $request->user()->id, 403);
+        abort_unless($jobStatus->file_name, 404);
+
+        $path = 'facecard-zips/'.$jobStatus->file_name;
+        abort_unless(Storage::disk('local')->exists($path), 404);
+
+        return Storage::disk('local')->download($path, 'facecard_bulk.zip');
     }
 
     /**

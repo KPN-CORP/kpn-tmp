@@ -406,6 +406,21 @@ function submit() {
         <!-- Input drawer -->
         <Drawer :show="modalOpen" :title="t.competency.formTitle" max-width="max-w-2xl" @close="modalOpen = false">
             <form id="competency-form" class="space-y-6" @submit.prevent="submit">
+                
+                <!-- Section: Result -->
+                <section class="space-y-4 border-border pt-5">
+                    <h4 class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <i class="fa-solid fa-award text-slate-300" />
+                        {{ t.competency.sectionResult }}
+                    </h4>
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">{{ t.competency.proposedGrade }}</label>
+                        <input
+                            v-model="form.proposed_grade"
+                            class="w-full rounded-lg border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                    </div>
+                </section>
                 <!-- Section: Assessment -->
                 <section class="space-y-4">
                     <h4 class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -468,21 +483,6 @@ function submit() {
                                 </button>
                             </div>
                         </div>
-                    </div>
-                </section>
-
-                <!-- Section: Result -->
-                <section class="space-y-4 border-t border-border pt-5">
-                    <h4 class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                        <i class="fa-solid fa-award text-slate-300" />
-                        {{ t.competency.sectionResult }}
-                    </h4>
-                    <div>
-                        <label class="mb-1.5 block text-sm font-medium text-slate-700">{{ t.competency.proposedGrade }}</label>
-                        <input
-                            v-model="form.proposed_grade"
-                            class="w-full rounded-lg border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
                     </div>
                 </section>
             </form>

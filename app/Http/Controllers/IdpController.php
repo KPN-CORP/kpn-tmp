@@ -274,7 +274,16 @@ class IdpController extends Controller
     {
         $user = $request->user();
 
+        // Selected employee ids from the list (checkboxes). Always intersected with
+        // the user's visible set so a crafted request can't export outside scope.
+        // Empty selection = export everyone visible (the "download all" behaviour).
+        $requested = collect($request->input('employee_ids', []))
+            ->filter()
+            ->map(fn ($id) => (string) $id)
+            ->unique();
+
         $employeeIds = $this->scope->query($user)
+            ->when($requested->isNotEmpty(), fn ($q) => $q->whereIn('employee_id', $requested->all()))
             ->orderBy('fullname')
             ->pluck('employee_id')
             ->all();

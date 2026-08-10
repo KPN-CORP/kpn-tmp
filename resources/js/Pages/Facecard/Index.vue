@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { Head, Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -52,6 +52,7 @@ const state = reactive({
 })
 
 const columns: Column[] = [
+    { key: 'select', label: '', sortable: false, thClass: 'w-10', tdClass: 'w-10' },
     { key: 'employee_id', label: t.value.facecard.table.id, tdClass: 'text-slate-400' },
     { key: 'fullname', label: t.value.facecard.table.name, tdClass: 'font-medium text-slate-700' },
     { key: 'group_company', label: t.value.facecard.table.businessUnit },
@@ -59,6 +60,33 @@ const columns: Column[] = [
     { key: 'designation_name', label: t.value.facecard.table.designation },
     { key: 'action', label: '', thClass: 'text-right', tdClass: 'text-right' },
 ]
+
+// --- Row selection (persists across pages while the component stays mounted) ---
+const selected = ref<string[]>([])
+
+const pageIds = computed(() => props.employees.data.map((r) => r.employee_id))
+const allOnPageSelected = computed(
+    () => pageIds.value.length > 0 && pageIds.value.every((id) => selected.value.includes(id)),
+)
+const someOnPageSelected = computed(
+    () => !allOnPageSelected.value && pageIds.value.some((id) => selected.value.includes(id)),
+)
+
+const isSelected = (id: string) => selected.value.includes(id)
+
+function toggleRow(id: string) {
+    selected.value = isSelected(id)
+        ? selected.value.filter((x) => x !== id)
+        : [...selected.value, id]
+}
+
+function toggleAllOnPage() {
+    if (allOnPageSelected.value) {
+        selected.value = selected.value.filter((id) => !pageIds.value.includes(id))
+    } else {
+        selected.value = [...new Set([...selected.value, ...pageIds.value])]
+    }
+}
 
 function reload(resetPage = true) {
     router.get(
@@ -147,6 +175,61 @@ function exportUrl(): string {
     const qs = params.toString()
     return `/facecard/export${qs ? `?${qs}` : ''}`
 }
+
+// --- Bulk PDF zip (background job + polling) ---
+const bulk = reactive({ running: false, progress: 0, error: '' })
+let poll: ReturnType<typeof setInterval> | undefined
+
+async function startBulkDownload() {
+    bulk.running = true
+    bulk.progress = 0
+    bulk.error = ''
+    try {
+        const xsrf = decodeURIComponent(
+            document.cookie.split('; ').find((c) => c.startsWith('XSRF-TOKEN='))?.split('=')[1] ?? '',
+        )
+        const res = await fetch('/facecard/bulk-download', {
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'X-XSRF-TOKEN': xsrf,
+            },
+            body: JSON.stringify({ employee_ids: selected.value }),
+        })
+        const { job_id } = await res.json()
+        pollStatus(job_id)
+    } catch {
+        bulk.error = t.value.facecard.exportError
+        bulk.running = false
+    }
+}
+
+function pollStatus(jobId: string) {
+    clearInterval(poll)
+    poll = setInterval(async () => {
+        try {
+            const res = await fetch(`/facecard/bulk-download/status/${jobId}`, { headers: { Accept: 'application/json' } })
+            const data = await res.json()
+            bulk.progress = data.progress ?? 0
+            if (data.error) {
+                bulk.error = data.error
+                stopBulk()
+            } else if (data.ready) {
+                stopBulk()
+                window.location.href = `/facecard/bulk-download/file/${jobId}`
+            }
+        } catch {
+            bulk.error = t.value.facecard.exportError
+            stopBulk()
+        }
+    }, 1500)
+}
+
+function stopBulk() {
+    clearInterval(poll)
+    bulk.running = false
+}
 </script>
 
 <template>
@@ -158,6 +241,17 @@ function exportUrl(): string {
             :subtitle="t.facecard.subtitle"
         >
             <template #actions>
+                <button
+                    type="button"
+                    :disabled="bulk.running"
+                    class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover disabled:opacity-60"
+                    @click="startBulkDownload"
+                >
+                    <i :class="bulk.running ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-file-zipper'" class="text-xs" />
+                    <template v-if="bulk.running">{{ t.facecard.preparing }} {{ bulk.progress }}%</template>
+                    <template v-else-if="selected.length">{{ t.facecard.downloadSelected }} ({{ selected.length }})</template>
+                    <template v-else>{{ t.facecard.bulkDownload }}</template>
+                </button>
                 <a
                     :href="exportUrl()"
                     class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
@@ -167,6 +261,10 @@ function exportUrl(): string {
                 </a>
             </template>
         </PageHeader>
+
+        <p v-if="bulk.error" class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {{ bulk.error }}
+        </p>
 
         <!-- Filters -->
         <div class="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -226,6 +324,24 @@ function exportUrl(): string {
             :sort="sort"
             @update:sort="changeSort"
         >
+            <template #head-select>
+                <input
+                    type="checkbox"
+                    class="h-4 w-4 cursor-pointer rounded border-slate-300 text-primary focus:ring-primary"
+                    :checked="allOnPageSelected"
+                    :indeterminate.prop="someOnPageSelected"
+                    :title="t.facecard.selectAll"
+                    @change="toggleAllOnPage"
+                >
+            </template>
+            <template #cell-select="{ row }">
+                <input
+                    type="checkbox"
+                    class="h-4 w-4 cursor-pointer rounded border-slate-300 text-primary focus:ring-primary"
+                    :checked="isSelected(row.employee_id)"
+                    @change="toggleRow(row.employee_id)"
+                >
+            </template>
             <template #cell-action="{ row }">
                 <Link
                     :href="`/employee/${row.employee_id}`"

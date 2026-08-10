@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { router, useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 
@@ -45,6 +46,14 @@ function talentBoxLabel(value: string | null): string {
     if (!value) return '—'
     return (t.value.appraisal.talentBoxLabels as Record<string, string>)[value] ?? value
 }
+
+const columns = computed<Column[]>(() => [
+    { key: 'appraisal_year', label: t.value.appraisal.year, sortable: true, tdClass: 'font-medium text-slate-800' },
+    { key: 'grade', label: t.value.appraisal.performanceAppraisal, sortable: true },
+    { key: 'potential', label: t.value.appraisal.potential, sortable: true },
+    { key: 'talent_box', label: t.value.appraisal.talentBox, sortable: true },
+    ...(props.canInput ? [{ key: 'action', label: t.value.appraisal.action, align: 'right' as const }] : []),
+])
 
 // --- Add ---
 const addModal = ref(false)
@@ -112,52 +121,36 @@ function remove(a: Appraisal) {
             </button>
         </div>
 
-        <div class="overflow-x-auto">
-            <table class="w-full text-left text-sm">
-                <thead>
-                    <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
-                        <th class="px-5 py-2.5 font-semibold">{{ t.appraisal.year }}</th>
-                        <th class="px-5 py-2.5 font-semibold">{{ t.appraisal.performanceAppraisal }}</th>
-                        <th class="px-5 py-2.5 font-semibold">{{ t.appraisal.potential }}</th>
-                        <th class="px-5 py-2.5 font-semibold">{{ t.appraisal.talentBox }}</th>
-                        <th v-if="canInput" class="px-5 py-2.5 text-right font-semibold">{{ t.appraisal.action }}</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr v-for="a in appraisals" :key="a.id" class="group border-b border-border/60 transition last:border-0 hover:bg-slate-50/70">
-                        <td class="px-5 py-3.5 font-medium text-slate-800">{{ a.appraisal_year }}</td>
-                        <td class="px-5 py-3.5 text-slate-700">{{ a.grade ?? '—' }}</td>
-                        <td class="px-5 py-3.5 text-slate-700">{{ potentialLabel(a.potential) }}</td>
-                        <td class="px-5 py-3.5 text-slate-700">{{ talentBoxLabel(a.talent_box) }}</td>
-                        <td v-if="canInput" class="px-5 py-3.5 text-right">
-                            <div class="inline-flex gap-1 opacity-60 transition group-hover:opacity-100">
-                                <button
-                                    type="button"
-                                    class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
-                                    :title="t.appraisal.editBtn"
-                                    @click="openEdit(a)"
-                                >
-                                    <i class="fa-solid fa-pen text-xs" />
-                                </button>
-                                <button
-                                    type="button"
-                                    class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                                    :title="t.appraisal.deleteBtn"
-                                    @click="remove(a)"
-                                >
-                                    <i class="fa-solid fa-trash text-xs" />
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                    <tr v-if="appraisals.length === 0">
-                        <td :colspan="canInput ? 5 : 4" class="px-5 py-8 text-center text-slate-400">
-                            {{ t.appraisal.empty }}
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+        <ClientTable
+            :columns="columns"
+            :rows="appraisals"
+            row-key="id"
+            :initial-sort="{ key: 'appraisal_year', dir: 'desc' }"
+            :empty-text="t.appraisal.empty"
+        >
+            <template #cell-potential="{ value }">{{ potentialLabel(value) }}</template>
+            <template #cell-talent_box="{ value }">{{ talentBoxLabel(value) }}</template>
+            <template #cell-action="{ row }">
+                <div class="inline-flex gap-1 opacity-60 transition group-hover:opacity-100">
+                    <button
+                        type="button"
+                        class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
+                        :title="t.appraisal.editBtn"
+                        @click="openEdit(row)"
+                    >
+                        <i class="fa-solid fa-pen text-xs" />
+                    </button>
+                    <button
+                        type="button"
+                        class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                        :title="t.appraisal.deleteBtn"
+                        @click="remove(row)"
+                    >
+                        <i class="fa-solid fa-trash text-xs" />
+                    </button>
+                </div>
+            </template>
+        </ClientTable>
 
         <div class="border-t border-border px-5 py-3 text-xs italic leading-relaxed text-slate-500">
             <strong>{{ t.appraisal.noteTitle }}</strong><br>

@@ -7,6 +7,7 @@ import NineBoxSection from '@/Components/Domain/NineBoxSection.vue'
 import CompetencySection from '@/Components/Domain/CompetencySection.vue'
 import InternalMovementSection from '@/Components/Domain/InternalMovementSection.vue'
 import IdpPanel from '@/Components/Domain/IdpPanel.vue'
+import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDate as fmtDate, formatDateTime } from '@/Composables/useDate'
@@ -101,6 +102,31 @@ const pdfHref = computed(() =>
     tab.value === 'idp' ? `/idp/${emp.employee_id}/pdf` : `/employee/${emp.employee_id}/pdf`,
 )
 const na = computed(() => t.value.facecard.profile.na)
+
+// --- Detail table columns (sortable + paginated via ClientTable) ---
+const educationColumns = computed<Column[]>(() => [
+    { key: 'from_date', label: t.value.facecard.profile.from, sortable: true },
+    { key: 'to_date', label: t.value.facecard.profile.to, sortable: true },
+    { key: 'degree', label: t.value.facecard.profile.degree, sortable: true },
+    { key: 'institution', label: t.value.facecard.profile.institution, sortable: true },
+    { key: 'major', label: t.value.facecard.profile.major, sortable: true },
+    { key: 'gpa_percentage', label: t.value.facecard.profile.gpa, sortable: true },
+])
+
+const trainingColumns = computed<Column[]>(() => [
+    { key: 'issue_date', label: t.value.facecard.profile.from, sortable: true },
+    { key: 'completion_date', label: t.value.facecard.profile.to, sortable: true },
+    { key: 'name', label: t.value.facecard.profile.trainingName, sortable: true },
+    { key: 'organizer', label: t.value.facecard.profile.organizer, sortable: true },
+])
+
+const workColumns = computed<Column[]>(() => [
+    { key: 'from_date', label: t.value.facecard.profile.from, sortable: true },
+    { key: 'to_date', label: t.value.facecard.profile.to, sortable: true },
+    { key: 'company', label: t.value.facecard.profile.company, sortable: true },
+    { key: 'deptDivision', label: t.value.facecard.profile.deptDivision },
+    { key: 'position', label: t.value.facecard.profile.position, sortable: true },
+])
 
 const initials = emp.fullname
     ? emp.fullname.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase()
@@ -419,33 +445,19 @@ function deletePhoto() {
                     <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
                     <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.education }}</h3>
                 </div>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left text-sm">
-                        <thead>
-                            <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.from }}</th>
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.to }}</th>
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.degree }}</th>
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.institution }}</th>
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.major }}</th>
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.gpa }}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr v-for="(edu, i) in formalEducations" :key="i" class="border-b border-border/60 transition last:border-0 hover:bg-slate-50/70">
-                                <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(edu.from_date) }}</td>
-                                <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(edu.to_date) }}</td>
-                                <td class="px-4 py-3 text-slate-700">{{ edu.degree || na }}</td>
-                                <td class="px-4 py-3 text-slate-700">{{ edu.institution || na }}</td>
-                                <td class="px-4 py-3 text-slate-700">{{ edu.major || na }}</td>
-                                <td class="px-4 py-3 text-slate-700">{{ gpa(edu.gpa_percentage) }}</td>
-                            </tr>
-                            <tr v-if="formalEducations.length === 0">
-                                <td colspan="6" class="px-4 py-8 text-center text-slate-400">{{ t.facecard.profile.noEducation }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+                <ClientTable
+                    :columns="educationColumns"
+                    :rows="formalEducations"
+                    :initial-sort="{ key: 'from_date', dir: 'desc' }"
+                    :empty-text="t.facecard.profile.noEducation"
+                >
+                    <template #cell-from_date="{ value }"><span class="whitespace-nowrap text-slate-500">{{ fmtDate(value) }}</span></template>
+                    <template #cell-to_date="{ value }"><span class="whitespace-nowrap text-slate-500">{{ fmtDate(value) }}</span></template>
+                    <template #cell-degree="{ value }">{{ value || na }}</template>
+                    <template #cell-institution="{ value }">{{ value || na }}</template>
+                    <template #cell-major="{ value }">{{ value || na }}</template>
+                    <template #cell-gpa_percentage="{ value }">{{ gpa(value) }}</template>
+                </ClientTable>
             </div>
 
             <!-- Training / Certification -->
@@ -454,29 +466,17 @@ function deletePhoto() {
                     <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
                     <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.training }}</h3>
                 </div>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left text-sm">
-                        <thead>
-                            <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.from }}</th>
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.to }}</th>
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.trainingName }}</th>
-                                <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.organizer }}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr v-for="(tr, i) in trainings" :key="i" class="border-b border-border/60 transition last:border-0 hover:bg-slate-50/70">
-                                <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(tr.issue_date) }}</td>
-                                <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(tr.completion_date) }}</td>
-                                <td class="px-4 py-3 text-slate-700">{{ tr.name || na }}</td>
-                                <td class="px-4 py-3 text-slate-700">{{ tr.organizer || na }}</td>
-                            </tr>
-                            <tr v-if="trainings.length === 0">
-                                <td colspan="4" class="px-4 py-8 text-center text-slate-400">{{ t.facecard.profile.noTraining }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+                <ClientTable
+                    :columns="trainingColumns"
+                    :rows="trainings"
+                    :initial-sort="{ key: 'completion_date', dir: 'desc' }"
+                    :empty-text="t.facecard.profile.noTraining"
+                >
+                    <template #cell-issue_date="{ value }"><span class="whitespace-nowrap text-slate-500">{{ fmtDate(value) }}</span></template>
+                    <template #cell-completion_date="{ value }"><span class="whitespace-nowrap text-slate-500">{{ fmtDate(value) }}</span></template>
+                    <template #cell-name="{ value }">{{ value || na }}</template>
+                    <template #cell-organizer="{ value }">{{ value || na }}</template>
+                </ClientTable>
             </div>
         </div>
 
@@ -486,31 +486,18 @@ function deletePhoto() {
                 <span class="h-5 w-1.5 shrink-0 rounded-full bg-primary" />
                 <h3 class="font-semibold text-slate-800">{{ t.facecard.profile.workExperience }}</h3>
             </div>
-            <div class="overflow-x-auto">
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
-                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.from }}</th>
-                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.to }}</th>
-                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.company }}</th>
-                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.deptDivision }}</th>
-                            <th class="px-4 py-2.5 font-semibold">{{ t.facecard.profile.position }}</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr v-for="(w, i) in workExperiences" :key="i" class="border-b border-border/60 transition last:border-0 hover:bg-slate-50/70">
-                            <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(w.from_date) }}</td>
-                            <td class="whitespace-nowrap px-4 py-3 text-slate-500">{{ fmtDate(w.to_date) }}</td>
-                            <td class="px-4 py-3 text-slate-700">{{ w.company || na }}</td>
-                            <td class="px-4 py-3 text-slate-700">{{ na }}</td>
-                            <td class="px-4 py-3 text-slate-700">{{ w.position || na }}</td>
-                        </tr>
-                        <tr v-if="workExperiences.length === 0">
-                            <td colspan="5" class="px-4 py-8 text-center text-slate-400">{{ t.facecard.profile.noWorkExperience }}</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+            <ClientTable
+                :columns="workColumns"
+                :rows="workExperiences"
+                :initial-sort="{ key: 'from_date', dir: 'desc' }"
+                :empty-text="t.facecard.profile.noWorkExperience"
+            >
+                <template #cell-from_date="{ value }"><span class="whitespace-nowrap text-slate-500">{{ fmtDate(value) }}</span></template>
+                <template #cell-to_date="{ value }"><span class="whitespace-nowrap text-slate-500">{{ fmtDate(value) }}</span></template>
+                <template #cell-company="{ value }">{{ value || na }}</template>
+                <template #cell-deptDivision>{{ na }}</template>
+                <template #cell-position="{ value }">{{ value || na }}</template>
+            </ClientTable>
         </div>
 
         <!-- Internal Movement -->
