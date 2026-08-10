@@ -4,781 +4,604 @@ import { Head, router, useForm } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
+import Pagination from '@/Components/UI/Pagination.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
-import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
+import EmployeeSelect from '@/Components/Domain/EmployeeSelect.vue'
+import HoverBadge from '@/Components/UI/HoverBadge.vue'
+import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t } = useLocale()
 
-type ApproverType = 'manager_l1' | 'manager_l2' | 'specific_employee'
-
-interface Layer {
-    id: number
-    sequence: number
-    name: string
-    approver_type: ApproverType
-    approver_employee_id: string | null
-    approver_name: string | null
-    is_active: boolean
+interface LayerRef {
+    id: string
+    name: string | null
 }
 
-interface Flow {
-    id: number
-    module: 'idp' | 'appraisal'
-    name: string
-    description: string | null
-    is_active: boolean
-    layers: Layer[]
+interface EmployeeRow {
+    employee_id: string
+    name: string | null
+    pt: string | null
+    area: string | null
+    bu: string | null
+    layers: (LayerRef | null)[]
+    has_override: boolean
 }
 
-const props = defineProps<{ flows: Flow[] }>()
+interface Paginator {
+    data: EmployeeRow[]
+    links: { url: string | null; label: string; active: boolean }[]
+    total: number
+    from: number | null
+    to: number | null
+    per_page: number
+}
+
+interface Sort {
+    key: string
+    dir: 'asc' | 'desc'
+}
+
+const props = defineProps<{
+    employees: Paginator
+    filters: { search: string; bu: string; area: string; pt: string }
+    sort: Sort
+    filterOptions: {
+        businessUnits: string[]
+        areas: string[]
+        pts: string[]
+    }
+}>()
+
+// Format a layer reference as "employee_id - name", gracefully showing just
+// the id when the name can't be resolved (approver not in the employee table).
+function fmtRef(ref: LayerRef | null | undefined): string {
+    if (!ref) return '—'
+    return ref.name ? `${ref.id} - ${ref.name}` : ref.id
+}
 
 /**
  * --------------------------------------------------------------------------
- * Module tabs
+ * List: search + pagination (server-side, Inertia partial reload)
  * --------------------------------------------------------------------------
  */
 
-const activeModule = ref<Flow['module']>(props.flows[0]?.module ?? 'idp')
+const state = reactive({
+    search: props.filters.search ?? '',
+    bu: props.filters.bu ?? '',
+    area: props.filters.area ?? '',
+    pt: props.filters.pt ?? '',
+    per_page: props.employees.per_page,
+})
 
-const activeFlow = computed<Flow | undefined>(() =>
-    props.flows.find((f) => f.module === activeModule.value),
+function reload(sort: Sort = props.sort) {
+    router.get(
+        '/approval-setting',
+        {
+            search: state.search || undefined,
+            bu: state.bu || undefined,
+            area: state.area || undefined,
+            pt: state.pt || undefined,
+            sort: sort.key,
+            direction: sort.dir,
+            per_page: state.per_page,
+        },
+        { preserveState: true, preserveScroll: true, replace: true },
+    )
+}
+
+// Debounce the free-text search; the selects apply immediately.
+let debounce: ReturnType<typeof setTimeout> | undefined
+watch(
+    () => state.search,
+    () => {
+        clearTimeout(debounce)
+        debounce = setTimeout(() => reload(), 300)
+    },
 )
 
-function moduleLabel(module: Flow['module']): string {
-    return module === 'idp'
-        ? t.value.approval.moduleIdp
-        : t.value.approval.moduleAppraisal
+const hasFilters = computed(
+    () => !!(state.search || state.bu || state.area || state.pt),
+)
+
+function resetFilters() {
+    state.search = ''
+    state.bu = ''
+    state.area = ''
+    state.pt = ''
+    reload()
 }
 
-/**
- * --------------------------------------------------------------------------
- * Approver type helpers
- * --------------------------------------------------------------------------
- */
-
-function approverLabel(layer: Layer): string {
-    if (layer.approver_type === 'manager_l1') return t.value.approval.approverManagerL1
-    if (layer.approver_type === 'manager_l2') return t.value.approval.approverManagerL2
-    return layer.approver_name ?? layer.approver_employee_id ?? '—'
+// Selects apply immediately (search is debounced above).
+function onFilter(key: 'pt' | 'area' | 'bu', value: string) {
+    state[key] = value
+    reload()
 }
 
-const approverTypeOptions = computed(() => [
-    { value: 'manager_l1' as ApproverType, label: t.value.approval.approverManagerL1 },
-    { value: 'manager_l2' as ApproverType, label: t.value.approval.approverManagerL2 },
-    { value: 'specific_employee' as ApproverType, label: t.value.approval.approverSpecific },
+// Toggle a column's sort: click cycles asc → desc on the same key, or starts
+// asc on a new key.
+function changeSort(key: string) {
+    const dir: 'asc' | 'desc' =
+        props.sort.key === key && props.sort.dir === 'asc' ? 'desc' : 'asc'
+    reload({ key, dir })
+}
+
+function changePerPage(perPage: number) {
+    state.per_page = perPage
+    reload()
+}
+
+// Build SearchableSelect options with a leading "All" entry.
+function options(values: string[], allLabel: string): Option[] {
+    return [
+        { value: '', label: allLabel },
+        ...values.map((v) => ({ value: v, label: v })),
+    ]
+}
+
+// Sortable columns — keys must match the server-side whitelist.
+const sortableColumns = computed(() => [
+    { key: 'employee_id', label: t.value.approval.nik },
+    { key: 'fullname', label: t.value.approval.name },
+    { key: 'company_name', label: t.value.approval.pt },
+    { key: 'office_area', label: t.value.approval.area },
+    { key: 'group_company', label: t.value.approval.bu },
 ])
 
 /**
  * --------------------------------------------------------------------------
- * Flow: toggle active + edit
+ * Update Superior modal
  * --------------------------------------------------------------------------
  */
 
-const flowModal = ref(false)
-const flowForm = useForm({ name: '', description: '', is_active: true })
+const editModal = ref(false)
+const editingEmployee = ref<EmployeeRow | null>(null)
 
-function openFlow() {
-    if (!activeFlow.value) return
-    flowForm.clearErrors()
-    flowForm.name = activeFlow.value.name
-    flowForm.description = activeFlow.value.description ?? ''
-    flowForm.is_active = activeFlow.value.is_active
-    flowModal.value = true
+// Human labels shown in each picker, kept parallel to editForm.layers.
+const rowLabels = ref<(string | null)[]>([])
+const editForm = useForm<{ layers: (string | null)[] }>({ layers: [] })
+
+function openEdit(row: EmployeeRow) {
+    editingEmployee.value = row
+    editForm.clearErrors()
+
+    editForm.layers = row.layers.map((l) => l?.id ?? null)
+    rowLabels.value = row.layers.map((l) => (l ? fmtRef(l) : null))
+
+    // Always show at least one picker to start from.
+    if (editForm.layers.length === 0) {
+        editForm.layers = [null]
+        rowLabels.value = [null]
+    }
+
+    editModal.value = true
 }
 
-function submitFlow() {
-    if (!activeFlow.value) return
-    flowForm.put(`/approval-setting/flows/${activeFlow.value.id}`, {
+function addLayer() {
+    editForm.layers.push(null)
+    rowLabels.value.push(null)
+}
+
+function removeLayer(index: number) {
+    editForm.layers.splice(index, 1)
+    rowLabels.value.splice(index, 1)
+}
+
+function submitEdit() {
+    if (!editingEmployee.value) return
+    editForm.put(`/approval-setting/${editingEmployee.value.employee_id}`, {
         preserveScroll: true,
-        onSuccess: () => (flowModal.value = false),
+        onSuccess: () => (editModal.value = false),
     })
 }
 
-function toggleFlowActive() {
-    if (!activeFlow.value) return
-    router.put(
-        `/approval-setting/flows/${activeFlow.value.id}`,
-        {
-            name: activeFlow.value.name,
-            description: activeFlow.value.description,
-            is_active: !activeFlow.value.is_active,
-        },
-        { preserveScroll: true },
-    )
-}
-
 /**
  * --------------------------------------------------------------------------
- * Layer: add / edit
+ * History drawer
  * --------------------------------------------------------------------------
  */
 
-const layerModal = ref(false)
-const editingLayerId = ref<number | null>(null)
-
-const layerForm = useForm({
-    approval_flow_id: 0,
-    name: '',
-    approver_type: 'manager_l1' as ApproverType,
-    approver_employee_id: null as string | null,
-    is_active: true,
-})
-
-// The label shown in the employee picker for the currently-selected approver.
-const selectedApproverName = ref<string | null>(null)
-
-function openLayer(layer?: Layer) {
-    if (!activeFlow.value) return
-    editingLayerId.value = layer?.id ?? null
-    layerForm.clearErrors()
-
-    layerForm.approval_flow_id = activeFlow.value.id
-    layerForm.name = layer?.name ?? ''
-    layerForm.approver_type = layer?.approver_type ?? 'manager_l1'
-    layerForm.approver_employee_id = layer?.approver_employee_id ?? null
-    layerForm.is_active = layer?.is_active ?? true
-
-    selectedApproverName.value = layer?.approver_name ?? null
-    layerModal.value = true
+interface HistoryEntry {
+    id: number
+    changed_by_name: string | null
+    created_at: string | null
+    layers: (LayerRef | null)[]
 }
 
-// Clear the specific employee when switching back to a dynamic source.
-watch(
-    () => layerForm.approver_type,
-    (type) => {
-        if (type !== 'specific_employee') {
-            layerForm.approver_employee_id = null
-            selectedApproverName.value = null
-        }
-    },
-)
+const historyDrawer = ref(false)
+const historyEmployee = ref<EmployeeRow | null>(null)
+const historyEntries = ref<HistoryEntry[]>([])
+const historyLoading = ref(false)
 
-function submitLayer() {
-    const opts = {
-        preserveScroll: true,
-        onSuccess: () => (layerModal.value = false),
-    }
-
-    if (editingLayerId.value) {
-        layerForm.put(`/approval-setting/layers/${editingLayerId.value}`, opts)
-    } else {
-        layerForm.post('/approval-setting/layers', opts)
-    }
-}
-
-/**
- * --------------------------------------------------------------------------
- * Employee picker (specific approver) — live search
- * --------------------------------------------------------------------------
- */
-
-interface EmployeeResult {
-    employee_id: string
-    fullname: string
-    designation_name: string | null
-    group_company: string | null
-}
-
-const empQuery = ref('')
-const empResults = ref<EmployeeResult[]>([])
-const empSearching = ref(false)
-const empOpen = ref(false)
-let empDebounce: ReturnType<typeof setTimeout> | undefined
-
-watch(empQuery, () => {
-    clearTimeout(empDebounce)
-    empDebounce = setTimeout(searchEmployees, 300)
-})
-
-async function searchEmployees() {
-    empSearching.value = true
+async function openHistory(row: EmployeeRow) {
+    historyEmployee.value = row
+    historyDrawer.value = true
+    historyLoading.value = true
+    historyEntries.value = []
     try {
-        const res = await fetch(
-            `/approval-setting/employees?q=${encodeURIComponent(empQuery.value)}`,
-            { headers: { Accept: 'application/json' } },
-        )
-        empResults.value = res.ok ? await res.json() : []
+        const res = await fetch(`/approval-setting/${row.employee_id}/history`, {
+            headers: { Accept: 'application/json' },
+        })
+        historyEntries.value = res.ok ? await res.json() : []
     } catch {
-        empResults.value = []
+        historyEntries.value = []
     } finally {
-        empSearching.value = false
+        historyLoading.value = false
     }
 }
 
-function openEmployeePicker() {
-    empOpen.value = true
-    empQuery.value = ''
-    if (empResults.value.length === 0) searchEmployees()
-}
-
-function pickEmployee(emp: EmployeeResult) {
-    layerForm.approver_employee_id = emp.employee_id
-    selectedApproverName.value = emp.fullname
-    empOpen.value = false
-}
-
 /**
  * --------------------------------------------------------------------------
- * Reorder (move up / down) — persists the whole ordered list
+ * Import modal
  * --------------------------------------------------------------------------
  */
 
-const reordering = ref(false)
+const importModal = ref(false)
+const importForm = useForm<{ file: File | null }>({ file: null })
 
-function move(index: number, direction: -1 | 1) {
-    if (!activeFlow.value) return
-    const layers = [...activeFlow.value.layers]
-    const target = index + direction
-    if (target < 0 || target >= layers.length) return
-
-    ;[layers[index], layers[target]] = [layers[target], layers[index]]
-
-    router.post(
-        `/approval-setting/flows/${activeFlow.value.id}/reorder`,
-        { layer_ids: layers.map((l) => l.id) },
-        {
-            preserveScroll: true,
-            onStart: () => (reordering.value = true),
-            onFinish: () => (reordering.value = false),
-        },
-    )
+function onFile(e: Event) {
+    importForm.file = (e.target as HTMLInputElement).files?.[0] ?? null
 }
 
-/**
- * --------------------------------------------------------------------------
- * Delete layer
- * --------------------------------------------------------------------------
- */
-
-const pendingDelete = ref<Layer | null>(null)
-const deleting = ref(false)
-
-function confirmDelete() {
-    if (!pendingDelete.value) return
-    router.delete(`/approval-setting/layers/${pendingDelete.value.id}`, {
+function submitImport() {
+    importForm.post('/approval-setting/import', {
         preserveScroll: true,
-        onStart: () => (deleting.value = true),
-        onFinish: () => (deleting.value = false),
-        onSuccess: () => (pendingDelete.value = null),
+        onSuccess: () => {
+            importModal.value = false
+            importForm.reset()
+        },
     })
 }
-
-const modules = reactive(props.flows.map((f) => f.module))
 </script>
 
 <template>
     <Head :title="t.approval.title" />
 
     <AppLayout>
-        <PageHeader
-            :title="t.approval.title"
-            :subtitle="t.approval.subtitle"
-        />
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <PageHeader :title="t.approval.title" :subtitle="t.approval.subtitle" />
 
-        <!-- ================================================================
-             Module tabs
-        ================================================================= -->
-        <div class="mb-6 rounded-xl border border-border bg-white p-1.5 shadow-sm">
-            <nav
-                class="grid grid-cols-1 gap-1 sm:grid-cols-2"
-                aria-label="Approval modules"
+            <button
+                type="button"
+                class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
+                @click="importModal = true"
             >
-                <button
-                    v-for="m in modules"
-                    :key="m"
-                    type="button"
-                    class="flex items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-semibold transition-all duration-200"
-                    :class="
-                        activeModule === m
-                            ? 'bg-primary text-white shadow-sm'
-                            : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-                    "
-                    @click="activeModule = m"
-                >
-                    <i
-                        :class="
-                            m === 'idp'
-                                ? 'fa-solid fa-seedling'
-                                : 'fa-solid fa-chart-line'
-                        "
-                    />
-                    <span>{{ moduleLabel(m) }}</span>
-                </button>
-            </nav>
+                <i class="fa-solid fa-file-import text-xs" />
+                {{ t.approval.import }}
+            </button>
         </div>
 
-        <template v-if="activeFlow">
-            <!-- ============================================================
-                 Flow header
-            ============================================================= -->
-            <section
-                class="mb-6 rounded-xl border border-border bg-white p-5 shadow-sm"
-            >
-                <div class="flex flex-wrap items-start justify-between gap-4">
-                    <div class="min-w-0">
-                        <div class="flex items-center gap-2">
-                            <h3 class="text-base font-semibold text-slate-800">
-                                {{ activeFlow.name }}
-                            </h3>
-                            <span
-                                class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold"
-                                :class="
-                                    activeFlow.is_active
-                                        ? 'bg-emerald-50 text-emerald-600'
-                                        : 'bg-slate-100 text-slate-500'
-                                "
-                            >
-                                <span
-                                    class="h-1.5 w-1.5 rounded-full"
-                                    :class="
-                                        activeFlow.is_active
-                                            ? 'bg-emerald-500'
-                                            : 'bg-slate-400'
-                                    "
-                                />
-                                {{
-                                    activeFlow.is_active
-                                        ? t.approval.flowActive
-                                        : t.approval.flowInactive
-                                }}
-                            </span>
-                        </div>
-                        <p class="mt-1 max-w-xl text-sm text-slate-400">
-                            {{ activeFlow.description || t.approval.subtitle }}
-                        </p>
-                    </div>
-
-                    <div class="flex items-center gap-2">
-                        <!-- Active toggle -->
-                        <button
-                            type="button"
-                            role="switch"
-                            :aria-checked="activeFlow.is_active"
-                            :title="t.approval.toggleFlow"
-                            class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors"
-                            :class="
-                                activeFlow.is_active
-                                    ? 'bg-emerald-500'
-                                    : 'bg-slate-300'
-                            "
-                            @click="toggleFlowActive"
-                        >
-                            <span
-                                class="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform"
-                                :class="
-                                    activeFlow.is_active
-                                        ? 'translate-x-6'
-                                        : 'translate-x-1'
-                                "
-                            />
-                        </button>
-
-                        <button
-                            type="button"
-                            class="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
-                            @click="openFlow"
-                        >
-                            <i class="fa-solid fa-pen text-xs" />
-                            {{ t.approval.editFlow }}
-                        </button>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ============================================================
-                 Layers
-            ============================================================= -->
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h3 class="text-base font-semibold text-slate-800">
-                        {{ t.approval.layers }}
-                    </h3>
-                    <p class="mt-0.5 text-sm text-slate-400">
-                        {{ t.approval.layersHint }}
-                    </p>
-                </div>
-
-                <button
-                    type="button"
-                    class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
-                    @click="openLayer()"
+        <!-- Filters -->
+        <div class="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div class="relative sm:col-span-2 lg:col-span-1">
+                <i
+                    class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400"
+                />
+                <input
+                    v-model="state.search"
+                    type="text"
+                    :placeholder="t.approval.searchPlaceholder"
+                    class="w-full rounded-md border border-border bg-white py-2.5 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                 >
-                    <i class="fa-solid fa-plus text-xs" />
-                    {{ t.approval.addLayer }}
-                </button>
             </div>
 
-            <!-- Layer chain -->
-            <ol v-if="activeFlow.layers.length" class="mt-5 space-y-3">
-                <li
-                    v-for="(layer, i) in activeFlow.layers"
-                    :key="layer.id"
-                    class="relative flex items-center gap-4 rounded-xl border border-border bg-white p-4 shadow-sm"
-                    :class="{ 'opacity-60': !layer.is_active }"
-                >
-                    <!-- Step badge -->
-                    <div
-                        class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary"
-                    >
-                        {{ i + 1 }}
-                    </div>
+            <SearchableSelect
+                :model-value="state.pt"
+                :options="options(filterOptions.pts, t.approval.allPt)"
+                :placeholder="t.approval.allPt"
+                @update:model-value="onFilter('pt', $event)"
+            />
 
-                    <!-- Details -->
-                    <div class="min-w-0 flex-1">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <span class="font-semibold text-slate-800">
-                                {{ layer.name }}
-                            </span>
-                            <span
-                                class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold"
-                                :class="
-                                    layer.approver_type === 'specific_employee'
-                                        ? 'bg-sky-50 text-sky-600'
-                                        : 'bg-indigo-50 text-indigo-600'
-                                "
-                            >
+            <SearchableSelect
+                :model-value="state.area"
+                :options="options(filterOptions.areas, t.approval.allArea)"
+                :placeholder="t.approval.allArea"
+                @update:model-value="onFilter('area', $event)"
+            />
+
+            <div class="flex gap-2">
+                <SearchableSelect
+                    class="min-w-0 flex-1"
+                    :model-value="state.bu"
+                    :options="options(filterOptions.businessUnits, t.approval.allBu)"
+                    :placeholder="t.approval.allBu"
+                    @update:model-value="onFilter('bu', $event)"
+                />
+
+                <button
+                    v-if="hasFilters"
+                    type="button"
+                    class="shrink-0 rounded-md border border-border bg-white px-3 text-sm text-slate-500 transition hover:bg-slate-50"
+                    :title="t.approval.resetFilters"
+                    @click="resetFilters"
+                >
+                    <i class="fa-solid fa-xmark" />
+                </button>
+            </div>
+        </div>
+
+        <!-- Table -->
+        <div class="overflow-x-auto rounded-xl border border-border bg-white shadow-sm">
+            <table class="w-full min-w-[880px] border-collapse text-sm">
+                <thead>
+                    <tr
+                        class="border-b border-border bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                    >
+                        <th class="w-12 px-5 py-3 text-center">#</th>
+                        <th
+                            v-for="col in sortableColumns"
+                            :key="col.key"
+                            class="cursor-pointer select-none px-5 py-3 transition hover:text-slate-700"
+                            @click="changeSort(col.key)"
+                        >
+                            <span class="inline-flex items-center gap-1.5">
+                                {{ col.label }}
                                 <i
-                                    class="fa-solid text-[9px]"
+                                    class="text-[10px]"
                                     :class="
-                                        layer.approver_type === 'specific_employee'
-                                            ? 'fa-user'
-                                            : 'fa-sitemap'
+                                        sort.key === col.key
+                                            ? sort.dir === 'asc'
+                                                ? 'fa-solid fa-sort-up text-primary'
+                                                : 'fa-solid fa-sort-down text-primary'
+                                            : 'fa-solid fa-sort text-slate-300'
                                     "
                                 />
-                                {{
-                                    layer.approver_type === 'specific_employee'
-                                        ? t.approval.specificBadge
-                                        : t.approval.dynamicBadge
-                                }}
                             </span>
+                        </th>
+                        <th class="px-5 py-3">{{ t.approval.superior }}</th>
+                        <th class="w-24 px-5 py-3 text-center">{{ t.approval.actions }}</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    <tr
+                        v-for="(row, i) in employees.data"
+                        :key="row.employee_id"
+                        class="border-b border-border/60 align-top transition last:border-0 hover:bg-slate-50/60"
+                    >
+                        <td class="px-5 py-4 text-center text-slate-400">
+                            {{ (employees.from ?? 0) + i }}
+                        </td>
+                        <td class="px-5 py-4 font-medium text-slate-700">
+                            {{ row.employee_id }}
+                        </td>
+                        <td class="px-5 py-4 text-slate-600">{{ row.name ?? '—' }}</td>
+                        <td class="px-5 py-4 text-slate-500">{{ row.pt ?? '—' }}</td>
+                        <td class="px-5 py-4 text-slate-500">{{ row.area ?? '—' }}</td>
+                        <td class="px-5 py-4 text-slate-500">{{ row.bu ?? '—' }}</td>
+                        <td class="px-5 py-4">
+                            <div v-if="row.layers.length" class="flex flex-wrap gap-1">
+                                <HoverBadge
+                                    v-for="(layer, li) in row.layers"
+                                    :key="li"
+                                    :label="`L${li + 1}`"
+                                    :tip="fmtRef(layer)"
+                                />
+                            </div>
+                            <span v-else class="text-slate-300">—</span>
+                        </td>
+                        <td class="px-5 py-4">
+                            <div class="flex items-center justify-center gap-1">
+                                <IconButton
+                                    icon="fa-solid fa-pen-to-square"
+                                    variant="edit"
+                                    :title="t.approval.editSuperior"
+                                    @click="openEdit(row)"
+                                />
+                                <IconButton
+                                    icon="fa-solid fa-clock-rotate-left"
+                                    variant="default"
+                                    :title="t.approval.history"
+                                    @click="openHistory(row)"
+                                />
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr v-if="employees.data.length === 0">
+                        <td colspan="8" class="px-5 py-12 text-center text-sm text-slate-400">
+                            {{ t.approval.noEmployees }}
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="mt-4">
+            <Pagination
+                :links="employees.links"
+                :per-page="employees.per_page"
+                :total="employees.total"
+                :from="employees.from"
+                :to="employees.to"
+                @update:per-page="changePerPage"
+            />
+        </div>
+
+        <!-- ============================================================
+             UPDATE SUPERIOR MODAL
+        ============================================================= -->
+        <Drawer :show="editModal" :title="t.approval.editSuperior" @close="editModal = false">
+            <form id="superior-form" class="space-y-5" @submit.prevent="submitEdit">
+                <!-- Subject employee (read-only) -->
+                <div>
+                    <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        {{ t.approval.employee }}
+                    </label>
+                    <div
+                        class="flex items-center gap-2.5 rounded-lg border border-border bg-slate-50 px-3.5 py-2.5 text-sm text-slate-700"
+                    >
+                        <span
+                            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary"
+                        >
+                            <i class="fa-solid fa-user" />
+                        </span>
+                        <span class="min-w-0 truncate font-medium">
+                            {{ editingEmployee?.employee_id }} - {{ editingEmployee?.name }}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Dynamic approval layers -->
+                <div>
+                    <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        {{ t.approval.layers }}
+                    </label>
+
+                    <div class="space-y-2.5">
+                        <div
+                            v-for="(id, i) in editForm.layers"
+                            :key="i"
+                            class="group flex items-center gap-2"
+                        >
                             <span
-                                v-if="!layer.is_active"
-                                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500"
+                                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-500"
                             >
-                                {{ t.approval.layerInactive }}
+                                {{ i + 1 }}
                             </span>
+                            <EmployeeSelect
+                                class="flex-1"
+                                :model-value="editForm.layers[i]"
+                                :label="rowLabels[i]"
+                                :placeholder="t.approval.selectLayer"
+                                @update:model-value="(v) => (editForm.layers[i] = v)"
+                                @update:label="(v) => (rowLabels[i] = v)"
+                            />
+                            <button
+                                type="button"
+                                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-500"
+                                :title="t.approval.removeLayer"
+                                @click="removeLayer(i)"
+                            >
+                                <i class="fa-solid fa-trash-can text-xs" />
+                            </button>
                         </div>
-                        <p class="mt-0.5 truncate text-sm text-slate-500">
-                            <i class="fa-solid fa-arrow-right-long mr-1 text-[10px] text-slate-300" />
-                            {{ approverLabel(layer) }}
-                        </p>
                     </div>
 
-                    <!-- Reorder -->
-                    <div class="flex flex-col">
-                        <button
-                            type="button"
-                            class="flex h-6 w-6 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:pointer-events-none disabled:opacity-30"
-                            :disabled="i === 0 || reordering"
-                            :title="t.approval.moveUp"
-                            @click="move(i, -1)"
-                        >
-                            <i class="fa-solid fa-chevron-up text-xs" />
-                        </button>
-                        <button
-                            type="button"
-                            class="flex h-6 w-6 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:pointer-events-none disabled:opacity-30"
-                            :disabled="i === activeFlow.layers.length - 1 || reordering"
-                            :title="t.approval.moveDown"
-                            @click="move(i, 1)"
-                        >
-                            <i class="fa-solid fa-chevron-down text-xs" />
-                        </button>
-                    </div>
+                    <p v-if="editForm.errors.layers" class="mt-1.5 text-xs text-red-600">
+                        {{ editForm.errors.layers }}
+                    </p>
 
-                    <!-- Actions -->
-                    <div class="flex items-center gap-1 border-l border-border/60 pl-3">
-                        <IconButton
-                            icon="fa-solid fa-pen"
-                            variant="edit"
-                            :title="t.approval.editLayer"
-                            @click="openLayer(layer)"
-                        />
-                        <IconButton
-                            icon="fa-solid fa-trash"
-                            variant="delete"
-                            :title="t.approval.deleteLayer"
-                            @click="pendingDelete = layer"
-                        />
+                    <!-- Add layer -->
+                    <button
+                        type="button"
+                        class="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border py-2.5 text-sm font-semibold text-primary transition hover:border-primary hover:bg-primary/5"
+                        @click="addLayer"
+                    >
+                        <i class="fa-solid fa-plus text-xs" />
+                        {{ t.approval.addLayer }}
+                    </button>
+                </div>
+            </form>
+
+            <template #footer>
+                <button
+                    type="button"
+                    class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                    @click="editModal = false"
+                >
+                    {{ t.approval.close }}
+                </button>
+                <button
+                    type="submit"
+                    form="superior-form"
+                    :disabled="editForm.processing"
+                    class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60"
+                >
+                    {{ t.approval.saveChanges }}
+                </button>
+            </template>
+        </Drawer>
+
+        <!-- ============================================================
+             HISTORY DRAWER
+        ============================================================= -->
+        <Drawer :show="historyDrawer" :title="t.approval.history" @close="historyDrawer = false">
+            <div class="mb-3 text-sm text-slate-500">
+                {{ historyEmployee?.name }} - {{ historyEmployee?.employee_id }}
+            </div>
+
+            <div v-if="historyLoading" class="py-10 text-center text-sm text-slate-400">
+                <i class="fa-solid fa-spinner fa-spin mr-2" />
+                {{ t.approval.loading }}
+            </div>
+
+            <ol v-else-if="historyEntries.length" class="space-y-3">
+                <li
+                    v-for="entry in historyEntries"
+                    :key="entry.id"
+                    class="rounded-lg border border-border bg-white p-4 shadow-sm"
+                >
+                    <div class="mb-2 flex items-center justify-between text-xs text-slate-400">
+                        <span>
+                            <i class="fa-solid fa-user mr-1" />
+                            {{ entry.changed_by_name ?? '—' }}
+                        </span>
+                        <span>{{ entry.created_at }}</span>
                     </div>
+                    <ul v-if="entry.layers.length" class="space-y-1 text-sm">
+                        <li
+                            v-for="(layer, li) in entry.layers"
+                            :key="li"
+                            class="flex items-center gap-2"
+                        >
+                            <span class="w-8 shrink-0 font-semibold text-slate-400">
+                                L{{ li + 1 }}
+                            </span>
+                            <span class="text-slate-600">{{ fmtRef(layer) }}</span>
+                        </li>
+                    </ul>
+                    <p v-else class="text-sm italic text-slate-400">{{ t.approval.cleared }}</p>
                 </li>
             </ol>
 
-            <!-- Empty state -->
-            <div
-                v-else
-                class="mt-5 rounded-xl border border-dashed border-border bg-white px-6 py-14 text-center"
-            >
-                <div
-                    class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary"
-                >
-                    <i class="fa-solid fa-list-check text-xl" />
-                </div>
-                <h4 class="mt-4 font-semibold text-slate-700">
-                    {{ t.approval.emptyLayers }}
-                </h4>
-                <p class="mx-auto mt-1 max-w-md text-sm text-slate-400">
-                    {{ t.approval.emptyLayersHint }}
-                </p>
-                <button
-                    type="button"
-                    class="mt-5 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
-                    @click="openLayer()"
-                >
-                    <i class="fa-solid fa-plus text-xs" />
-                    {{ t.approval.addLayer }}
-                </button>
+            <div v-else class="py-10 text-center text-sm text-slate-400">
+                {{ t.approval.noHistory }}
             </div>
-        </template>
+        </Drawer>
 
-        <!-- ================================================================
-             FLOW MODAL
-        ================================================================= -->
-        <Drawer
-            :show="flowModal"
-            :title="t.approval.editFlow"
-            @close="flowModal = false"
-        >
-            <form id="flow-form" class="space-y-4" @submit.prevent="submitFlow">
+        <!-- ============================================================
+             IMPORT MODAL
+        ============================================================= -->
+        <Drawer :show="importModal" :title="t.approval.import" @close="importModal = false">
+            <form id="import-form" class="space-y-4" @submit.prevent="submitImport">
+                <p class="text-sm text-slate-500">
+                    {{ t.approval.importHint }}
+                </p>
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">
-                        {{ t.approval.flowName }}
+                        {{ t.approval.file }}
                     </label>
                     <input
-                        v-model="flowForm.name"
-                        class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="flowForm.errors.name ? 'border-red-500' : 'border-border'"
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        class="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-primary/10 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-primary hover:file:bg-primary/20"
+                        @change="onFile"
                     >
-                    <p v-if="flowForm.errors.name" class="mt-1 text-xs text-red-600">
-                        {{ flowForm.errors.name }}
+                    <p v-if="importForm.errors.file" class="mt-1 text-xs text-red-600">
+                        {{ importForm.errors.file }}
                     </p>
                 </div>
-
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-slate-700">
-                        {{ t.approval.flowDescription }}
-                    </label>
-                    <textarea
-                        v-model="flowForm.description"
-                        rows="3"
-                        class="w-full rounded-md border border-border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
-                </div>
-
-                <label class="flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <input
-                        v-model="flowForm.is_active"
-                        type="checkbox"
-                        class="h-4 w-4 rounded border-border text-primary focus:ring-primary"
-                    >
-                    {{ t.approval.flowEnabled }}
-                </label>
             </form>
 
             <template #footer>
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                    @click="flowModal = false"
+                    @click="importModal = false"
                 >
-                    {{ t.approval.cancel }}
+                    {{ t.approval.close }}
                 </button>
                 <button
                     type="submit"
-                    form="flow-form"
-                    :disabled="flowForm.processing"
+                    form="import-form"
+                    :disabled="importForm.processing || !importForm.file"
                     class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60"
                 >
-                    {{ t.approval.save }}
+                    {{ t.approval.import }}
                 </button>
             </template>
         </Drawer>
-
-        <!-- ================================================================
-             LAYER MODAL
-        ================================================================= -->
-        <Drawer
-            :show="layerModal"
-            :title="editingLayerId ? t.approval.editLayer : t.approval.addLayer"
-            @close="layerModal = false"
-        >
-            <form id="layer-form" class="space-y-4" @submit.prevent="submitLayer">
-                <!-- Layer name -->
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-slate-700">
-                        {{ t.approval.layerName }}
-                    </label>
-                    <input
-                        v-model="layerForm.name"
-                        :placeholder="t.approval.layerNameHint"
-                        class="w-full rounded-md border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="layerForm.errors.name ? 'border-red-500' : 'border-border'"
-                    >
-                    <p v-if="layerForm.errors.name" class="mt-1 text-xs text-red-600">
-                        {{ layerForm.errors.name }}
-                    </p>
-                </div>
-
-                <!-- Approver type -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.approval.approverType }}
-                    </label>
-                    <div class="space-y-2">
-                        <label
-                            v-for="opt in approverTypeOptions"
-                            :key="opt.value"
-                            class="flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition"
-                            :class="
-                                layerForm.approver_type === opt.value
-                                    ? 'border-primary bg-primary/5 text-slate-800'
-                                    : 'border-border text-slate-600 hover:bg-slate-50'
-                            "
-                        >
-                            <input
-                                v-model="layerForm.approver_type"
-                                type="radio"
-                                :value="opt.value"
-                                class="h-4 w-4 text-primary focus:ring-primary"
-                            >
-                            {{ opt.label }}
-                        </label>
-                    </div>
-                    <p class="mt-1.5 text-xs text-slate-400">
-                        {{ t.approval.approverTypeHint }}
-                    </p>
-                </div>
-
-                <!-- Specific employee picker -->
-                <div v-if="layerForm.approver_type === 'specific_employee'">
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.approval.pickEmployee }}
-                    </label>
-
-                    <button
-                        v-if="!empOpen"
-                        type="button"
-                        class="flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm transition hover:bg-slate-50"
-                        :class="layerForm.errors.approver_employee_id ? 'border-red-500' : 'border-border'"
-                        @click="openEmployeePicker"
-                    >
-                        <span
-                            v-if="layerForm.approver_employee_id"
-                            class="min-w-0 truncate text-slate-700"
-                        >
-                            {{ selectedApproverName ?? layerForm.approver_employee_id }}
-                            <span class="text-slate-400">
-                                · {{ layerForm.approver_employee_id }}
-                            </span>
-                        </span>
-                        <span v-else class="text-slate-400">
-                            {{ t.approval.pickEmployee }}
-                        </span>
-                        <i class="fa-solid fa-chevron-down shrink-0 text-xs text-slate-400" />
-                    </button>
-
-                    <div v-else class="rounded-md border border-border">
-                        <div class="relative border-b border-border">
-                            <i
-                                class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
-                            />
-                            <input
-                                v-model="empQuery"
-                                type="search"
-                                autofocus
-                                :placeholder="t.approval.searchEmployee"
-                                class="w-full rounded-t-md border-0 py-2 pl-9 pr-9 text-sm focus:outline-none focus:ring-0"
-                            >
-                            <i
-                                v-if="empSearching"
-                                class="fa-solid fa-spinner fa-spin absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
-                            />
-                        </div>
-                        <ul class="max-h-56 overflow-y-auto py-1">
-                            <li v-for="emp in empResults" :key="emp.employee_id">
-                                <button
-                                    type="button"
-                                    class="flex w-full flex-col items-start px-3 py-2 text-left transition hover:bg-slate-50"
-                                    @click="pickEmployee(emp)"
-                                >
-                                    <span class="text-sm font-medium text-slate-700">
-                                        {{ emp.fullname }}
-                                    </span>
-                                    <span class="text-xs text-slate-400">
-                                        {{ emp.employee_id }} ·
-                                        {{ emp.designation_name ?? 'N.A' }}
-                                    </span>
-                                </button>
-                            </li>
-                            <li
-                                v-if="!empSearching && empResults.length === 0"
-                                class="px-3 py-6 text-center text-sm text-slate-400"
-                            >
-                                {{ t.approval.noEmployeeResults }}
-                            </li>
-                        </ul>
-                    </div>
-
-                    <p
-                        v-if="layerForm.errors.approver_employee_id"
-                        class="mt-1 text-xs text-red-600"
-                    >
-                        {{ layerForm.errors.approver_employee_id }}
-                    </p>
-                </div>
-
-                <!-- Active -->
-                <label class="flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <input
-                        v-model="layerForm.is_active"
-                        type="checkbox"
-                        class="h-4 w-4 rounded border-border text-primary focus:ring-primary"
-                    >
-                    {{ t.approval.layerActive }}
-                </label>
-            </form>
-
-            <template #footer>
-                <button
-                    type="button"
-                    class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                    @click="layerModal = false"
-                >
-                    {{ t.approval.cancel }}
-                </button>
-                <button
-                    type="submit"
-                    form="layer-form"
-                    :disabled="layerForm.processing"
-                    class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60"
-                >
-                    {{ t.approval.save }}
-                </button>
-            </template>
-        </Drawer>
-
-        <!-- ================================================================
-             DELETE CONFIRMATION
-        ================================================================= -->
-        <ConfirmDialog
-            :show="pendingDelete !== null"
-            :title="t.approval.deleteTitle"
-            :message="t.approval.confirmDeleteLayer"
-            :confirm-label="t.approval.delete"
-            :cancel-label="t.approval.cancel"
-            variant="danger"
-            :processing="deleting"
-            @confirm="confirmDelete"
-            @close="pendingDelete = null"
-        >
-            <p
-                v-if="pendingDelete"
-                class="mt-3 truncate rounded-md bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700"
-            >
-                {{ pendingDelete.name }}
-            </p>
-        </ConfirmDialog>
     </AppLayout>
 </template>

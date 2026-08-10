@@ -59,6 +59,12 @@ interface Movement {
     status: string | null
 }
 
+interface MasterOption {
+    value: string
+    value_en: string | null
+    value_id: string | null
+}
+
 const props = defineProps<{
     employee: { data: Employee }
     photoUrl: string | null
@@ -78,11 +84,11 @@ const props = defineProps<{
     // IDP tab (rendered inline via IdpPanel)
     developmentModels: any[]
     options: {
-        competencyNames: string[]
-        developmentPrograms: string[]
-        reviewTools: string[]
+        competencyNames: MasterOption[]
+        developmentPrograms: MasterOption[]
+        reviewTools: MasterOption[]
     }
-    competencyMap: Record<string, Array<{ value: string; model_id: number | null }>>
+    competencyMap: Record<string, Array<MasterOption & { model_id: number | null }>>
 }>()
 
 const emp = props.employee.data

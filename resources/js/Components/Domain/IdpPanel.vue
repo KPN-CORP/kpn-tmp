@@ -10,6 +10,12 @@ import { formatDate as fmt } from '@/Composables/useDate'
 
 const { t, locale } = useLocale()
 
+interface MasterOption {
+    value: string
+    value_en: string | null
+    value_id: string | null
+}
+
 interface Plan {
     id: number
     development_model_id: number
@@ -38,11 +44,11 @@ const props = withDefaults(
         employee: { employee_id: string; fullname: string; designation_name: string | null }
         developmentModels: Model[]
         options: {
-            competencyNames: string[]
-            developmentPrograms: string[]
-            reviewTools: string[]
+            competencyNames: MasterOption[]
+            developmentPrograms: MasterOption[]
+            reviewTools: MasterOption[]
         }
-        competencyMap: Record<string, Array<{ value: string; model_id: number | null }>>
+        competencyMap: Record<string, Array<MasterOption & { model_id: number | null }>>
         // Show the add / edit / delete plan controls; the profile's inline tab
         // is view-only.
         canEdit?: boolean
@@ -111,25 +117,49 @@ const currentModel = computed(() =>
     props.developmentModels.find((m) => m.id === form.development_model_id) ?? null,
 )
 
+// Localized display label for a master option; the canonical `value` stays the
+// stored/matched key while value_en / value_id drive what the user sees.
+function masterLabel(item: MasterOption): string {
+    const preferred = locale.value === 'id' ? item.value_id : item.value_en
+    return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
+}
+
 // For a Soft Competency, restrict programs to those linked to the competency.
-const programOptions = computed(() => {
+const programOptions = computed<MasterOption[]>(() => {
     if (form.competency_type === 'Soft Competency' && form.competency_name) {
         const linked = props.competencyMap[form.competency_name.toLowerCase().trim()]
-        if (linked?.length) return linked.map((p) => p.value)
+        if (linked?.length) return linked
     }
     return props.options.developmentPrograms
 })
 
-// Keep the currently-selected value visible even if it is no longer in the
-// master list (legacy free-text plans), so editing never drops a saved value.
-function toSelectOptions(values: string[], current: string): Option[] {
-    const list = current && !values.includes(current) ? [current, ...values] : values
-    return list.map((v) => ({ value: v, label: v }))
+// Build select options with localized labels. Keep the currently-selected value
+// visible even if it is no longer in the master list (legacy free-text plans),
+// so editing never drops a saved value.
+function toSelectOptions(items: MasterOption[], current: string): Option[] {
+    const options = items.map((item) => ({ value: item.value, label: masterLabel(item) }))
+    if (current && !items.some((item) => item.value === current)) {
+        options.unshift({ value: current, label: current })
+    }
+    return options
 }
 
 const competencyNameOptions = computed(() => toSelectOptions(props.options.competencyNames, form.competency_name))
 const programSelectOptions = computed(() => toSelectOptions(programOptions.value, form.development_program))
 const reviewToolsOptions = computed(() => toSelectOptions(props.options.reviewTools, form.review_tools))
+
+// Canonical value → localized label maps, so the plans table also follows the
+// active language (plans store the canonical English value).
+function labelMap(items: MasterOption[]): Record<string, string> {
+    return Object.fromEntries(items.map((item) => [item.value, masterLabel(item)]))
+}
+const competencyLabels = computed(() => labelMap(props.options.competencyNames))
+const programLabels = computed(() => labelMap(props.options.developmentPrograms))
+const reviewToolLabels = computed(() => labelMap(props.options.reviewTools))
+
+function localize(map: Record<string, string>, value: string | null): string {
+    return value ? (map[value] ?? value) : ''
+}
 
 const competencyTypeOptions = computed<Option[]>(() => [
     { value: 'Soft Competency', label: t.value.idp.form.soft },
@@ -396,7 +426,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                             >
                                 <!-- Competency -->
                                 <td class="px-5 py-3.5">
-                                    <div class="font-medium text-slate-800">{{ plan.competency_name }}</div>
+                                    <div class="font-medium text-slate-800">{{ localize(competencyLabels, plan.competency_name) }}</div>
                                     <div class="mt-1 flex flex-wrap items-center gap-1.5">
                                         <span
                                             class="rounded px-1.5 py-0.5 text-[11px] font-medium"
@@ -409,14 +439,14 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                                             class="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500"
                                         >
                                             <i class="fa-solid fa-clipboard-check text-[10px]" />
-                                            {{ plan.review_tools }}
+                                            {{ localize(reviewToolLabels, plan.review_tools) }}
                                         </span>
                                     </div>
                                 </td>
 
                                 <!-- Program -->
                                 <td class="px-5 py-3.5">
-                                    <div class="font-medium text-slate-700">{{ plan.development_program }}</div>
+                                    <div class="font-medium text-slate-700">{{ localize(programLabels, plan.development_program) }}</div>
                                     <div v-if="plan.expected_outcome" class="mt-0.5 max-w-xs text-xs text-slate-400">
                                         <span class="font-medium">{{ t.idp.outcomeLabel }}:</span>
                                         {{ plan.expected_outcome }}
@@ -714,7 +744,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 v-if="pendingDelete"
                 class="mt-3 truncate rounded-md bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700"
             >
-                {{ pendingDelete.competency_name }}
+                {{ localize(competencyLabels, pendingDelete.competency_name) }}
             </p>
         </ConfirmDialog>
 

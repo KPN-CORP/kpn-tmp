@@ -1582,12 +1582,10 @@ watch(competencyTotalPages, (total) => {
                 class="space-y-4"
                 @submit.prevent="submitMaster"
             >
-                <!-- Review tools: single-language name -->
                 <!-- Bilingual name (+ description for competency), grouped by
                      language. Applies to competency, program and review tool. -->
-                <template>
-                    <!-- English section -->
-                    <div class="rounded-lg border border-border bg-slate-50/60 p-4">
+                <!-- English section -->
+                <div class="rounded-lg border border-border bg-slate-50/60 p-4">
                         <div class="mb-3 flex items-center gap-2">
                             <span
                                 class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
@@ -1697,7 +1695,6 @@ watch(competencyTotalPages, (total) => {
                             </div>
                         </div>
                     </div>
-                </template>
 
                 <!-- Development program -> Development model -->
                 <div v-if="masterType === 'development_program'">

@@ -23,22 +23,37 @@ class IdpService
             ->groupBy('development_model_id');
 
         $programs = DevelopmentPlanMaster::where('type', 'development_program')
-            ->get(['id', 'value', 'development_model_id']);
+            ->orderBy('value')
+            ->get(['id', 'value', 'value_en', 'value_id', 'development_model_id']);
 
         $programsById = $programs->keyBy('id');
 
-        // competency value (lower-cased) => [{ value, model_id }]
-        $competencyMap = [];
         $competencies = DevelopmentPlanMaster::where('type', 'competency_name')
-            ->whereNotNull('related_program')
-            ->get();
+            ->orderBy('value')
+            ->get(['id', 'value', 'value_en', 'value_id', 'related_program']);
 
+        $reviewTools = DevelopmentPlanMaster::where('type', 'review_tools')
+            ->orderBy('value')
+            ->get(['id', 'value', 'value_en', 'value_id']);
+
+        // Shape a master row into a localizable option (canonical value stays the
+        // stored/matched key; value_en/value_id drive the display label).
+        $option = fn ($m) => [
+            'value' => $m->value,
+            'value_en' => $m->value_en,
+            'value_id' => $m->value_id,
+        ];
+
+        // competency value (lower-cased) => [{ value, value_en, value_id, model_id }]
+        $competencyMap = [];
         foreach ($competencies as $competency) {
             $linked = collect($competency->related_program ?? [])
                 ->map(fn ($id) => $programsById->get($id))
                 ->filter()
                 ->map(fn ($p) => [
                     'value' => $p->value,
+                    'value_en' => $p->value_en,
+                    'value_id' => $p->value_id,
                     'model_id' => $p->development_model_id,
                 ])
                 ->values();
@@ -58,11 +73,9 @@ class IdpService
                 'plans' => ($plans->get($m->id) ?? collect())->values(),
             ]),
             'options' => [
-                'competencyNames' => DevelopmentPlanMaster::where('type', 'competency_name')
-                    ->orderBy('value')->pluck('value')->unique()->values(),
-                'developmentPrograms' => $programs->pluck('value')->unique()->sort()->values(),
-                'reviewTools' => DevelopmentPlanMaster::where('type', 'review_tools')
-                    ->orderBy('value')->pluck('value')->unique()->values(),
+                'competencyNames' => $competencies->map($option)->values(),
+                'developmentPrograms' => $programs->map($option)->unique('value')->values(),
+                'reviewTools' => $reviewTools->map($option)->values(),
             ],
             'competencyMap' => $competencyMap,
         ];

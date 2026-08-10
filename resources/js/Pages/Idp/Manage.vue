@@ -10,6 +10,12 @@ const { t } = useLocale()
 
 const panel = ref<InstanceType<typeof IdpPanel> | null>(null)
 
+interface MasterOption {
+    value: string
+    value_en: string | null
+    value_id: string | null
+}
+
 interface Plan {
     id: number
     realization_date: string | null
@@ -29,11 +35,11 @@ const props = defineProps<{
     employee: { data: { employee_id: string; fullname: string; designation_name: string | null } }
     developmentModels: Model[]
     options: {
-        competencyNames: string[]
-        developmentPrograms: string[]
-        reviewTools: string[]
+        competencyNames: MasterOption[]
+        developmentPrograms: MasterOption[]
+        reviewTools: MasterOption[]
     }
-    competencyMap: Record<string, Array<{ value: string; model_id: number | null }>>
+    competencyMap: Record<string, Array<MasterOption & { model_id: number | null }>>
 }>()
 
 const emp = props.employee.data

@@ -112,17 +112,13 @@ Route::middleware('auth')->group(function () use ($stub) {
         Route::delete('/admin/roles/{role}', [RoleController::class, 'destroy'])->name('roles.destroy');
     });
 
-    // --- Approval Setting (configurable approval workflow) ---
+    // --- Approval Layers (per-employee superior chains) ---
     Route::middleware('permission:view_approval_setting')->group(function () {
         Route::get('/approval-setting', [ApprovalSettingController::class, 'index'])->name('approval.setting.index');
         Route::get('/approval-setting/employees', [ApprovalSettingController::class, 'searchEmployees'])->name('approval.setting.employees');
-
-        Route::put('/approval-setting/flows/{flow}', [ApprovalSettingController::class, 'updateFlow'])->name('approval.setting.flows.update');
-        Route::post('/approval-setting/flows/{flow}/reorder', [ApprovalSettingController::class, 'reorderLayers'])->name('approval.setting.layers.reorder');
-
-        Route::post('/approval-setting/layers', [ApprovalSettingController::class, 'storeLayer'])->name('approval.setting.layers.store');
-        Route::put('/approval-setting/layers/{layer}', [ApprovalSettingController::class, 'updateLayer'])->name('approval.setting.layers.update');
-        Route::delete('/approval-setting/layers/{layer}', [ApprovalSettingController::class, 'destroyLayer'])->name('approval.setting.layers.destroy');
+        Route::post('/approval-setting/import', [ApprovalSettingController::class, 'import'])->name('approval.setting.import');
+        Route::get('/approval-setting/{employeeId}/history', [ApprovalSettingController::class, 'history'])->name('approval.setting.history');
+        Route::put('/approval-setting/{employeeId}', [ApprovalSettingController::class, 'update'])->name('approval.setting.update');
     });
 });
 
