@@ -14,6 +14,9 @@ class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
     use HasRoles, HasFactory, Notifiable;
+    
+    protected $connection = 'kpncorp';
+    protected $table = 'users';
 
     protected $fillable = [
         'employee_id',
