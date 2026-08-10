@@ -10,33 +10,43 @@ use Illuminate\Database\Eloquent\Builder;
  * Decides which employees a given user is allowed to see, mirroring facecard's
  * visibility rules:
  *
- *   1. Role scopes — a role may be limited to a set of business units /
+ *   1. Superadmin — the only role with unrestricted, org-wide visibility.
+ *   2. Role scopes — a role may be limited to a set of business units /
  *      companies / locations. Within one role the scopes AND together; multiple
- *      scoped roles OR together. A role with no scopes at all (e.g. Superadmin)
- *      means unrestricted access.
- *   2. Manager — no scoped role but sits above others in the org chart: their
+ *      scoped roles OR together. Roles that carry no scopes at all (e.g.
+ *      Superior, Admin) do NOT widen visibility on their own — the user falls
+ *      through to the manager / self rules below.
+ *   3. Manager — no scoped role but sits above others in the org chart: their
  *      direct reports (L1/L2) plus themselves.
- *   3. Otherwise — only their own record.
+ *   4. Otherwise — only their own record.
+ *
+ * NOTE: unrestricted access used to be granted to *any* scope-less role, which
+ * silently gave Superior/Admin (and any role whose scopes failed to persist)
+ * full visibility. It is now gated on the Superadmin role name explicitly.
  */
 class EmployeeScopeService
 {
+    /** The single role that may see every employee. */
+    private const SUPERADMIN_ROLE = 'Superadmin';
+
     public function query(User $user): Builder
     {
         $query = Employee::query();
         $roles = $user->roles;
 
-        if ($roles->isNotEmpty()) {
-            // Any scope-less role grants unrestricted visibility.
-            $hasUnrestrictedRole = $roles->contains(
-                fn ($role) => $this->roleIsUnscoped($role),
-            );
+        // Only Superadmin sees everyone. Compared case-insensitively because the
+        // DB collation matches role names case-insensitively (so the stored name
+        // may be "superadmin" / "Superadmin" depending on how it was seeded).
+        if ($roles->contains(fn ($role) => strcasecmp((string) $role->name, self::SUPERADMIN_ROLE) === 0)) {
+            return $query;
+        }
 
-            if ($hasUnrestrictedRole) {
-                return $query;
-            }
+        // Roles that actually carry business-unit / company / location scopes.
+        $scopedRoles = $roles->reject(fn ($role) => $this->roleIsUnscoped($role));
 
-            return $query->where(function (Builder $outer) use ($roles) {
-                foreach ($roles as $role) {
+        if ($scopedRoles->isNotEmpty()) {
+            return $query->where(function (Builder $outer) use ($scopedRoles) {
+                foreach ($scopedRoles as $role) {
                     $outer->orWhere(function (Builder $q) use ($role) {
                         if (! empty($role->business_unit)) {
                             $q->whereIn('group_company', $role->business_unit);
