@@ -384,6 +384,8 @@ export default {
         scopeHint: 'Leave all blank for an unrestricted role (sees every employee).',
         membersLabel: 'Members',
         membersHint: 'Only existing user accounts can be assigned a role.',
+        defaultMembers: 'All users',
+        defaultMembersHint: 'This default role is granted automatically when a user signs in.',
         searchUsers: 'Search users…',
         permissions: 'Permissions',
         members: 'Members',

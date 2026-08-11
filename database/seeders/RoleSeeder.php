@@ -2,9 +2,9 @@
 
 namespace Database\Seeders;
 
+use App\Models\Permission;
+use App\Models\Role;
 use Illuminate\Database\Seeder;
-use Spatie\Permission\Models\Permission;
-use Spatie\Permission\Models\Role;
 
 /**
  * Core roles. Superadmin gets everything; Superior is the manager self-service
@@ -30,6 +30,21 @@ class RoleSeeder extends Seeder
             'view_proposed_grade',
             'view_idp_master',
             'view_admin_guide',
+        ]);
+
+        // Baseline self-service role. It is NOT mass-assigned (the corporate
+        // user base is large and churns constantly) — instead it is granted
+        // lazily on sign-in: SsoController / DevLoginController assign it to the
+        // user on login if they don't already have it. It carries both the
+        // Individual Contributor and People Manager data-access permissions; the
+        // runtime applies whichever set fits the person (ic_* for their own
+        // record, pm_* for their team) based on their direct reports. This keeps
+        // "deny by default" safe: no role => no data access, but anyone who
+        // actually logs in gets this baseline.
+        $selfService = Role::firstOrCreate(['name' => 'Employee (Self-Service)', 'guard_name' => 'web']);
+        $selfService->syncPermissions([
+            'ic_view_facecard', 'ic_download_facecard', 'ic_view_idp', 'ic_download_idp',
+            'pm_view_facecard', 'pm_download_facecard', 'pm_view_idp', 'pm_download_idp',
         ]);
 
         $admin = Role::firstOrCreate(['name' => 'Admin', 'guard_name' => 'web']);

@@ -386,6 +386,8 @@ const id: LocaleMessages = {
         scopeHint: 'Kosongkan semua untuk peran tanpa batas (melihat semua karyawan).',
         membersLabel: 'Anggota',
         membersHint: 'Hanya akun pengguna yang ada yang dapat ditetapkan peran.',
+        defaultMembers: 'Semua pengguna',
+        defaultMembersHint: 'Peran default ini diberikan otomatis saat pengguna masuk.',
         searchUsers: 'Cari pengguna…',
         permissions: 'Izin',
         members: 'Anggota',

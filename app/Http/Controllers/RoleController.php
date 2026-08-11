@@ -3,19 +3,21 @@
 namespace App\Http\Controllers;
 
 use App\Models\Employee;
+use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
-use Spatie\Permission\Models\Permission;
 
 class RoleController extends Controller
 {
     /** Seeded roles that must not be deleted. */
-    private const PROTECTED_ROLES = ['Superadmin', 'Superior', 'Admin'];
+    private const PROTECTED_ROLES = ['Superadmin', 'Superior', 'Admin', User::BASELINE_ROLE];
 
     public function index(): Response
     {
@@ -27,15 +29,26 @@ class RoleController extends Controller
                 'company' => $role->company ?? [],
                 'location' => $role->location ?? [],
                 'permissions' => $role->permissions->pluck('name'),
-                'members' => User::role($role->name)->pluck('employee_id')->filter()->values(),
+                // The baseline role is granted automatically on login, so its
+                // membership is effectively "everyone who has signed in" — not
+                // worth enumerating or managing by hand.
+                'members' => $this->isDefaultRole($role)
+                    ? []
+                    : User::whereIn((new User)->getKeyName(), $this->userIdsWithRole($role))
+                        ->pluck('employee_id')->filter()->values(),
                 'protected' => in_array($role->name, self::PROTECTED_ROLES, true),
+                'default' => $this->isDefaultRole($role),
             ]);
 
         return Inertia::render('Admin/Roles', [
             'roles' => $roles,
-            'permissionGroups' => Permission::orderBy('group')->orderBy('name')->get()
+            'permissionGroups' => Permission::orderBy('group')->orderBy('section')->orderBy('name')->get()
                 ->groupBy('group')
-                ->map(fn ($group) => $group->map(fn ($p) => ['name' => $p->name, 'label' => $p->label ?? $p->name])),
+                ->map(fn ($group) => $group->map(fn ($p) => [
+                    'name' => $p->name,
+                    'label' => $p->label ?? $p->name,
+                    'section' => $p->section ?? '',
+                ])),
             'scopeOptions' => $this->scopeOptions(),
             'users' => User::whereNotNull('employee_id')->orderBy('name')
                 ->get(['employee_id', 'name'])
@@ -74,24 +87,31 @@ class RoleController extends Controller
         ]);
 
         $role->syncPermissions($data['permissions'] ?? []);
-        $this->syncMembers($role, $data['members'] ?? []);
+        if (! $this->isDefaultRole($role)) {
+            $this->syncMembers($role, $data['members'] ?? []);
+        }
 
         return back()->with('success', "Role \"{$role->name}\" created.");
     }
 
     public function update(Request $request, Role $role): RedirectResponse
     {
+        $isDefault = $this->isDefaultRole($role);
         $data = $this->validateRole($request, $role);
 
         $role->update([
-            'name' => $data['name'],
+            // The default role's name is referenced by the login provisioning
+            // hook (User::BASELINE_ROLE), so it must not be renamed.
+            'name' => $isDefault ? $role->name : $data['name'],
             'business_unit' => $data['business_unit'] ?? [],
             'company' => $data['company'] ?? [],
             'location' => $data['location'] ?? [],
         ]);
 
         $role->syncPermissions($data['permissions'] ?? []);
-        $this->syncMembers($role, $data['members'] ?? []);
+        if (! $isDefault) {
+            $this->syncMembers($role, $data['members'] ?? []);
+        }
 
         return back()->with('success', "Role \"{$role->name}\" updated.");
     }
@@ -105,6 +125,15 @@ class RoleController extends Controller
         $role->delete();
 
         return back()->with('success', 'Role deleted.');
+    }
+
+    /**
+     * The auto-provisioned baseline role: undeletable, and its membership is not
+     * managed by hand (granted on login instead).
+     */
+    private function isDefaultRole(Role $role): bool
+    {
+        return $role->name === User::BASELINE_ROLE;
     }
 
     /**
@@ -131,12 +160,39 @@ class RoleController extends Controller
      */
     private function syncMembers(Role $role, array $employeeIds): void
     {
-        // Drop the role from anyone no longer selected.
-        User::role($role->name)->whereNotIn('employee_id', $employeeIds)->get()
-            ->each->removeRole($role);
+        // Accounts that should hold the role (only users that actually exist).
+        $targetUsers = User::whereIn('employee_id', $employeeIds)->get();
 
-        // Add it to the selected users that exist.
-        User::whereIn('employee_id', $employeeIds)->get()
-            ->each(fn (User $user) => $user->assignRole($role));
+        // Drop the role from current holders no longer selected. The current
+        // holders are read from the pivot directly (see userIdsWithRole).
+        $staleIds = $this->userIdsWithRole($role)->diff($targetUsers->modelKeys());
+        if ($staleIds->isNotEmpty()) {
+            User::whereIn((new User)->getKeyName(), $staleIds->all())->get()
+                ->each->removeRole($role);
+        }
+
+        // Grant it to the selected users. assignRole runs its pivot query on the
+        // role's connection, so this works even though User is on kpncorp.
+        $targetUsers->each(fn (User $user) => $user->assignRole($role));
+    }
+
+    /**
+     * Primary keys of the users currently holding this role, read straight from
+     * the pivot on the role's connection (mysql).
+     *
+     * User lives on the kpncorp connection while roles and the model_has_roles
+     * pivot live on mysql, so Spatie's User::role() scope — a whereHas that
+     * correlates a kpncorp query against mysql tables — cannot be resolved by
+     * MySQL (see CLAUDE.md). Reading the pivot directly avoids the cross-DB join.
+     *
+     * @return Collection<int, int|string>
+     */
+    private function userIdsWithRole(Role $role): Collection
+    {
+        return DB::connection($role->getConnectionName())
+            ->table(config('permission.table_names.model_has_roles'))
+            ->where(config('permission.column_names.role_pivot_key') ?: 'role_id', $role->getKey())
+            ->where('model_type', (new User)->getMorphClass())
+            ->pluck(config('permission.column_names.model_morph_key'));
     }
 }

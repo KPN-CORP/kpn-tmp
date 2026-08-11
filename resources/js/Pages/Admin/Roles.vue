@@ -19,11 +19,18 @@ interface Role {
     permissions: string[]
     members: string[]
     protected: boolean
+    default: boolean
+}
+
+interface Perm {
+    name: string
+    label: string
+    section?: string
 }
 
 const props = defineProps<{
     roles: Role[]
-    permissionGroups: Record<string, { name: string; label: string }[]>
+    permissionGroups: Record<string, Perm[]>
     scopeOptions: { businessUnits: string[]; companies: string[]; locations: string[] }
     users: Option[]
 }>()
@@ -55,6 +62,9 @@ const columns: Column[] = [
 // --- Create / edit role ---
 const roleModal = ref(false)
 const editingId = ref<number | null>(null)
+// The auto-provisioned default role: its membership is managed on login, so the
+// Assign Users section is hidden when editing it.
+const editingDefault = ref(false)
 
 const form = useForm<{
     name: string
@@ -67,6 +77,7 @@ const form = useForm<{
 
 function openCreate() {
     editingId.value = null
+    editingDefault.value = false
     form.reset()
     form.clearErrors()
     permissionSearch.value = ''
@@ -75,6 +86,7 @@ function openCreate() {
 
 function openEdit(role: Role) {
     editingId.value = role.id
+    editingDefault.value = role.default
     form.clearErrors()
     form.name = role.name
     form.business_unit = [...role.business_unit]
@@ -101,13 +113,26 @@ function togglePermission(name: string) {
 // --- Permission picker (search + per-group select all) ---
 const permissionSearch = ref('')
 
-const allPermissions = computed(() =>
-    Object.values(props.permissionGroups).flat(),
-)
+const allPermissions = computed(() => Object.values(props.permissionGroups).flat())
+
+/**
+ * Split a group's permissions into ordered { section, items } blocks so the card
+ * can show sub-headers (e.g. Data Access Permission → Individual Contributor /
+ * People Manager). Order follows first appearance, which the controller sorts.
+ */
+function sectionsOf(perms: Perm[]): { section: string; items: Perm[] }[] {
+    const map = new Map<string, Perm[]>()
+    for (const p of perms) {
+        const key = p.section ?? ''
+        if (!map.has(key)) map.set(key, [])
+        map.get(key)!.push(p)
+    }
+    return Array.from(map, ([section, items]) => ({ section, items }))
+}
 
 const filteredGroups = computed(() => {
     const q = permissionSearch.value.trim().toLowerCase()
-    const out: Record<string, { name: string; label: string }[]> = {}
+    const out: Record<string, Perm[]> = {}
     for (const [group, perms] of Object.entries(props.permissionGroups)) {
         const matched = q
             ? perms.filter(
@@ -203,7 +228,14 @@ function scopeChips(role: Role): string[] {
             </template>
 
             <template #cell-members="{ row }">
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ row.members.length }}</span>
+                <span
+                    v-if="row.default"
+                    class="rounded-full bg-slate-100 px-2 py-0.5 text-xs italic text-slate-400"
+                    :title="t.roles.defaultMembersHint"
+                >
+                    {{ t.roles.defaultMembers }}
+                </span>
+                <span v-else class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ row.members.length }}</span>
             </template>
 
             <template #cell-action="{ row }">
@@ -292,7 +324,7 @@ function scopeChips(role: Role): string[] {
                     <p class="px-3 pb-3 text-xs text-slate-400">{{ t.roles.scopeHint }}</p>
                 </div>
 
-                <div class="rounded-lg border border-border bg-slate-50/60">
+                <div v-if="!editingDefault" class="rounded-lg border border-border bg-slate-50/60">
                     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-white px-3 py-2">
                         <div class="flex items-center gap-2">
                             <i class="fa-solid fa-users text-sm text-primary" />
@@ -360,20 +392,28 @@ function scopeChips(role: Role): string[] {
                                 </span>
                             </label>
                             <div class="flex flex-col gap-0.5 p-1.5">
-                                <label
-                                    v-for="p in perms"
-                                    :key="p.name"
-                                    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-600 transition hover:bg-white"
-                                    :class="form.permissions.includes(p.name) ? 'bg-white font-medium text-slate-800' : ''"
-                                >
-                                    <input
-                                        type="checkbox"
-                                        :checked="form.permissions.includes(p.name)"
-                                        class="rounded border-slate-300 text-primary focus:ring-primary"
-                                        @change="togglePermission(p.name)"
+                                <template v-for="sec in sectionsOf(perms)" :key="sec.section">
+                                    <div
+                                        v-if="sectionsOf(perms).length > 1 && sec.section"
+                                        class="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400"
                                     >
-                                    {{ p.label }}
-                                </label>
+                                        {{ sec.section }}
+                                    </div>
+                                    <label
+                                        v-for="p in sec.items"
+                                        :key="p.name"
+                                        class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-600 transition hover:bg-white"
+                                        :class="form.permissions.includes(p.name) ? 'bg-white font-medium text-slate-800' : ''"
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            :checked="form.permissions.includes(p.name)"
+                                            class="rounded border-slate-300 text-primary focus:ring-primary"
+                                            @change="togglePermission(p.name)"
+                                        >
+                                        {{ p.label }}
+                                    </label>
+                                </template>
                             </div>
                         </div>
                     </div>
@@ -381,6 +421,7 @@ function scopeChips(role: Role): string[] {
                         {{ t.roles.noPermissionsMatch }}
                     </p>
                 </div>
+
             </form>
             <template #footer>
                 <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="roleModal = false">

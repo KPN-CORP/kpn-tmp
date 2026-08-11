@@ -12,7 +12,9 @@ class Employee extends Model
     use HasFactory;
 
     protected $connection = 'kpncorp';
+
     protected $table = 'employees';
+
     protected $guarded = ['id'];
 
     protected $casts = [
@@ -32,8 +34,56 @@ class Employee extends Model
             'contribution_level_code', 'work_area_code', 'office_area',
             'manager_l1_id', 'manager_l2_id', 'employee_type', 'unit',
             'personal_email', 'date_of_birth', 'nationality', 'marital_status',
-            'homebase', 'permanent_city'
+            'homebase', 'permanent_city', 'direct_reportee_employee_id', 'date_of_joining'
         );
+    }
+
+    /**
+     * employee_ids of this employee's direct reports ("their team").
+     *
+     * Primary source is the corporate `direct_reportee_employee_id` column — a
+     * pipe-separated ("|") list of reportee employee_ids. When that column is
+     * absent or was not selected (e.g. the sample dataset only has the manager
+     * columns), it falls back to the reverse org-chart lookup: anyone whose
+     * manager_l1_id / manager_l2_id points at this employee.
+     *
+     * @return list<string>
+     */
+    public function reporteeIds(): array
+    {
+        $raw = $this->attributes['direct_reportee_employee_id'] ?? null;
+
+        if (filled($raw)) {
+            return collect(explode('|', (string) $raw))
+                ->map(fn ($id) => trim((string) $id))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+        }
+
+        if (blank($this->employee_id)) {
+            return [];
+        }
+
+        return self::query()
+            ->where('manager_l1_id', $this->employee_id)
+            ->orWhere('manager_l2_id', $this->employee_id)
+            ->pluck('employee_id')
+            ->map(fn ($id) => (string) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * A People Manager has at least one direct report; an Individual Contributor
+     * has none. Drives which set of Data Access permissions (pm_* vs ic_*) apply.
+     */
+    public function isPeopleManager(): bool
+    {
+        return $this->reporteeIds() !== [];
     }
 
     // --- Structural (kpncorp) relations ---

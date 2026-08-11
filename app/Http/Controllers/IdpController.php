@@ -2,20 +2,21 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\IdpExport;
+use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Requests\StoreIndividualDevelopmentPlanRequest;
 use App\Http\Requests\UpdateIndividualDevelopmentPlanRequest;
 use App\Http\Resources\EmployeeResource;
+use App\Imports\SingleEmployeeDevelopmentPlanImport;
+use App\Jobs\GenerateIdpZip;
 use App\Models\DevelopmentPlanMaster;
 use App\Models\ImportLog;
 use App\Models\IndividualDevelopmentPlan;
-use App\Exports\IdpExport;
-use App\Http\Controllers\Concerns\ReadsSort;
-use App\Imports\SingleEmployeeDevelopmentPlanImport;
-use App\Jobs\GenerateIdpZip;
 use App\Models\JobStatus;
 use App\Services\EmployeeScopeService;
 use App\Services\IdpService;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -32,11 +33,15 @@ class IdpController extends Controller
 {
     use ReadsSort;
 
+    /** Data Access capability pairs: [self permission (IC), team permission (PM)]. */
+    private const IDP_VIEW = ['ic_view_idp', 'pm_view_idp'];
+
+    private const IDP_DOWNLOAD = ['ic_download_idp', 'pm_download_idp'];
+
     public function __construct(
         private readonly EmployeeScopeService $scope,
         private readonly IdpService $idp,
-    ) {
-    }
+    ) {}
 
     /**
      * Employee list — each row links to its IDP manage screen.
@@ -50,7 +55,9 @@ class IdpController extends Controller
             'employee_id', 'fullname', 'group_company', 'job_level', 'designation_name',
         ], 'fullname');
 
-        $employees = $this->filteredQuery($user, $filters)
+        $base = $this->scope->accessibleQuery($user, ...self::IDP_VIEW);
+
+        $employees = $this->filteredQuery(clone $base, $filters)
             ->orderBy($sort['key'], $sort['dir'])
             ->paginate((int) $request->integer('per_page', 10))
             ->withQueryString()
@@ -60,7 +67,7 @@ class IdpController extends Controller
             'employees' => $employees,
             'filters' => $filters,
             'sort' => $sort,
-            'filterOptions' => $this->filterOptions($user),
+            'filterOptions' => $this->filterOptions(clone $base),
         ]);
     }
 
@@ -80,9 +87,9 @@ class IdpController extends Controller
     /**
      * @param  array<string, string>  $filters
      */
-    private function filteredQuery($user, array $filters)
+    private function filteredQuery(Builder $query, array $filters)
     {
-        return $this->scope->query($user)
+        return $query
             ->when($filters['search'], fn ($q, $term) => $q->where(function ($sub) use ($term) {
                 $sub->where('fullname', 'like', "%{$term}%")
                     ->orWhere('employee_id', 'like', "%{$term}%");
@@ -93,11 +100,11 @@ class IdpController extends Controller
     }
 
     /**
-     * Distinct filter values within the user's visible employee set.
+     * Distinct filter values within the given (already scoped) employee set.
      */
-    private function filterOptions($user): array
+    private function filterOptions(Builder $base): array
     {
-        $pluckDistinct = fn (string $column) => $this->scope->query($user)
+        $pluckDistinct = fn (string $column) => (clone $base)
             ->whereNotNull($column)
             ->distinct()
             ->orderBy($column)
@@ -117,9 +124,9 @@ class IdpController extends Controller
     public function show(Request $request, string $employeeId): Response
     {
         $user = $request->user();
-        abort_unless($this->scope->canView($user, $employeeId), 403);
+        abort_unless($this->scope->canAccess($user, $employeeId, ...self::IDP_VIEW), 403);
 
-        $employee = $this->scope->query($user)
+        $employee = $this->scope->accessibleQuery($user, ...self::IDP_VIEW)
             ->where('employee_id', $employeeId)
             ->firstOrFail();
 
@@ -135,9 +142,10 @@ class IdpController extends Controller
     public function downloadPdf(Request $request, string $employeeId): HttpResponse
     {
         $user = $request->user();
-        abort_unless($this->scope->canView($user, $employeeId), 403);
+        abort_unless($this->scope->canAccess($user, $employeeId, ...self::IDP_DOWNLOAD), 403);
 
-        $employee = $this->scope->query($user)->where('employee_id', $employeeId)->firstOrFail();
+        $employee = $this->scope->accessibleQuery($user, ...self::IDP_DOWNLOAD)
+            ->where('employee_id', $employeeId)->firstOrFail();
         $data = $this->idp->manageData($employeeId);
 
         $pdf = Pdf::loadView('pdf.idp', [
@@ -153,7 +161,7 @@ class IdpController extends Controller
      */
     public function export(Request $request, string $employeeId): BinaryFileResponse
     {
-        abort_unless($this->scope->canView($request->user(), $employeeId), 403);
+        abort_unless($this->scope->canAccess($request->user(), $employeeId, ...self::IDP_DOWNLOAD), 403);
 
         return Excel::download(new IdpExport($employeeId), 'idp_'.$employeeId.'.xlsx');
     }
@@ -282,7 +290,7 @@ class IdpController extends Controller
             ->map(fn ($id) => (string) $id)
             ->unique();
 
-        $employeeIds = $this->scope->query($user)
+        $employeeIds = $this->scope->accessibleQuery($user, ...self::IDP_DOWNLOAD)
             ->when($requested->isNotEmpty(), fn ($q) => $q->whereIn('employee_id', $requested->all()))
             ->orderBy('fullname')
             ->pluck('employee_id')

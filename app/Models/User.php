@@ -13,9 +13,17 @@ use Spatie\Permission\Traits\HasRoles;
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasRoles, HasFactory, Notifiable;
-    
+    use HasFactory, HasRoles, Notifiable;
+
+    /**
+     * Baseline self-service role assigned to every provisioned user. It carries
+     * the Individual Contributor + People Manager Data Access permissions so
+     * deny-by-default access never locks a user out of their own record.
+     */
+    public const BASELINE_ROLE = 'Employee (Self-Service)';
+
     protected $connection = 'kpncorp';
+
     protected $table = 'users';
 
     protected $fillable = [

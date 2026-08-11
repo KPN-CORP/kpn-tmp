@@ -2,9 +2,9 @@
 
 namespace Database\Seeders;
 
+use App\Models\Permission;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Artisan;
-use Spatie\Permission\Models\Permission;
 
 /**
  * The full permission catalogue, carried over from the legacy app. Each entry
@@ -50,6 +50,18 @@ class PermissionSeeder extends Seeder
             // User Guide
             ['name' => 'manage_user_guide', 'label' => 'Input User Guide', 'group' => 'User Guide', 'section' => 'Input'],
             ['name' => 'view_admin_guide', 'label' => 'View Admin Guideline', 'group' => 'User Guide', 'section' => 'View'],
+
+            // Data Access Permission — self-service access to a user's OWN data,
+            // split by whether they are an Individual Contributor (no direct
+            // reports) or a People Manager (has direct reports).
+            ['name' => 'ic_view_facecard', 'label' => 'View Facecard', 'group' => 'Data Access Permission', 'section' => 'Individual Contributor'],
+            ['name' => 'ic_download_facecard', 'label' => 'Download Facecard', 'group' => 'Data Access Permission', 'section' => 'Individual Contributor'],
+            ['name' => 'ic_view_idp', 'label' => 'View IDP', 'group' => 'Data Access Permission', 'section' => 'Individual Contributor'],
+            ['name' => 'ic_download_idp', 'label' => 'Download IDP', 'group' => 'Data Access Permission', 'section' => 'Individual Contributor'],
+            ['name' => 'pm_view_facecard', 'label' => 'View Facecard', 'group' => 'Data Access Permission', 'section' => 'People Manager'],
+            ['name' => 'pm_download_facecard', 'label' => 'Download Facecard', 'group' => 'Data Access Permission', 'section' => 'People Manager'],
+            ['name' => 'pm_view_idp', 'label' => 'View IDP', 'group' => 'Data Access Permission', 'section' => 'People Manager'],
+            ['name' => 'pm_download_idp', 'label' => 'Download IDP', 'group' => 'Data Access Permission', 'section' => 'People Manager'],
         ];
 
         foreach ($permissions as $permission) {

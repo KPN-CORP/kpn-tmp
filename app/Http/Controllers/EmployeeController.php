@@ -19,6 +19,7 @@ use App\Models\WorkExperience;
 use App\Services\EmployeeScopeService;
 use App\Services\IdpService;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -48,6 +49,18 @@ class EmployeeController extends Controller
         'Job Level Change',
     ];
 
+    /**
+     * Data Access capability pairs: [self permission (IC / own record),
+     * team permission (PM / direct reportees)]. Spread into the scope service.
+     */
+    private const FACECARD_VIEW = ['ic_view_facecard', 'pm_view_facecard'];
+
+    private const FACECARD_DOWNLOAD = ['ic_download_facecard', 'pm_download_facecard'];
+
+    private const IDP_VIEW = ['ic_view_idp', 'pm_view_idp'];
+
+    private const IDP_DOWNLOAD = ['ic_download_idp', 'pm_download_idp'];
+
     public function __construct(
         private readonly EmployeeScopeService $scope,
         private readonly IdpService $idp,
@@ -65,7 +78,9 @@ class EmployeeController extends Controller
             'employee_id', 'fullname', 'group_company', 'job_level', 'designation_name',
         ], 'fullname');
 
-        $employees = $this->filteredQuery($user, $filters)
+        $base = $this->scope->accessibleQuery($user, ...self::FACECARD_VIEW);
+
+        $employees = $this->filteredQuery(clone $base, $filters)
             ->orderBy($sort['key'], $sort['dir'])
             ->paginate((int) $request->integer('per_page', 10))
             ->withQueryString()
@@ -75,16 +90,18 @@ class EmployeeController extends Controller
             'employees' => $employees,
             'filters' => $filters,
             'sort' => $sort,
-            'filterOptions' => $this->filterOptions($user),
+            'filterOptions' => $this->filterOptions(clone $base),
         ]);
     }
 
     /**
-     * Export the current scoped + filtered employee list to Excel.
+     * Export the current scoped + filtered employee list to Excel. Gated by the
+     * facecard *download* capability (exporting the list is a download).
      */
     public function exportExcel(Request $request): BinaryFileResponse
     {
-        $query = $this->filteredQuery($request->user(), $this->readFilters($request));
+        $base = $this->scope->accessibleQuery($request->user(), ...self::FACECARD_DOWNLOAD);
+        $query = $this->filteredQuery($base, $this->readFilters($request));
 
         return Excel::download(new EmployeeExport($query), 'facecard_'.now()->format('Ymd_His').'.xlsx');
     }
@@ -105,9 +122,9 @@ class EmployeeController extends Controller
     /**
      * @param  array<string, string>  $filters
      */
-    private function filteredQuery($user, array $filters)
+    private function filteredQuery(Builder $query, array $filters)
     {
-        return $this->scope->query($user)
+        return $query
             ->when($filters['search'], fn ($q, $term) => $q->where(function ($sub) use ($term) {
                 $sub->where('fullname', 'like', "%{$term}%")
                     ->orWhere('employee_id', 'like', "%{$term}%");
@@ -125,9 +142,9 @@ class EmployeeController extends Controller
         $user = $request->user();
         $employeeId ??= $user->employee_id;
 
-        abort_unless($this->scope->canView($user, (string) $employeeId), 403);
+        abort_unless($this->scope->canAccess($user, (string) $employeeId, ...self::FACECARD_VIEW), 403);
 
-        $employee = $this->scope->query($user)
+        $employee = $this->scope->accessibleQuery($user, ...self::FACECARD_VIEW)
             ->where('employee_id', $employeeId)
             ->firstOrFail();
 
@@ -181,6 +198,10 @@ class EmployeeController extends Controller
             'canInputNineBox' => $user->can('input_year_on_year'),
             'canInputCompetency' => $user->can('input_competency_assessment'),
             'canInputSuccession' => $user->can('input_successor_position'),
+            // Data Access flags for this employee — drive the download buttons
+            'canDownloadFacecard' => $this->scope->canAccess($user, (string) $employeeId, ...self::FACECARD_DOWNLOAD),
+            'canViewIdp' => $this->scope->canAccess($user, (string) $employeeId, ...self::IDP_VIEW),
+            'canDownloadIdp' => $this->scope->canAccess($user, (string) $employeeId, ...self::IDP_DOWNLOAD),
         ]));
     }
 
@@ -296,9 +317,10 @@ class EmployeeController extends Controller
     public function downloadPdf(Request $request, string $employeeId): HttpResponse
     {
         $user = $request->user();
-        abort_unless($this->scope->canView($user, $employeeId), 403);
+        abort_unless($this->scope->canAccess($user, $employeeId, ...self::FACECARD_DOWNLOAD), 403);
 
-        $employee = $this->scope->query($user)->where('employee_id', $employeeId)->firstOrFail();
+        $employee = $this->scope->accessibleQuery($user, ...self::FACECARD_DOWNLOAD)
+            ->where('employee_id', $employeeId)->firstOrFail();
 
         $pdf = Pdf::loadView('pdf.facecard', [
             'employee' => $employee,
@@ -327,7 +349,7 @@ class EmployeeController extends Controller
             ->map(fn ($id) => (string) $id)
             ->unique();
 
-        $employeeIds = $this->scope->query($user)
+        $employeeIds = $this->scope->accessibleQuery($user, ...self::FACECARD_DOWNLOAD)
             ->when($requested->isNotEmpty(), fn ($q) => $q->whereIn('employee_id', $requested->all()))
             ->orderBy('fullname')
             ->pluck('employee_id')
@@ -375,11 +397,11 @@ class EmployeeController extends Controller
     }
 
     /**
-     * Distinct filter values within the user's visible employee set.
+     * Distinct filter values within the given (already scoped) employee set.
      */
-    private function filterOptions($user): array
+    private function filterOptions(Builder $base): array
     {
-        $pluckDistinct = fn (string $column) => $this->scope->query($user)
+        $pluckDistinct = fn (string $column) => (clone $base)
             ->whereNotNull($column)
             ->distinct()
             ->orderBy($column)
