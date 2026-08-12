@@ -90,11 +90,59 @@ class IdpApprovalService
 
             $approval->load('steps');
 
-            // Notify the first approver that their action is needed.
+            // Auto-approve the submitter's own layer (and any earlier layers).
+            // If the person submitting is themselves an approver in the chain —
+            // e.g. L1 submitting for their own team member — their approval is
+            // implicit, so the workflow skips straight to the next layer.
+            $submitterIndex = filled($user->employee_id)
+                ? array_search($user->employee_id, $layers, true)
+                : false;
+
+            if ($submitterIndex !== false) {
+                return $this->autoApproveThrough($approval, $user, $submitterIndex + 1);
+            }
+
+            // Normal flow: notify the first approver that their action is needed.
             $this->notifyApprover($approval, 1);
 
             return $approval;
         });
+    }
+
+    /**
+     * Mark every layer up to and including $throughLevel as auto-approved on the
+     * submitter's behalf, then either finish the workflow (submitter was the
+     * final layer) or hand off to the next pending approver.
+     */
+    private function autoApproveThrough(IdpApproval $approval, User $user, int $throughLevel): IdpApproval
+    {
+        foreach ($approval->steps as $step) {
+            if ($step->level <= $throughLevel && $step->status === 'pending') {
+                $step->update([
+                    'status' => 'approved',
+                    'note' => 'Auto-approved on submission (submitted by this approver).',
+                    'acted_by' => $user->id,
+                    'acted_by_name' => $user->name,
+                    'acted_at' => now(),
+                ]);
+            }
+        }
+
+        if ($throughLevel >= $approval->totalLevels()) {
+            // The submitter is the final approver — nothing left to sign off.
+            $approval->update(['current_level' => $throughLevel, 'status' => 'approved']);
+            $approval->load('steps');
+            $this->notifyOutcome($approval, 'approval_approved');
+
+            return $approval;
+        }
+
+        $approval->update(['current_level' => $throughLevel + 1]);
+        $approval->load('steps');
+        // Hand off to the next pending layer.
+        $this->notifyApprover($approval, $throughLevel + 1);
+
+        return $approval;
     }
 
     /**
