@@ -59,11 +59,6 @@ class SsoController extends Controller
             $user = User::where('email', $email)->first();
             if ($user) {
                 Auth::login($user);
-                // Ensure the baseline self-service role so deny-by-default Data
-                // Access never locks a signed-in user out of their own record.
-                if (! $user->hasRole(User::BASELINE_ROLE)) {
-                    $user->assignRole(User::BASELINE_ROLE);
-                }
                 $user->token = $token;
                 $user->email_log = $email;
                 $user->save();

@@ -16,9 +16,11 @@ class RoleSeeder extends Seeder
     public function run(): void
     {
         $superadmin = Role::firstOrCreate(['name' => 'Superadmin', 'guard_name' => 'web']);
+        $superadmin->forceFill(['is_data_access' => false])->save();
         $superadmin->syncPermissions(Permission::all());
 
         $superior = Role::firstOrCreate(['name' => 'Superior', 'guard_name' => 'web']);
+        $superior->forceFill(['is_data_access' => false])->save();
         $superior->syncPermissions([
             'input_competency_assessment',
             'input_year_on_year',
@@ -32,22 +34,20 @@ class RoleSeeder extends Seeder
             'view_admin_guide',
         ]);
 
-        // Baseline self-service role. It is NOT mass-assigned (the corporate
-        // user base is large and churns constantly) — instead it is granted
-        // lazily on sign-in: SsoController / DevLoginController assign it to the
-        // user on login if they don't already have it. It carries both the
-        // Individual Contributor and People Manager data-access permissions; the
-        // runtime applies whichever set fits the person (ic_* for their own
-        // record, pm_* for their team) based on their direct reports. This keeps
-        // "deny by default" safe: no role => no data access, but anyone who
-        // actually logs in gets this baseline.
+        // Baseline data-access role (Data Access tab). It is a DATA role, so it is
+        // never hand-assigned — it auto-applies to every user in its Access Scope.
+        // With no scope set it applies to ALL users, granting each their own
+        // (ic_*) and, for managers, their team's (pm_*) facecard/IDP access. Scope
+        // it (e.g. to a business unit) to roll data access out per unit.
         $selfService = Role::firstOrCreate(['name' => 'Employee (Self-Service)', 'guard_name' => 'web']);
+        $selfService->forceFill(['is_data_access' => true])->save();
         $selfService->syncPermissions([
             'ic_view_facecard', 'ic_download_facecard', 'ic_view_idp', 'ic_download_idp',
             'pm_view_facecard', 'pm_download_facecard', 'pm_view_idp', 'pm_download_idp',
         ]);
 
         $admin = Role::firstOrCreate(['name' => 'Admin', 'guard_name' => 'web']);
+        $admin->forceFill(['is_data_access' => false])->save();
         $admin->syncPermissions([
             'view_import_center',
             'import_competency_assessment',

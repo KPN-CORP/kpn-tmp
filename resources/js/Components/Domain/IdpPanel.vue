@@ -6,7 +6,7 @@ import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
 import { useLocale } from '@/Composables/useLocale'
-import { formatDate as fmt } from '@/Composables/useDate'
+import { formatDate as fmt, formatDateTime as fmtDateTime } from '@/Composables/useDate'
 
 const { t, locale } = useLocale()
 
@@ -14,6 +14,27 @@ interface MasterOption {
     value: string
     value_en: string | null
     value_id: string | null
+}
+
+interface ApprovalStep {
+    level: number
+    approver_id: string
+    approver_name: string | null
+    status: 'pending' | 'approved' | 'rejected'
+    note: string | null
+    acted_by_name: string | null
+    acted_at: string | null
+}
+
+interface ApprovalInfo {
+    id: number | null
+    status: 'draft' | 'pending' | 'approved' | 'rejected'
+    current_level: number | null
+    total_levels: number
+    submitted_at: string | null
+    steps: ApprovalStep[]
+    can_submit: boolean
+    can_act: boolean
 }
 
 interface Plan {
@@ -28,6 +49,7 @@ interface Plan {
     time_frame_end: string | null
     realization_date: string | null
     result_evidence: string | null
+    approval?: ApprovalInfo
 }
 
 interface Model {
@@ -298,6 +320,99 @@ function submitUpload() {
     })
 }
 
+// --- Approval workflow (staged L1 → L2 → … per item) ---
+
+// Whether there is at least one item the viewer may (re)submit for approval.
+const hasSubmittable = computed(() =>
+    props.developmentModels.some((m) => m.plans.some((p) => p.approval?.can_submit)),
+)
+
+function approvalBadge(approval?: ApprovalInfo): { label: string; cls: string; dot: string } {
+    const status = approval?.status ?? 'draft'
+    if (status === 'approved') {
+        return { label: t.value.approvalFlow.statusApproved, cls: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20', dot: 'bg-emerald-500' }
+    }
+    if (status === 'rejected') {
+        return { label: t.value.approvalFlow.statusRejected, cls: 'bg-red-50 text-red-700 ring-red-600/20', dot: 'bg-red-500' }
+    }
+    if (status === 'pending') {
+        const lvl = approval?.current_level ?? 1
+        if (approval?.can_act) {
+            return { label: t.value.approvalFlow.needsYourApproval, cls: 'bg-amber-100 text-amber-800 ring-amber-600/30', dot: 'bg-amber-500' }
+        }
+        return {
+            label: `${t.value.approvalFlow.waiting} ${t.value.approvalFlow.layerShort}${lvl}`,
+            cls: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+            dot: 'bg-amber-500',
+        }
+    }
+    return { label: t.value.approvalFlow.statusDraft, cls: 'bg-slate-100 text-slate-600 ring-slate-500/20', dot: 'bg-slate-400' }
+}
+
+// Submit a single item for approval.
+const submittingId = ref<number | null>(null)
+function submitItem(plan: Plan) {
+    submittingId.value = plan.id
+    router.post(`/idp/${plan.id}/submit-approval`, {}, {
+        preserveScroll: true,
+        preserveState: true,
+        onFinish: () => (submittingId.value = null),
+    })
+}
+
+// Submit every draft / rejected item at once.
+const submittingAll = ref(false)
+function submitAllApprovals() {
+    submittingAll.value = true
+    router.post(`/idp/${emp.employee_id}/submit-all-approval`, {}, {
+        preserveScroll: true,
+        preserveState: true,
+        onFinish: () => (submittingAll.value = false),
+    })
+}
+
+// Approve / reject dialog (note required).
+const actOpen = ref(false)
+const actDecision = ref<'approve' | 'reject'>('approve')
+const actApprovalId = ref<number | null>(null)
+const actPlan = ref<Plan | null>(null)
+const actForm = useForm({ note: '' })
+
+function openAct(plan: Plan, decision: 'approve' | 'reject') {
+    actDecision.value = decision
+    actApprovalId.value = plan.approval?.id ?? null
+    actPlan.value = plan
+    actForm.reset()
+    actForm.clearErrors()
+    actOpen.value = true
+}
+
+function submitAct() {
+    if (!actApprovalId.value) return
+    actForm.post(`/idp-approvals/${actApprovalId.value}/${actDecision.value}`, {
+        preserveScroll: true,
+        preserveState: true,
+        onSuccess: () => {
+            actOpen.value = false
+            actForm.reset()
+        },
+    })
+}
+
+// Approval-chain detail drawer.
+const chainOpen = ref(false)
+const chainPlan = ref<Plan | null>(null)
+function openChain(plan: Plan) {
+    chainPlan.value = plan
+    chainOpen.value = true
+}
+
+function stepIcon(status: string): { icon: string; color: string } {
+    if (status === 'approved') return { icon: 'fa-solid fa-circle-check', color: 'text-emerald-500' }
+    if (status === 'rejected') return { icon: 'fa-solid fa-circle-xmark', color: 'text-red-500' }
+    return { icon: 'fa-regular fa-circle', color: 'text-slate-300' }
+}
+
 // Let the page header open the upload drawer (the drawer lives here).
 defineExpose({ openUpload: () => (uploadOpen.value = true) })
 </script>
@@ -330,6 +445,27 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                     <div class="text-[11px] uppercase tracking-wide text-amber-600/70">{{ t.idp.stats.ongoing }}</div>
                 </div>
             </div>
+        </div>
+
+        <!-- Submit-all-for-approval bar -->
+        <div
+            v-if="canEdit && hasSubmittable"
+            class="mb-6 flex flex-col items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+        >
+            <p class="flex items-center gap-2 text-sm text-amber-800">
+                <i class="fa-solid fa-paper-plane" />
+                {{ t.approvalFlow.submitAll }}
+            </p>
+            <button
+                type="button"
+                :disabled="submittingAll"
+                class="inline-flex shrink-0 items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-60"
+                @click="submitAllApprovals"
+            >
+                <i v-if="submittingAll" class="fa-solid fa-spinner fa-spin" />
+                <i v-else class="fa-solid fa-paper-plane" />
+                {{ t.approvalFlow.submitAll }}
+            </button>
         </div>
 
         <!-- 70-20-10 learning model explainer -->
@@ -415,6 +551,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                                 <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.timeframe }}</th>
                                 <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.status }}</th>
                                 <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.realization }}</th>
+                                <th class="px-5 py-2.5 font-semibold">{{ t.approvalFlow.heading }}</th>
                                 <th v-if="canEdit" class="px-5 py-2.5 text-right font-semibold" />
                             </tr>
                         </thead>
@@ -490,6 +627,75 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                                     </a>
                                     <div v-else-if="plan.result_evidence" class="mt-0.5 max-w-xs text-xs text-slate-400">
                                         {{ plan.result_evidence }}
+                                    </div>
+                                </td>
+
+                                <!-- Approval -->
+                                <td class="px-5 py-3.5">
+                                    <div class="flex flex-col items-start gap-1.5">
+                                        <span
+                                            class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset"
+                                            :class="approvalBadge(plan.approval).cls"
+                                        >
+                                            <span class="h-1.5 w-1.5 rounded-full" :class="approvalBadge(plan.approval).dot" />
+                                            {{ approvalBadge(plan.approval).label }}
+                                        </span>
+
+                                        <!-- Actions for the current approver -->
+                                        <div v-if="plan.approval?.can_act" class="flex items-center gap-1">
+                                            <button
+                                                type="button"
+                                                class="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-600"
+                                                @click="openAct(plan, 'approve')"
+                                            >
+                                                <i class="fa-solid fa-check" />
+                                                {{ t.approvalFlow.approve }}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class="inline-flex items-center gap-1 rounded-md bg-red-500 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-red-600"
+                                                @click="openAct(plan, 'reject')"
+                                            >
+                                                <i class="fa-solid fa-xmark" />
+                                                {{ t.approvalFlow.reject }}
+                                            </button>
+                                        </div>
+
+                                        <!-- Submit / resubmit -->
+                                        <button
+                                            v-else-if="plan.approval?.can_submit"
+                                            type="button"
+                                            :disabled="submittingId === plan.id"
+                                            class="inline-flex items-center gap-1 rounded-md border border-primary/40 px-2 py-1 text-[11px] font-semibold text-primary transition hover:bg-primary hover:text-white disabled:opacity-60"
+                                            @click="submitItem(plan)"
+                                        >
+                                            <i v-if="submittingId === plan.id" class="fa-solid fa-spinner fa-spin" />
+                                            <i v-else class="fa-solid fa-paper-plane" />
+                                            {{ plan.approval?.status === 'rejected' ? t.approvalFlow.resubmit : t.approvalFlow.submit }}
+                                        </button>
+
+                                        <!-- Not yet completed → submit is blocked -->
+                                        <span
+                                            v-else-if="canEdit
+                                                && (plan.approval?.status === 'draft' || plan.approval?.status === 'rejected')
+                                                && status.key !== 'completed'"
+                                            class="inline-flex items-center gap-1 text-[11px] text-slate-400"
+                                            :title="t.approvalFlow.completeFirstHint"
+                                        >
+                                            <i class="fa-solid fa-circle-info" />
+                                            {{ t.approvalFlow.completeFirst }}
+                                        </span>
+
+                                        <!-- View chain -->
+                                        <button
+                                            v-if="plan.approval && plan.approval.steps.length"
+                                            type="button"
+                                            class="text-[11px] font-medium text-slate-400 transition hover:text-primary hover:underline"
+                                            @click="openChain(plan)"
+                                        >
+                                            <i class="fa-solid fa-list-ol mr-0.5" />
+                                            {{ t.approvalFlow.viewChain }}
+                                        </button>
                                     </div>
                                 </td>
 
@@ -827,6 +1033,154 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 >
                     <i v-if="uploadForm.processing" class="fa-solid fa-spinner fa-spin" />
                     {{ t.idp.upload.submit }}
+                </button>
+            </template>
+        </Drawer>
+
+        <!-- Approve / reject drawer (note required) -->
+        <Drawer
+            :show="actOpen"
+            max-width="max-w-lg"
+            @close="actOpen = false"
+        >
+            <template #header>
+                <div class="min-w-0">
+                    <h3 class="font-bold text-slate-800">
+                        {{ actDecision === 'approve' ? t.approvalFlow.approveTitle : t.approvalFlow.rejectTitle }}
+                    </h3>
+                    <p v-if="actPlan" class="mt-0.5 truncate text-sm text-slate-500">
+                        {{ localize(competencyLabels, actPlan.competency_name) }} ·
+                        {{ localize(programLabels, actPlan.development_program) }}
+                    </p>
+                </div>
+            </template>
+
+            <form id="idp-act-form" class="space-y-4" @submit.prevent="submitAct">
+                <div
+                    class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+                    :class="actDecision === 'approve'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                        : 'border-red-200 bg-red-50 text-red-800'"
+                >
+                    <i :class="actDecision === 'approve' ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark'" />
+                    <span v-if="actPlan?.approval">
+                        {{ t.approvalFlow.layer }} {{ actPlan.approval.current_level }} / {{ actPlan.approval.total_levels }}
+                    </span>
+                </div>
+
+                <div>
+                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                        {{ t.approvalFlow.note }} <span class="text-red-500">*</span>
+                    </label>
+                    <textarea
+                        v-model="actForm.note"
+                        rows="4"
+                        :placeholder="t.approvalFlow.notePlaceholder"
+                        class="w-full rounded-lg border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        :class="actForm.errors.note ? 'border-red-500' : 'border-border'"
+                    />
+                    <p v-if="actForm.errors.note" class="mt-1 text-xs text-red-600">{{ actForm.errors.note }}</p>
+                </div>
+            </form>
+
+            <template #footer>
+                <button
+                    type="button"
+                    class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                    @click="actOpen = false"
+                >
+                    {{ t.approvalFlow.cancel }}
+                </button>
+                <button
+                    type="submit"
+                    form="idp-act-form"
+                    :disabled="actForm.processing"
+                    class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-white transition disabled:opacity-60"
+                    :class="actDecision === 'approve' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-red-500 hover:bg-red-600'"
+                >
+                    <i v-if="actForm.processing" class="fa-solid fa-spinner fa-spin" />
+                    {{ actDecision === 'approve' ? t.approvalFlow.confirmApprove : t.approvalFlow.confirmReject }}
+                </button>
+            </template>
+        </Drawer>
+
+        <!-- Approval-chain detail drawer -->
+        <Drawer
+            :show="chainOpen"
+            :title="t.approvalFlow.chainTitle"
+            max-width="max-w-lg"
+            @close="chainOpen = false"
+        >
+            <div v-if="chainPlan?.approval" class="space-y-3">
+                <p class="truncate text-sm font-medium text-slate-700">
+                    {{ localize(competencyLabels, chainPlan.competency_name) }}
+                </p>
+
+                <!-- When it was submitted for approval -->
+                <p
+                    v-if="chainPlan.approval.submitted_at"
+                    class="flex items-center gap-1.5 text-xs text-slate-500"
+                >
+                    <i class="fa-solid fa-paper-plane text-slate-300" />
+                    <span>{{ t.approvalFlow.submittedAt }}: {{ fmtDateTime(chainPlan.approval.submitted_at) }}</span>
+                </p>
+
+                <ol class="space-y-3">
+                    <li
+                        v-for="step in chainPlan.approval.steps"
+                        :key="step.level"
+                        class="flex gap-3"
+                    >
+                        <div class="flex flex-col items-center">
+                            <span
+                                class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ring-1 ring-inset"
+                                :class="step.status === 'approved'
+                                    ? 'bg-emerald-50 text-emerald-600 ring-emerald-200'
+                                    : step.status === 'rejected'
+                                        ? 'bg-red-50 text-red-600 ring-red-200'
+                                        : chainPlan.approval.current_level === step.level && chainPlan.approval.status === 'pending'
+                                            ? 'bg-amber-50 text-amber-600 ring-amber-200'
+                                            : 'bg-slate-50 text-slate-400 ring-slate-200'"
+                            >
+                                {{ t.approvalFlow.layerShort }}{{ step.level }}
+                            </span>
+                            <span
+                                v-if="step.level < chainPlan.approval.steps.length"
+                                class="mt-1 w-px flex-1 bg-border"
+                            />
+                        </div>
+                        <div class="min-w-0 flex-1 pb-1">
+                            <div class="flex items-center gap-2">
+                                <i :class="[stepIcon(step.status).icon, stepIcon(step.status).color]" class="text-xs" />
+                                <span class="truncate text-sm font-semibold text-slate-800">
+                                    {{ step.approver_name ?? step.approver_id }}
+                                </span>
+                            </div>
+                            <p class="text-xs text-slate-400">
+                                <template v-if="step.status === 'approved'">{{ t.approvalFlow.approvedBy }}</template>
+                                <template v-else-if="step.status === 'rejected'">{{ t.approvalFlow.rejectedBy }}</template>
+                                <template v-else>{{ t.approvalFlow.pending }}</template>
+                                <span v-if="step.acted_at"> · {{ fmtDateTime(step.acted_at) }}</span>
+                            </p>
+                            <p
+                                v-if="step.note"
+                                class="mt-1 rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600"
+                            >
+                                <i class="fa-solid fa-quote-left mr-1 text-[10px] text-slate-300" />
+                                {{ step.note }}
+                            </p>
+                        </div>
+                    </li>
+                </ol>
+            </div>
+
+            <template #footer>
+                <button
+                    type="button"
+                    class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                    @click="chainOpen = false"
+                >
+                    {{ t.approvalFlow.cancel }}
                 </button>
             </template>
         </Drawer>

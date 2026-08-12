@@ -4,9 +4,11 @@ use App\Http\Controllers\ApprovalSettingController;
 use App\Http\Controllers\CompetencyAssessmentController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EmployeeController;
+use App\Http\Controllers\IdpApprovalController;
 use App\Http\Controllers\IdpController;
 use App\Http\Controllers\IdpSettingController;
 use App\Http\Controllers\ImportController;
+use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\PerformanceAppraisalController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\ResultSummaryController;
@@ -77,6 +79,19 @@ Route::middleware('auth')->group(function () use ($stub) {
     Route::post('/idp', [IdpController::class, 'store'])->name('idp.store');
     Route::put('/idp/{idp}', [IdpController::class, 'update'])->name('idp.update');
     Route::delete('/idp/{idp}', [IdpController::class, 'destroy'])->name('idp.destroy');
+
+    // --- IDP approval runtime (staged L1 → L2 → … per item) ---
+    // Submitting is gated by IDP visibility; approving is gated on being the
+    // current-layer approver (enforced in the service), so no permission needed.
+    Route::post('/idp/{idp}/submit-approval', [IdpApprovalController::class, 'submit'])->name('idp.approval.submit');
+    Route::post('/idp/{employeeId}/submit-all-approval', [IdpApprovalController::class, 'submitAll'])->name('idp.approval.submit_all');
+    Route::get('/approvals', [IdpApprovalController::class, 'inbox'])->name('approvals.inbox');
+    Route::post('/idp-approvals/{idpApproval}/approve', [IdpApprovalController::class, 'approve'])->name('idp.approval.approve');
+    Route::post('/idp-approvals/{idpApproval}/reject', [IdpApprovalController::class, 'reject'])->name('idp.approval.reject');
+
+    // --- In-app notifications ---
+    Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
+    Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead'])->name('notifications.read_all');
 
     // --- Reports ---
     Route::middleware('permission:view_report_menu')->group(function () {

@@ -23,5 +23,6 @@ class Role extends SpatieRole
         'business_unit' => 'array',
         'company' => 'array',
         'location' => 'array',
+        'is_data_access' => 'boolean',
     ];
 }

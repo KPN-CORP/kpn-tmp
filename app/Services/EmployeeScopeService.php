@@ -43,8 +43,11 @@ class EmployeeScopeService
             return $query;
         }
 
-        // Roles that actually carry business-unit / company / location scopes.
-        $scopedRoles = $roles->reject(fn ($role) => $this->roleIsUnscoped($role));
+        // Basic roles that actually carry business-unit / company / location
+        // scopes (data-access roles are auto-applied, never a visibility source).
+        $scopedRoles = $roles
+            ->reject(fn ($role) => $role->is_data_access)
+            ->reject(fn ($role) => $this->roleIsUnscoped($role));
 
         if ($scopedRoles->isNotEmpty()) {
             return $this->applyScopes($query, $scopedRoles);
@@ -72,51 +75,54 @@ class EmployeeScopeService
     }
 
     /**
-     * Employees the user may access for a specific Data Access capability. The
-     * broad tiers are unchanged — Superadmin sees everyone, scoped roles see
-     * their business unit / company / location — and they bypass the ic_ / pm_
-     * capability gate. Otherwise access is granted per permission:
+     * Employees the user may access for a specific Data Access capability, as the
+     * UNION of two independent sources:
      *
-     *   - $selfPermission  → the user's OWN record (Individual Contributor tier).
-     *   - $teamPermission  → the user's direct reportees (People Manager tier),
-     *     resolved from Employee::reporteeIds(). "Team only": the manager's own
-     *     record still comes from $selfPermission, not from the team grant.
+     *   1. Basic (assigned) roles that carry an object-visibility Access Scope —
+     *      e.g. an HC Site admin whose role is scoped to a business unit sees
+     *      that unit's employees. Superadmin sees everyone.
+     *   2. Data Access roles that AUTO-APPLY to this user because their own
+     *      employee record falls within the role's Access Scope (a data role with
+     *      no scope applies to everyone). Such a role grants:
+     *        - $selfPermission → the user's OWN record (Individual Contributor)
+     *        - $teamPermission → the user's direct reportees (People Manager)
      *
-     * A user with neither permission (and no broad role) sees nothing.
+     * A user reached by neither source sees nothing (deny by default).
      */
     public function accessibleQuery(User $user, string $selfPermission, string $teamPermission): Builder
     {
         $query = Employee::query();
-        $roles = $user->roles;
 
-        if ($roles->contains(fn ($role) => strcasecmp((string) $role->name, self::SUPERADMIN_ROLE) === 0)) {
+        if ($this->isSuperadmin($user)) {
             return $query;
         }
 
-        $scopedRoles = $roles->reject(fn ($role) => $this->roleIsUnscoped($role));
+        // (1) Object visibility from assigned, scoped BASIC roles.
+        $scopedRoles = $user->roles
+            ->reject(fn ($role) => $role->is_data_access)
+            ->reject(fn ($role) => $this->roleIsUnscoped($role));
 
-        if ($scopedRoles->isNotEmpty()) {
-            return $this->applyScopes($query, $scopedRoles);
-        }
+        // (2) Data-access capabilities that auto-apply to this user.
+        $dataPermissions = $this->effectiveDataPermissions($user);
+        $hasSelf = $user->employee_id && in_array($selfPermission, $dataPermissions);
+        $hasTeam = in_array($teamPermission, $dataPermissions);
+        $teamIds = $hasTeam ? $this->teamIds($user) : [];
 
-        $ids = collect();
-
-        if ($user->employee_id && $user->can($selfPermission)) {
-            $ids->push((string) $user->employee_id);
-        }
-
-        if ($user->can($teamPermission)) {
-            $ids = $ids->merge($this->teamIds($user));
-        }
-
-        $ids = $ids->filter()->unique()->values();
-
-        if ($ids->isEmpty()) {
-            // No matching capability and no broad role — see nothing.
+        if ($scopedRoles->isEmpty() && ! $hasSelf && ! $hasTeam) {
             return $query->whereRaw('1 = 0');
         }
 
-        return $query->whereIn('employee_id', $ids->all());
+        return $query->where(function (Builder $outer) use ($scopedRoles, $hasSelf, $hasTeam, $teamIds, $user) {
+            foreach ($scopedRoles as $role) {
+                $outer->orWhere(fn (Builder $q) => $this->applyAttributeFilter($q, $role));
+            }
+            if ($hasSelf) {
+                $outer->orWhere('employee_id', $user->employee_id);
+            }
+            if ($hasTeam && ! empty($teamIds)) {
+                $outer->orWhereIn('employee_id', $teamIds);
+            }
+        });
     }
 
     /**
@@ -130,6 +136,72 @@ class EmployeeScopeService
     }
 
     /**
+     * The Data Access permission names that auto-apply to this user — the union
+     * of every data-access role whose Access Scope contains the user's own
+     * employee record (an unscoped data role applies to everyone).
+     *
+     * @return list<string>
+     */
+    public function effectiveDataPermissions(User $user): array
+    {
+        $employee = $this->userEmployee($user);
+
+        return Role::query()
+            ->where('is_data_access', true)
+            ->with('permissions:id,name')
+            ->get()
+            ->filter(fn (Role $role) => $this->dataRoleApplies($role, $employee))
+            ->flatMap(fn (Role $role) => $role->permissions->pluck('name'))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Whether a data-access role applies to the given employee — i.e. the
+     * employee falls within every scope dimension the role sets (AND within a
+     * role). A role with no scope at all applies to everyone.
+     */
+    private function dataRoleApplies(Role $role, ?Employee $employee): bool
+    {
+        if ($this->roleIsUnscoped($role)) {
+            return true;
+        }
+
+        if (! $employee) {
+            return false;
+        }
+
+        if (! empty($role->business_unit) && ! in_array($employee->group_company, $role->business_unit)) {
+            return false;
+        }
+        if (! empty($role->company) && ! in_array($employee->company_name, $role->company)) {
+            return false;
+        }
+        if (! empty($role->location) && ! in_array($employee->office_area, $role->location)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function isSuperadmin(User $user): bool
+    {
+        return $user->roles->contains(
+            fn ($role) => strcasecmp((string) $role->name, self::SUPERADMIN_ROLE) === 0
+        );
+    }
+
+    private function userEmployee(User $user): ?Employee
+    {
+        if (blank($user->employee_id)) {
+            return null;
+        }
+
+        return Employee::where('employee_id', $user->employee_id)->first();
+    }
+
+    /**
      * employee_ids of the user's direct reportees (their team), or [] if the
      * user has no employee record / no reports.
      *
@@ -137,18 +209,30 @@ class EmployeeScopeService
      */
     private function teamIds(User $user): array
     {
-        if (blank($user->employee_id)) {
-            return [];
-        }
-
-        $employee = Employee::where('employee_id', $user->employee_id)->first();
+        $employee = $this->userEmployee($user);
 
         return $employee ? $employee->reporteeIds() : [];
     }
 
     /**
-     * Constrain a query to the union of a set of scoped roles' business unit /
-     * company / location filters (AND within a role, OR across roles).
+     * Apply one role's business unit / company / location filter (AND together).
+     */
+    private function applyAttributeFilter(Builder $q, Role $role): void
+    {
+        if (! empty($role->business_unit)) {
+            $q->whereIn('group_company', $role->business_unit);
+        }
+        if (! empty($role->company)) {
+            $q->whereIn('company_name', $role->company);
+        }
+        if (! empty($role->location)) {
+            $q->whereIn('office_area', $role->location);
+        }
+    }
+
+    /**
+     * Constrain a query to the union of a set of scoped roles' filters (AND
+     * within a role, OR across roles). Used by the legacy query() tier.
      *
      * @param  Collection<int, Role>  $scopedRoles
      */
@@ -156,17 +240,7 @@ class EmployeeScopeService
     {
         return $query->where(function (Builder $outer) use ($scopedRoles) {
             foreach ($scopedRoles as $role) {
-                $outer->orWhere(function (Builder $q) use ($role) {
-                    if (! empty($role->business_unit)) {
-                        $q->whereIn('group_company', $role->business_unit);
-                    }
-                    if (! empty($role->company)) {
-                        $q->whereIn('company_name', $role->company);
-                    }
-                    if (! empty($role->location)) {
-                        $q->whereIn('office_area', $role->location);
-                    }
-                });
+                $outer->orWhere(fn (Builder $q) => $this->applyAttributeFilter($q, $role));
             }
         });
     }

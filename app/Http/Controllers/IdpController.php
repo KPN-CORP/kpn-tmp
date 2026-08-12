@@ -132,7 +132,8 @@ class IdpController extends Controller
 
         return Inertia::render('Idp/Manage', array_merge(
             ['employee' => new EmployeeResource($employee)],
-            $this->idp->manageData($employeeId),
+            // The manage screen may edit + submit the IDP for approval.
+            $this->idp->manageData($employeeId, $user, canManage: true),
         ));
     }
 

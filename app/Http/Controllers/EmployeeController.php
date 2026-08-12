@@ -150,7 +150,7 @@ class EmployeeController extends Controller
 
         $resultSummary = ResultSummary::where('employee_id', $employeeId)->first();
 
-        return Inertia::render('Facecard/Profile', array_merge($this->idp->manageData($employeeId), [
+        return Inertia::render('Facecard/Profile', array_merge($this->idp->manageData($employeeId, $user), [
             'employee' => new EmployeeResource($employee),
             'photoUrl' => $this->photoUrl($employeeId),
             'formalEducations' => $this->safeGet(fn () => FormalEducation::where('employee_id', $employeeId)

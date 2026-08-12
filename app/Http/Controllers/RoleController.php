@@ -19,6 +19,9 @@ class RoleController extends Controller
     /** Seeded roles that must not be deleted. */
     private const PROTECTED_ROLES = ['Superadmin', 'Superior', 'Admin', User::BASELINE_ROLE];
 
+    /** The permission group that belongs on the Data Access tab. */
+    private const DATA_ACCESS_GROUP = 'Data Access Permission';
+
     public function index(): Response
     {
         $roles = Role::with('permissions:id,name')->orderBy('name')->get()
@@ -29,26 +32,39 @@ class RoleController extends Controller
                 'company' => $role->company ?? [],
                 'location' => $role->location ?? [],
                 'permissions' => $role->permissions->pluck('name'),
-                // The baseline role is granted automatically on login, so its
-                // membership is effectively "everyone who has signed in" — not
-                // worth enumerating or managing by hand.
-                'members' => $this->isDefaultRole($role)
+                // Data-access roles auto-apply by scope, so they carry no member
+                // list; basic roles list their assigned members.
+                'members' => $role->is_data_access
                     ? []
                     : User::whereIn((new User)->getKeyName(), $this->userIdsWithRole($role))
                         ->pluck('employee_id')->filter()->values(),
                 'protected' => in_array($role->name, self::PROTECTED_ROLES, true),
                 'default' => $this->isDefaultRole($role),
+                'is_data_access' => (bool) $role->is_data_access,
             ]);
+
+        $permissions = Permission::orderBy('group')->orderBy('section')->orderBy('name')->get();
 
         return Inertia::render('Admin/Roles', [
             'roles' => $roles,
-            'permissionGroups' => Permission::orderBy('group')->orderBy('section')->orderBy('name')->get()
+            // Functional permissions (everything except the Data Access group) for
+            // the Permissions tab, grouped by group.
+            'permissionGroups' => $permissions
+                ->where('group', '!=', self::DATA_ACCESS_GROUP)
                 ->groupBy('group')
                 ->map(fn ($group) => $group->map(fn ($p) => [
                     'name' => $p->name,
                     'label' => $p->label ?? $p->name,
                     'section' => $p->section ?? '',
                 ])),
+            // The Data Access capabilities for the Data Access tab.
+            'dataAccessPermissions' => $permissions
+                ->where('group', self::DATA_ACCESS_GROUP)
+                ->map(fn ($p) => [
+                    'name' => $p->name,
+                    'label' => $p->label ?? $p->name,
+                    'section' => $p->section ?? '',
+                ])->values(),
             'scopeOptions' => $this->scopeOptions(),
             'users' => User::whereNotNull('employee_id')->orderBy('name')
                 ->get(['employee_id', 'name'])
@@ -77,6 +93,7 @@ class RoleController extends Controller
     public function store(Request $request): RedirectResponse
     {
         $data = $this->validateRole($request);
+        $isData = (bool) ($data['is_data_access'] ?? false);
 
         $role = Role::create([
             'name' => $data['name'],
@@ -84,10 +101,13 @@ class RoleController extends Controller
             'business_unit' => $data['business_unit'] ?? [],
             'company' => $data['company'] ?? [],
             'location' => $data['location'] ?? [],
+            'is_data_access' => $isData,
         ]);
 
         $role->syncPermissions($data['permissions'] ?? []);
-        if (! $this->isDefaultRole($role)) {
+
+        // Data-access roles auto-apply by scope; only basic roles carry members.
+        if (! $isData) {
             $this->syncMembers($role, $data['members'] ?? []);
         }
 
@@ -97,11 +117,13 @@ class RoleController extends Controller
     public function update(Request $request, Role $role): RedirectResponse
     {
         $isDefault = $this->isDefaultRole($role);
+        // A role's kind (basic vs data-access) is fixed once created.
+        $isData = (bool) $role->is_data_access;
         $data = $this->validateRole($request, $role);
 
         $role->update([
-            // The default role's name is referenced by the login provisioning
-            // hook (User::BASELINE_ROLE), so it must not be renamed.
+            // The default role's name is referenced elsewhere (User::BASELINE_ROLE),
+            // so it must not be renamed.
             'name' => $isDefault ? $role->name : $data['name'],
             'business_unit' => $data['business_unit'] ?? [],
             'company' => $data['company'] ?? [],
@@ -109,7 +131,8 @@ class RoleController extends Controller
         ]);
 
         $role->syncPermissions($data['permissions'] ?? []);
-        if (! $isDefault) {
+
+        if (! $isData) {
             $this->syncMembers($role, $data['members'] ?? []);
         }
 
@@ -146,6 +169,7 @@ class RoleController extends Controller
             'business_unit' => ['nullable', 'array'],
             'company' => ['nullable', 'array'],
             'location' => ['nullable', 'array'],
+            'is_data_access' => ['boolean'],
             'permissions' => ['nullable', 'array'],
             'permissions.*' => ['string', 'exists:permissions,name'],
             'members' => ['nullable', 'array'],

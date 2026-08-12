@@ -35,6 +35,12 @@ export const navigation: NavItem[] = [
         icon: 'fa-solid fa-seedling',
         href: '/idp',
     },
+    {
+        section: 'main',
+        label: 'approvals',
+        icon: 'fa-solid fa-circle-check',
+        href: '/approvals',
+    },
 
     // --- Talent ---
     {

@@ -110,12 +110,6 @@ class DevLoginController extends Controller
             ],
         );
 
-        // Every provisioned user gets the baseline self-service role so deny-by-
-        // default Data Access never locks them out of their own record.
-        if (! $user->hasRole(User::BASELINE_ROLE)) {
-            $user->assignRole(User::BASELINE_ROLE);
-        }
-
         Auth::login($user);
         $request->session()->forget('dev_login_verified');
         $request->session()->regenerate();
