@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\DevelopmentModel;
+use App\Models\DevelopmentModelPackage;
 use App\Models\DevelopmentPlanMaster;
 use App\Models\Employee;
 use App\Models\IdpApproval;
@@ -28,12 +29,29 @@ class IdpService
      */
     public function manageData(string $employeeId, ?User $viewer = null, bool $canManage = false): array
     {
-        $models = DevelopmentModel::orderByDesc('percentage')->orderBy('name')->get();
-
         $plans = IndividualDevelopmentPlan::where('employee_id', $employeeId)
             ->orderByDesc('id')
             ->get()
             ->groupBy('development_model_id');
+
+        // New plans may only be filed under the active package's models. Older
+        // plans still point at models from a previous package, so include those
+        // (read-only) too and flag which models accept new plans.
+        $activePackageId = DevelopmentModelPackage::active()?->id;
+
+        $activeModels = DevelopmentModel::when(
+            $activePackageId,
+            fn ($q) => $q->where('development_model_package_id', $activePackageId),
+            fn ($q) => $q->whereRaw('1 = 0'),
+        )->orderByDesc('percentage')->orderBy('name')->get();
+
+        $activeIds = $activeModels->pluck('id')->all();
+
+        $historicalModels = DevelopmentModel::whereIn('id', $plans->keys()->filter())
+            ->whereNotIn('id', $activeIds ?: [0])
+            ->orderByDesc('percentage')->orderBy('name')->get();
+
+        $models = $activeModels->concat($historicalModels);
 
         $approvalFor = $this->approvalResolver($employeeId, $viewer, $canManage);
 
@@ -85,6 +103,9 @@ class IdpService
                 'percentage' => $m->percentage,
                 'description_en' => $m->description_en,
                 'description_id' => $m->description_id,
+                // Only active-package models accept new plans; historical ones
+                // are shown read-only so past plans stay visible.
+                'can_add' => in_array($m->id, $activeIds, true),
                 'plans' => ($plans->get($m->id) ?? collect())
                     ->map(fn ($p) => array_merge($p->toArray(), ['approval' => $approvalFor($p)]))
                     ->values(),

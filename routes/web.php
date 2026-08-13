@@ -113,6 +113,10 @@ Route::middleware('auth')->group(function () use ($stub) {
     Route::middleware('permission:view_idp_master')->group(function () {
         Route::get('/idp-setting', [IdpSettingController::class, 'index'])->name('idp.setting.index');
 
+        Route::post('/idp-setting/packages', [IdpSettingController::class, 'storePackage'])->name('idp.setting.packages.store');
+        Route::put('/idp-setting/packages/{developmentModelPackage}', [IdpSettingController::class, 'updatePackage'])->name('idp.setting.packages.update');
+        Route::delete('/idp-setting/packages/{developmentModelPackage}', [IdpSettingController::class, 'destroyPackage'])->name('idp.setting.packages.destroy');
+
         Route::post('/idp-setting/models', [IdpSettingController::class, 'storeModel'])->name('idp.setting.models.store');
         Route::put('/idp-setting/models/{developmentModel}', [IdpSettingController::class, 'updateModel'])->name('idp.setting.models.update');
         Route::delete('/idp-setting/models/{developmentModel}', [IdpSettingController::class, 'destroyModel'])->name('idp.setting.models.destroy');

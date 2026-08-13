@@ -18,12 +18,21 @@ class UpdateDevelopmentModelRequest extends FormRequest
      */
     public function rules(): array
     {
-        $modelId = $this->route('developmentModel')->id;
+        $model = $this->route('developmentModel');
+        $modelId = $model->id;
+        // A model stays in its package on edit; scope uniqueness / the running
+        // percentage sum to that package.
+        $packageId = $model->development_model_package_id;
 
         return [
-            'name_en' => ['required', 'string', 'max:255', Rule::unique('development_models', 'name')->ignore($modelId)],
+            'name_en' => [
+                'required', 'string', 'max:255',
+                Rule::unique('development_models', 'name')
+                    ->where('development_model_package_id', $packageId)
+                    ->ignore($modelId),
+            ],
             'name_id' => ['nullable', 'string', 'max:255'],
-            'percentage' => ['required', 'integer', 'min:1', new SumPercentageCheck($modelId)],
+            'percentage' => ['required', 'integer', 'min:1', new SumPercentageCheck($packageId, $modelId)],
             'description_en' => ['nullable', 'string'],
             'description_id' => ['nullable', 'string'],
             'replace_with' => ['nullable', 'integer', 'exists:development_models,id'],

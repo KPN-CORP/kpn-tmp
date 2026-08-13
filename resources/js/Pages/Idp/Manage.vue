@@ -28,6 +28,7 @@ interface Model {
     percentage: number
     description_en: string | null
     description_id: string | null
+    can_add: boolean
     plans: Plan[]
 }
 

@@ -58,6 +58,9 @@ interface Model {
     percentage: number
     description_en: string | null
     description_id: string | null
+    // Only models in the active package accept new plans; historical models
+    // (from a previous package) render read-only.
+    can_add: boolean
     plans: Plan[]
 }
 
@@ -530,8 +533,16 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                             {{ model.percentage }}%
                         </span>
                     </div>
+                    <span
+                        v-if="!model.can_add"
+                        class="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500"
+                        :title="t.idp.historicalModelHint"
+                    >
+                        <i class="fa-solid fa-clock-rotate-left text-[10px]" />
+                        {{ t.idp.historicalModel }}
+                    </span>
                     <button
-                        v-if="canEdit"
+                        v-if="canEdit && model.can_add"
                         type="button"
                         class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-hover"
                         @click="openCreate(model.id)"
@@ -732,7 +743,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                     </div>
                     <p class="text-sm text-slate-400">{{ t.idp.noPlans }}</p>
                     <button
-                        v-if="canEdit"
+                        v-if="canEdit && model.can_add"
                         type="button"
                         class="inline-flex items-center gap-1.5 rounded-md border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
                         @click="openCreate(model.id)"
