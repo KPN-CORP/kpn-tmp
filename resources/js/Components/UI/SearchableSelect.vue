@@ -15,6 +15,7 @@ const props = defineProps<{
     options: Option[]
     placeholder?: string
     invalid?: boolean
+    disabled?: boolean
 }>()
 
 const emit = defineEmits<{ (e: 'update:modelValue', value: string): void }>()
@@ -34,6 +35,7 @@ const filtered = computed(() => {
 })
 
 function toggle() {
+    if (props.disabled) return
     open.value = !open.value
     if (open.value) {
         search.value = ''
@@ -58,8 +60,12 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
     <div ref="root" class="relative">
         <button
             type="button"
-            class="flex w-full items-center justify-between gap-2 rounded-md border bg-white px-3 py-2.5 text-left text-sm transition focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            :class="invalid ? 'border-red-500' : 'border-border'"
+            :disabled="disabled"
+            class="flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2.5 text-left text-sm transition focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60"
+            :class="[
+                invalid ? 'border-red-500' : 'border-border',
+                disabled ? 'bg-slate-50' : 'bg-white',
+            ]"
             @click="toggle"
         >
             <span class="truncate" :class="selectedLabel ? 'text-slate-700' : 'text-slate-400'">

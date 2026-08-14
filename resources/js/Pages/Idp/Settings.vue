@@ -338,6 +338,9 @@ const masterModal = ref(false)
 const masterType = ref<MasterType>('competency_name')
 const editingMasterId = ref<number | null>(null)
 
+// For a development program, the model dropdown is scoped to a chosen package.
+const masterPackageId = ref<number | null>(null)
+
 // Both competencies and competency types carry a bilingual description.
 const masterHasDescription = computed(
     () =>
@@ -400,6 +403,20 @@ function openMaster(
 
     masterForm.development_model_id =
         (item as Program)?.development_model_id ?? null
+
+    // Resolve the package the model dropdown should be scoped to: from the
+    // program's current model when editing, else default to the active package.
+    if (type === 'development_program') {
+        const modelId = (item as Program)?.development_model_id ?? null
+        const model =
+            modelId != null
+                ? props.developmentModels.find((m) => m.id === modelId)
+                : null
+        masterPackageId.value =
+            model?.development_model_package_id ?? props.activePackageId ?? null
+    } else {
+        masterPackageId.value = null
+    }
 
     masterForm.competency_type_id =
         (item as Competency)?.competency_type_id ?? null
@@ -477,14 +494,42 @@ const masterTitle = () => {
     return `${prefix} ${type}`
 }
 
-// Development models as dropdown options — existing models only (no empty
-// entry), with the weighting shown after the name so it's clear at a glance.
-const modelOptions = computed<Option[]>(() =>
-    props.developmentModels.map((m) => ({
-        value: String(m.id),
-        label: `${modelName(m)} (${m.percentage}%)`,
+// Packages as dropdown options (active one flagged) for the program form.
+const packageOptions = computed<Option[]>(() =>
+    props.packages.map((p) => ({
+        value: String(p.id),
+        label: p.is_active
+            ? `${p.name} · ${t.value.idp.settings.activeBadge}`
+            : p.name,
     })),
 )
+
+// Development models for the chosen package only — the weighting is shown after
+// the name so it's clear at a glance. Empty until a package is picked.
+const packageModelOptions = computed<Option[]>(() =>
+    masterPackageId.value == null
+        ? []
+        : props.developmentModels
+              .filter(
+                  (m) => m.development_model_package_id === masterPackageId.value,
+              )
+              .map((m) => ({
+                  value: String(m.id),
+                  label: `${modelName(m)} (${m.percentage}%)`,
+              })),
+)
+
+// Switching package clears a model that no longer belongs to it.
+function onProgramPackageChange(value: string) {
+    masterPackageId.value = value === '' ? null : Number(value)
+
+    const model = props.developmentModels.find(
+        (m) => m.id === masterForm.development_model_id,
+    )
+    if (!model || model.development_model_package_id !== masterPackageId.value) {
+        masterForm.development_model_id = null
+    }
+}
 
 // Competencies as MultiSelect options (string values — MultiSelect binds string[]).
 const competencyOptions = computed<Option[]>(() =>
@@ -2339,7 +2384,25 @@ watch(programTotalPages, (total) => {
                     />
                 </div>
 
-                <!-- Development program -> Development model -->
+                <!-- Development program -> Model package (scopes the model list) -->
+                <div v-if="masterType === 'development_program'">
+                    <label
+                        class="mb-1.5 block text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.modelPackage }}
+                    </label>
+
+                    <SearchableSelect
+                        :model-value="
+                            masterPackageId == null ? '' : String(masterPackageId)
+                        "
+                        :options="packageOptions"
+                        :placeholder="t.idp.settings.packagePickHint"
+                        @update:model-value="onProgramPackageChange($event)"
+                    />
+                </div>
+
+                <!-- Development program -> Development model (within package) -->
                 <div v-if="masterType === 'development_program'">
                     <label
                         class="mb-1.5 block text-sm font-medium text-slate-700"
@@ -2356,8 +2419,13 @@ watch(programTotalPages, (total) => {
                                 ? ''
                                 : String(masterForm.development_model_id)
                         "
-                        :options="modelOptions"
-                        :placeholder="t.idp.settings.modelPickHint"
+                        :options="packageModelOptions"
+                        :disabled="masterPackageId == null"
+                        :placeholder="
+                            masterPackageId == null
+                                ? t.idp.settings.selectPackageFirst
+                                : t.idp.settings.modelPickHint
+                        "
                         @update:model-value="
                             masterForm.development_model_id =
                                 $event === '' ? null : Number($event)
