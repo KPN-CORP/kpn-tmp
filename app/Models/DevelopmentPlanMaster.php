@@ -6,6 +6,7 @@ use Database\Factories\DevelopmentPlanMasterFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class DevelopmentPlanMaster extends Model
 {
@@ -32,5 +33,35 @@ class DevelopmentPlanMaster extends Model
     public function competencyType(): BelongsTo
     {
         return $this->belongsTo(self::class, 'competency_type_id');
+    }
+
+    /**
+     * The proficiency level chosen for this competency (competency_name row).
+     * Self-referencing: the parent is a `proficiency_level` row in this table.
+     */
+    public function proficiencyLevel(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'proficiency_level_id');
+    }
+
+    /**
+     * The key behavior pinned for this competency (competency_name row), if any.
+     * Self-referencing: the parent is a `key_behavior` row under the chosen
+     * proficiency level.
+     */
+    public function keyBehavior(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'key_behavior_id');
+    }
+
+    /**
+     * The key behaviors defined under this proficiency level (proficiency_level
+     * row). Self-referencing: children are `key_behavior` rows that point back
+     * via proficiency_level_id. One proficiency level has many key behaviors.
+     */
+    public function keyBehaviors(): HasMany
+    {
+        return $this->hasMany(self::class, 'proficiency_level_id')
+            ->where('type', 'key_behavior');
     }
 }

@@ -5,13 +5,24 @@ import type { LocaleMessages } from '@/Config/locales'
  * locale keys (resolved in `useNavigation`), not literal strings, so the menu
  * translates for free. `permission`, when set, gates the item against the
  * user's shared permissions — leave it off for always-visible items.
+ *
+ * An item may either link somewhere (`href`) or act as a collapsible parent
+ * that groups `children`. A parent shows in the menu when at least one of its
+ * children survives the permission filter.
  */
+export interface NavChild {
+    label: keyof LocaleMessages['nav']
+    href: string
+    permission?: string
+}
+
 export interface NavItem {
     section: keyof LocaleMessages['nav']
     label: keyof LocaleMessages['nav']
     icon: string
-    href: string
+    href?: string
     permission?: string
+    children?: NavChild[]
 }
 
 export const navigation: NavItem[] = [
@@ -63,8 +74,34 @@ export const navigation: NavItem[] = [
         section: 'administration',
         label: 'idpSetting',
         icon: 'fa-solid fa-sliders',
-        href: '/idp-setting',
         permission: 'view_idp_master',
+        children: [
+            {
+                label: 'idpSettingDevelopmentModel',
+                href: '/idp-setting/development-model',
+                permission: 'view_idp_master',
+            },
+            {
+                label: 'idpSettingProficiencyLevel',
+                href: '/idp-setting/proficiency-level',
+                permission: 'view_idp_master',
+            },
+            {
+                label: 'idpSettingCompetency',
+                href: '/idp-setting/competency',
+                permission: 'view_idp_master',
+            },
+            {
+                label: 'idpSettingReviewTools',
+                href: '/idp-setting/review-tools',
+                permission: 'view_idp_master',
+            },
+            {
+                label: 'idpSettingMasterData',
+                href: '/idp-setting',
+                permission: 'view_idp_master',
+            },
+        ],
     },
     {
         section: 'administration',

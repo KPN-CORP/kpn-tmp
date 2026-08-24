@@ -20,9 +20,15 @@ const props = withDefaults(
         perPage?: number
         initialSort?: { key: string; dir: 'asc' | 'desc' } | null
         emptyText?: string
+        // When true, rows are clickable (cursor + hover) and emit `row-click`;
+        // the row whose `rowKey` matches `selectedKey` is highlighted.
+        selectable?: boolean
+        selectedKey?: string | number | null
     }>(),
-    { perPage: 5, initialSort: null, emptyText: 'No data.' },
+    { perPage: 5, initialSort: null, emptyText: 'No data.', selectable: false, selectedKey: null },
 )
+
+const emit = defineEmits<{ (e: 'row-click', row: Record<string, any>): void }>()
 
 const sortKey = ref(props.initialSort?.key ?? '')
 const sortDir = ref<'asc' | 'desc'>(props.initialSort?.dir ?? 'asc')
@@ -124,7 +130,14 @@ function isActive(col: Column) {
                     <tr
                         v-for="(row, i) in pageRows"
                         :key="rowKeyVal(row, i)"
-                        class="group border-b border-border/60 transition last:border-0 hover:bg-slate-50/70"
+                        class="group border-b border-border/60 transition last:border-0"
+                        :class="[
+                            selectable ? 'cursor-pointer' : '',
+                            selectable && rowKeyVal(row, i) === selectedKey
+                                ? 'bg-primary/5 hover:bg-primary/10'
+                                : 'hover:bg-slate-50/70',
+                        ]"
+                        @click="selectable && emit('row-click', row)"
                     >
                         <td
                             v-for="col in columns"

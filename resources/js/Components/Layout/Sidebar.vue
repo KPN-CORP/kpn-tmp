@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Link, router, usePage } from '@inertiajs/vue3'
-import { computed } from 'vue'
+import { computed, reactive } from 'vue'
 import { useNavigation } from '@/Composables/useNavigation'
 import { useLocale } from '@/Composables/useLocale'
 
@@ -34,6 +34,30 @@ const groupedMenus = computed(() =>
 function isActive(href: string) {
     const url = page.url
     return url === href || url.startsWith(href + '/')
+}
+
+// Child links match exactly — sibling paths can share a prefix (e.g.
+// `/idp-setting` vs `/idp-setting/development-model`), so prefix matching would
+// light up more than one.
+function isChildActive(href: string) {
+    return page.url === href
+}
+
+// A parent dropdown is "active" when any of its children is the current page.
+function isParentActive(children?: { href: string }[]) {
+    return !!children?.some((c) => isActive(c.href))
+}
+
+// Which dropdowns are expanded. Keyed by parent label; a parent holding the
+// active page starts open.
+const expanded = reactive<Record<string, boolean>>({})
+
+function isExpanded(menu: (typeof menus.value)[number]) {
+    return expanded[menu.label] ?? isParentActive(menu.children)
+}
+
+function toggle(menu: (typeof menus.value)[number]) {
+    expanded[menu.label] = !isExpanded(menu)
 }
 </script>
 
@@ -79,23 +103,59 @@ function isActive(href: string) {
                     {{ section }}
                 </div>
 
-                <Link
-                    v-for="menu in items"
-                    :key="menu.href"
-                    :href="menu.href"
-                    class="flex items-center gap-3 border-l-4 border-transparent px-6 py-3 text-sm transition-all"
-                    :class="
-                        isActive(menu.href)
-                            ? 'border-primary bg-red-50 font-bold text-primary'
-                            : 'text-text hover:bg-red-50 hover:text-primary'
-                    "
-                >
-                    <i
-                        :class="menu.icon"
-                        class="w-5 text-center"
-                    />
-                    <span>{{ menu.label }}</span>
-                </Link>
+                <template v-for="menu in items" :key="menu.label">
+                    <!-- Collapsible parent (has children) -->
+                    <template v-if="menu.children">
+                        <button
+                            type="button"
+                            class="flex w-full items-center gap-3 border-l-4 border-transparent px-6 py-3 text-sm transition-all"
+                            :class="
+                                isParentActive(menu.children)
+                                    ? 'border-primary bg-red-50 font-bold text-primary'
+                                    : 'text-text hover:bg-red-50 hover:text-primary'
+                            "
+                            @click="toggle(menu)"
+                        >
+                            <i :class="menu.icon" class="w-5 text-center" />
+                            <span>{{ menu.label }}</span>
+                            <i
+                                class="fa-solid fa-chevron-down ml-auto text-xs transition-transform"
+                                :class="isExpanded(menu) ? 'rotate-180' : ''"
+                            />
+                        </button>
+
+                        <div v-show="isExpanded(menu)" class="bg-slate-50/40">
+                            <Link
+                                v-for="child in menu.children"
+                                :key="child.href"
+                                :href="child.href"
+                                class="flex items-center gap-3 border-l-4 border-transparent py-2.5 pl-14 pr-6 text-sm transition-all"
+                                :class="
+                                    isChildActive(child.href)
+                                        ? 'border-primary bg-red-50 font-bold text-primary'
+                                        : 'text-text hover:bg-red-50 hover:text-primary'
+                                "
+                            >
+                                <span>{{ child.label }}</span>
+                            </Link>
+                        </div>
+                    </template>
+
+                    <!-- Plain link -->
+                    <Link
+                        v-else-if="menu.href"
+                        :href="menu.href"
+                        class="flex items-center gap-3 border-l-4 border-transparent px-6 py-3 text-sm transition-all"
+                        :class="
+                            isActive(menu.href)
+                                ? 'border-primary bg-red-50 font-bold text-primary'
+                                : 'text-text hover:bg-red-50 hover:text-primary'
+                        "
+                    >
+                        <i :class="menu.icon" class="w-5 text-center" />
+                        <span>{{ menu.label }}</span>
+                    </Link>
+                </template>
             </div>
         </nav>
 

@@ -112,6 +112,10 @@ Route::middleware('auth')->group(function () use ($stub) {
     // --- Administration ---
     Route::middleware('permission:view_idp_master')->group(function () {
         Route::get('/idp-setting', [IdpSettingController::class, 'index'])->name('idp.setting.index');
+        Route::get('/idp-setting/development-model', [IdpSettingController::class, 'developmentModel'])->name('idp.setting.development_model');
+        Route::get('/idp-setting/proficiency-level', [IdpSettingController::class, 'proficiencyLevel'])->name('idp.setting.proficiency_level');
+        Route::get('/idp-setting/competency', [IdpSettingController::class, 'competency'])->name('idp.setting.competency');
+        Route::get('/idp-setting/review-tools', [IdpSettingController::class, 'reviewTools'])->name('idp.setting.review_tools');
 
         Route::post('/idp-setting/packages', [IdpSettingController::class, 'storePackage'])->name('idp.setting.packages.store');
         Route::put('/idp-setting/packages/{developmentModelPackage}', [IdpSettingController::class, 'updatePackage'])->name('idp.setting.packages.update');

@@ -34,10 +34,13 @@ class IdpService
             ->get()
             ->groupBy('development_model_id');
 
-        // New plans may only be filed under the active package's models. Older
-        // plans still point at models from a previous package, so include those
-        // (read-only) too and flag which models accept new plans.
-        $activePackageId = DevelopmentModelPackage::active()?->id;
+        // New plans may only be filed under the active package's models. The
+        // active package is resolved per employee — the most specific package in
+        // effect today whose audience covers this employee's business unit and
+        // grade (null when nothing matches, so no model accepts new plans).
+        // Older plans still point at models from a previous package, so include
+        // those (read-only) too and flag which models accept new plans.
+        $activePackageId = DevelopmentModelPackage::activeForEmployeeId($employeeId)?->id;
 
         $activeModels = DevelopmentModel::when(
             $activePackageId,

@@ -2,6 +2,8 @@
 
 namespace App\Http\Requests;
 
+use App\Models\DevelopmentModel;
+use App\Models\DevelopmentModelPackage;
 use App\Models\DevelopmentPlanMaster;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
@@ -11,6 +13,24 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
     public function authorize(): bool
     {
         return $this->user() !== null;
+    }
+
+    /**
+     * The employee this plan is for. On create it comes from the payload.
+     */
+    protected function targetEmployeeId(): ?string
+    {
+        return $this->input('employee_id');
+    }
+
+    /**
+     * The plan's existing development model, if any. Null on create — used to
+     * let an existing plan keep a now-historical model on edit without tripping
+     * the active-package check.
+     */
+    protected function currentModelId(): ?int
+    {
+        return null;
     }
 
     /**
@@ -60,6 +80,10 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $validator) {
+            $this->validateModelInActivePackage($validator);
+        });
+
+        $validator->after(function (Validator $validator) {
             if ($this->input('competency_type') !== 'Soft Competency') {
                 return;
             }
@@ -89,5 +113,36 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
                 );
             }
         });
+    }
+
+    /**
+     * The chosen development model must belong to the package that is active for
+     * this employee — i.e. the package in effect today whose audience covers the
+     * employee's business unit and grade. Editing a plan without changing its
+     * model is exempt, so a plan filed under a now-historical package can still
+     * be revised.
+     */
+    protected function validateModelInActivePackage(Validator $validator): void
+    {
+        $employeeId = $this->targetEmployeeId();
+        $modelId = (int) $this->input('development_model_id');
+
+        if (! $employeeId || ! $modelId || $modelId === $this->currentModelId()) {
+            return;
+        }
+
+        $active = DevelopmentModelPackage::activeForEmployeeId($employeeId);
+
+        $belongs = $active !== null
+            && DevelopmentModel::where('id', $modelId)
+                ->where('development_model_package_id', $active->id)
+                ->exists();
+
+        if (! $belongs) {
+            $validator->errors()->add(
+                'development_model_id',
+                "The selected development model is not available for this employee's business unit and grade level.",
+            );
+        }
     }
 }
