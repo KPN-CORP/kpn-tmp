@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { Head, router, useForm } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
@@ -9,7 +9,7 @@ import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
-import Pagination from '@/Components/UI/Pagination.vue'
+import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t, locale } = useLocale()
@@ -46,6 +46,7 @@ interface Competency {
     description_en: string | null
     description_id: string | null
     competency_type_id: number | null
+    proficiency_level_id: number | null
     related_program: number[]
     linked_programs: string[]
 }
@@ -57,6 +58,26 @@ interface Program {
     value_id: string | null
     development_model_id: number | null
     model_name: string | null
+    competency_type_id: number | null
+    proficiency_level_id: number | null
+    custom_competency: string | null
+    custom_proficiency_level: string | null
+    business_unit: string | null
+    grade: string | null
+}
+
+interface CompetencyType {
+    id: number
+    value: string
+    value_en: string | null
+    value_id: string | null
+}
+
+interface ProficiencyLevel {
+    id: number
+    value: string
+    value_en: string | null
+    value_id: string | null
 }
 
 const props = defineProps<{
@@ -65,6 +86,10 @@ const props = defineProps<{
     activePackageId: number | null
     competencies: Competency[]
     developmentPrograms: Program[]
+    competencyTypes: CompetencyType[]
+    proficiencyLevels: ProficiencyLevel[]
+    businessUnits: string[]
+    grades: string[]
 }>()
 
 /**
@@ -132,8 +157,18 @@ const masterForm = useForm({
     value_en: '',
     value_id: '',
     development_model_id: null as number | null,
+    // Program → competency type (scopes the competency picker below).
+    competency_type_id: null as number | null,
     // Program → competencies. Linking happens from the program side.
     related_competencies: [] as number[],
+    // Program → proficiency level (options derive from the picked competencies).
+    proficiency_level_id: null as number | null,
+    // "Others"-type program → free-typed competencies + proficiency level.
+    custom_competency: '' as string,
+    custom_proficiency_level: '' as string,
+    // Program → corporate scope.
+    business_unit: '' as string,
+    grade: '' as string,
 })
 
 // Localized name for a competency / program, falling back to the canonical value.
@@ -151,6 +186,11 @@ function openMaster(type: MasterType, item?: Program) {
     editingMasterId.value = item?.id ?? null
 
     masterForm.clearErrors()
+
+    // Seed the form without the competency-type watcher reacting (it would wipe
+    // the loaded selection); a fresh drawer starts with an empty snapshot cache.
+    applyingOpen.value = true
+    typeCache.value = {}
 
     masterForm.type = type
 
@@ -184,6 +224,30 @@ function openMaster(type: MasterType, item?: Program) {
                   )
                   .map((c) => c.id)
             : []
+
+    // Program scope fields (competency type / proficiency level / BU / grade).
+    const program = item as Partial<Program> | undefined
+    masterForm.competency_type_id =
+        type === 'development_program' ? program?.competency_type_id ?? null : null
+    masterForm.proficiency_level_id =
+        type === 'development_program' ? program?.proficiency_level_id ?? null : null
+    masterForm.custom_competency =
+        type === 'development_program' ? program?.custom_competency ?? '' : ''
+    masterForm.custom_proficiency_level =
+        type === 'development_program' ? program?.custom_proficiency_level ?? '' : ''
+    masterForm.business_unit =
+        type === 'development_program' ? program?.business_unit ?? '' : ''
+    masterForm.grade =
+        type === 'development_program' ? program?.grade ?? '' : ''
+
+    // Seed the cache with the loaded type's selection so that leaving it and
+    // coming back restores exactly what was stored.
+    if (type === 'development_program' && masterForm.competency_type_id != null) {
+        typeCache.value[masterForm.competency_type_id] = snapshotType()
+    }
+
+    // Let the watcher run again once this synchronous seeding has settled.
+    nextTick(() => (applyingOpen.value = false))
 
     masterModal.value = true
 }
@@ -281,15 +345,165 @@ function onProgramPackageChange(value: string) {
     }
 }
 
-// Competencies as MultiSelect options (string values — MultiSelect binds string[]).
+// Competencies offered to the program, narrowed to the chosen competency type
+// (all competencies when no type is picked). MultiSelect binds string values.
 const competencyOptions = computed<Option[]>(() =>
-    props.competencies.map((c) => ({ value: String(c.id), label: masterName(c) })),
+    props.competencies
+        .filter(
+            (c) =>
+                masterForm.competency_type_id == null ||
+                c.competency_type_id === masterForm.competency_type_id,
+        )
+        .map((c) => ({ value: String(c.id), label: masterName(c) })),
 )
 
 // Bridge the numeric related_competencies to MultiSelect's string[] model.
 const relatedCompetencyValues = computed<string[]>({
     get: () => masterForm.related_competencies.map(String),
     set: (vals) => (masterForm.related_competencies = vals.map(Number)),
+})
+
+// Competency types as SearchableSelect options for the program form.
+const competencyTypeOptions = computed<Option[]>(() =>
+    props.competencyTypes.map((ct) => ({
+        value: String(ct.id),
+        label: masterName(ct),
+    })),
+)
+
+const competencyTypeById = computed(() => {
+    const m = new Map<number, CompetencyType>()
+    for (const ct of props.competencyTypes) m.set(ct.id, ct)
+    return m
+})
+
+// Whether the picked competency type is the catch-all "Others" — programs on it
+// free-type their competencies + proficiency level instead of picking masters.
+const isOthersType = computed<boolean>(() => {
+    if (masterForm.competency_type_id == null) return false
+    const v = (
+        competencyTypeById.value.get(masterForm.competency_type_id)?.value ?? ''
+    )
+        .trim()
+        .toLowerCase()
+    return v === 'others' || v === 'other' || v === 'lainnya'
+})
+
+// Business unit / grade options (corporate scope) for the program form.
+const businessUnitOptions = computed<Option[]>(() =>
+    props.businessUnits.map((bu) => ({ value: bu, label: bu })),
+)
+const gradeOptions = computed<Option[]>(() =>
+    props.grades.map((g) => ({ value: g, label: g })),
+)
+
+const proficiencyLevelById = computed(() => {
+    const m = new Map<number, ProficiencyLevel>()
+    for (const pl of props.proficiencyLevels) m.set(pl.id, pl)
+    return m
+})
+
+// Proficiency levels available to the program: the distinct levels chosen on
+// the competencies it currently develops. Empty until a competency is picked.
+const proficiencyLevelOptions = computed<Option[]>(() => {
+    const selected = new Set(masterForm.related_competencies)
+    const levelIds = new Set<number>()
+
+    for (const c of props.competencies) {
+        if (selected.has(c.id) && c.proficiency_level_id != null) {
+            levelIds.add(c.proficiency_level_id)
+        }
+    }
+
+    return [...levelIds]
+        .map((id) => proficiencyLevelById.value.get(id))
+        .filter((pl): pl is ProficiencyLevel => pl != null)
+        .map((pl) => ({ value: String(pl.id), label: masterName(pl) }))
+})
+
+// Localized proficiency-level name for the program table (or '').
+function proficiencyLevelName(id: number | null): string {
+    if (id == null) return ''
+    const pl = proficiencyLevelById.value.get(id)
+    return pl ? masterName(pl) : ''
+}
+
+// Per-type snapshot of the competency-related fields, so switching competency
+// type resets the selection but returning to a type restores what was chosen
+// under it (kept only for the lifetime of one open drawer). Seeded on open.
+interface TypeSnapshot {
+    competencies: number[]
+    proficiencyLevelId: number | null
+    customCompetency: string
+    customProficiency: string
+}
+const typeCache = ref<Record<number, TypeSnapshot>>({})
+
+// Guards the watcher below while openMaster is seeding the form, so loading a
+// program for edit never wipes its stored competencies.
+const applyingOpen = ref(false)
+
+// Snapshot the competency-related fields as they currently stand in the form.
+function snapshotType(): TypeSnapshot {
+    return {
+        competencies: [...masterForm.related_competencies],
+        proficiencyLevelId: masterForm.proficiency_level_id,
+        customCompetency: masterForm.custom_competency,
+        customProficiency: masterForm.custom_proficiency_level,
+    }
+}
+
+// React to a change of competency type: stash the outgoing type's selection,
+// then restore (or reset) the incoming type's. "Others" swaps to free typing.
+watch(
+    () => masterForm.competency_type_id,
+    (typeId, oldTypeId) => {
+        if (applyingOpen.value) return
+
+        if (oldTypeId != null) {
+            typeCache.value[oldTypeId] = snapshotType()
+        }
+
+        const snap = typeId != null ? typeCache.value[typeId] : undefined
+
+        if (isOthersType.value) {
+            // Free typing — restore any previously typed text, clear masters.
+            masterForm.related_competencies = []
+            masterForm.proficiency_level_id = null
+            masterForm.custom_competency = snap?.customCompetency ?? ''
+            masterForm.custom_proficiency_level = snap?.customProficiency ?? ''
+            return
+        }
+
+        masterForm.custom_competency = ''
+        masterForm.custom_proficiency_level = ''
+
+        if (typeId == null) {
+            masterForm.related_competencies = []
+            masterForm.proficiency_level_id = null
+            return
+        }
+
+        // Restore the cached selection for this type, keeping only competencies
+        // that still belong to it; else start empty.
+        masterForm.related_competencies = (snap?.competencies ?? []).filter(
+            (id) =>
+                props.competencies.find((c) => c.id === id)?.competency_type_id ===
+                typeId,
+        )
+        masterForm.proficiency_level_id = snap?.proficiencyLevelId ?? null
+    },
+)
+
+// If the picked competencies no longer offer the chosen proficiency level,
+// clear it so the form never submits an out-of-range level.
+watch(proficiencyLevelOptions, (opts) => {
+    if (
+        masterForm.proficiency_level_id != null &&
+        !opts.some((o) => o.value === String(masterForm.proficiency_level_id))
+    ) {
+        masterForm.proficiency_level_id = null
+    }
 })
 
 /**
@@ -319,40 +533,28 @@ const neutralColor = {
 
 const groupColor = (i: number) => (i < 0 ? neutralColor : colorFor(i))
 
-// Column-sort helper for the program table. Clicking a column cycles
-// asc → desc → off; clicking another column starts it at asc.
-type SortDir = 'asc' | 'desc'
-interface SortState {
-    key: string
-    dir: SortDir
-}
-function nextSort(current: SortState | null, key: string): SortState | null {
-    if (current?.key !== key) return { key, dir: 'asc' }
-    if (current.dir === 'asc') return { key, dir: 'desc' }
-    return null
-}
-function sortIcon(state: SortState | null, key: string): string {
-    if (state?.key !== key) return 'fa-solid fa-sort text-slate-300'
-    return state.dir === 'asc'
-        ? 'fa-solid fa-sort-up text-primary'
-        : 'fa-solid fa-sort-down text-primary'
-}
-
 /**
  * --------------------------------------------------------------------------
- * Development program tab — program-centric list with each program's model
+ * Development program table — program-centric list with each program's model
  * and the competencies linked to it (linking is edited from the program form).
+ * Search is external; ClientTable handles sort + pagination.
  * --------------------------------------------------------------------------
  */
 
 const programSearch = ref('')
 
 interface ProgramRow {
+    id: number
     program: Program
+    name: string
     modelName: string
     percentage: number | null
     colorIndex: number
     competencies: Competency[]
+    customCompetency: string
+    proficiency: string
+    businessUnit: string
+    grade: string
 }
 
 const programRows = computed<ProgramRow[]>(() => {
@@ -360,7 +562,9 @@ const programRows = computed<ProgramRow[]>(() => {
 
     return props.developmentPrograms
         .map((p) => ({
+            id: p.id,
             program: p,
+            name: masterName(p),
             modelName:
                 modelNameById(p.development_model_id) || (p.model_name ?? ''),
             percentage:
@@ -374,64 +578,41 @@ const programRows = computed<ProgramRow[]>(() => {
             competencies: props.competencies.filter((c) =>
                 c.related_program.includes(p.id),
             ),
+            customCompetency: p.custom_competency ?? '',
+            // Free-typed proficiency (Others) falls back onto the picked level.
+            proficiency:
+                proficiencyLevelName(p.proficiency_level_id) ||
+                (p.custom_proficiency_level ?? ''),
+            businessUnit: p.business_unit ?? '',
+            grade: p.grade ?? '',
         }))
         .filter((row) => {
             if (!q) return true
-            if (masterName(row.program).toLowerCase().includes(q)) return true
+            if (row.name.toLowerCase().includes(q)) return true
             if (row.program.value.toLowerCase().includes(q)) return true
+            if (row.customCompetency.toLowerCase().includes(q)) return true
             return row.competencies.some((c) =>
                 masterName(c).toLowerCase().includes(q),
             )
         })
 })
 
-const programSort = ref<SortState | null>(null)
-function toggleProgramSort(key: string) {
-    programSort.value = nextSort(programSort.value, key)
-}
-
-const sortedPrograms = computed(() => {
-    const s = programSort.value
-    if (!s) return programRows.value
-    const dir = s.dir === 'asc' ? 1 : -1
-    const val = (r: ProgramRow) =>
-        s.key === 'model' ? r.modelName : masterName(r.program)
-    return [...programRows.value].sort(
-        (a, b) => val(a).localeCompare(val(b)) * dir,
-    )
-})
-
-const programPage = ref(1)
-const programPerPage = ref(10)
-
-const programTotalPages = computed(() =>
-    Math.max(1, Math.ceil(programRows.value.length / programPerPage.value)),
-)
-
-const pagedPrograms = computed(() => {
-    const start = (programPage.value - 1) * programPerPage.value
-    return sortedPrograms.value.slice(start, start + programPerPage.value)
-})
-
-const programFrom = computed(() =>
-    programRows.value.length === 0
-        ? 0
-        : (programPage.value - 1) * programPerPage.value + 1,
-)
-
-watch(programSearch, () => (programPage.value = 1))
-watch(programTotalPages, (total) => {
-    if (programPage.value > total) programPage.value = total
-})
+const programColumns = computed<Column[]>(() => [
+    { key: 'name', label: t.value.idp.settings.program, sortable: true, thClass: 'w-64' },
+    { key: 'modelName', label: t.value.idp.settings.model, sortable: true, thClass: 'w-48' },
+    { key: 'competencies', label: t.value.idp.settings.linkedCompetencies },
+    { key: 'scope', label: t.value.idp.settings.scope, thClass: 'w-48' },
+    { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
+])
 </script>
 
 <template>
-    <Head :title="t.idp.settings.title" />
+    <Head :title="t.idp.settings.masterDevelopmentTitle" />
 
     <AppLayout>
         <PageHeader
-            :title="t.idp.settings.title"
-            :subtitle="t.idp.settings.subtitle"
+            :title="t.idp.settings.masterDevelopmentTitle"
+            :subtitle="t.idp.settings.masterDevelopmentSubtitle"
         />
 
         <!-- ================================================================
@@ -439,18 +620,22 @@ watch(programTotalPages, (total) => {
         ================================================================= -->
 
         <div class="space-y-6">
-            <!-- Header: title · search · add program -->
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h3 class="text-base font-semibold text-slate-800">
-                        {{ t.idp.settings.programs }}
-                    </h3>
-                    <p class="mt-0.5 text-sm text-slate-400">
-                        {{ t.idp.settings.relationHint }}
-                    </p>
-                </div>
+            <section class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+                <!-- Header: title · search · add program -->
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 p-5">
+                    <div>
+                        <h3 class="flex items-center gap-2 text-base font-semibold text-slate-800">
+                            {{ t.idp.settings.programs }}
+                            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                                {{ developmentPrograms.length }}
+                            </span>
+                        </h3>
+                        <p class="mt-0.5 text-sm text-slate-400">
+                            {{ t.idp.settings.relationHint }}
+                        </p>
+                    </div>
 
-                <div class="flex flex-wrap items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
                     <div class="relative">
                         <i
                             class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
@@ -474,148 +659,126 @@ watch(programTotalPages, (total) => {
                 </div>
             </div>
 
-            <!-- Program table (program → model + linked competencies) -->
-            <div
-                class="overflow-x-auto rounded-xl border border-border bg-white shadow-sm"
-            >
-                <table class="w-full min-w-[820px] border-collapse text-sm">
-                    <thead>
-                        <tr
-                            class="border-b border-border bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                <!-- Program table (program → model + linked competencies) -->
+                <ClientTable
+                    :columns="programColumns"
+                    :rows="programRows"
+                    row-key="id"
+                    :per-page="10"
+                    numbered
+                >
+                    <template #cell-name="{ row }">
+                        <span class="font-semibold text-slate-800">{{ row.name }}</span>
+                    </template>
+
+                    <template #cell-modelName="{ row }">
+                        <span
+                            v-if="row.modelName"
+                            class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
+                            :class="[
+                                groupColor(row.colorIndex).soft,
+                                groupColor(row.colorIndex).text,
+                            ]"
                         >
-                            <th class="w-14 px-5 py-3 text-center">#</th>
-                            <th class="w-72 px-5 py-3">
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1.5 uppercase tracking-wide transition hover:text-slate-700"
-                                    @click="toggleProgramSort('program')"
-                                >
-                                    {{ t.idp.settings.program }}
-                                    <i
-                                        class="text-[10px]"
-                                        :class="sortIcon(programSort, 'program')"
-                                    />
-                                </button>
-                            </th>
-                            <th class="w-56 px-5 py-3">
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1.5 uppercase tracking-wide transition hover:text-slate-700"
-                                    @click="toggleProgramSort('model')"
-                                >
-                                    {{ t.idp.settings.model }}
-                                    <i
-                                        class="text-[10px]"
-                                        :class="sortIcon(programSort, 'model')"
-                                    />
-                                </button>
-                            </th>
-                            <th class="px-5 py-3">
-                                {{ t.idp.settings.linkedCompetencies }}
-                            </th>
-                            <th
-                                class="w-24 border-l border-border/60 px-5 py-3 text-center"
-                            >
-                                {{ t.idp.settings.action }}
-                            </th>
-                        </tr>
-                    </thead>
+                            <span
+                                class="h-2 w-2 rounded-full"
+                                :class="groupColor(row.colorIndex).bar"
+                            />
+                            {{ row.modelName }}
+                            <span v-if="row.percentage !== null">
+                                ({{ row.percentage }}%)
+                            </span>
+                        </span>
+                        <span v-else class="text-xs italic text-slate-300">
+                            {{ t.idp.settings.noModel }}
+                        </span>
+                    </template>
 
-                    <tbody>
-                        <tr
-                            v-for="(row, i) in pagedPrograms"
-                            :key="row.program.id"
-                            class="border-b border-border/60 align-top transition last:border-0 hover:bg-slate-50/60"
+                    <template #cell-competencies="{ row }">
+                        <div
+                            v-if="row.competencies.length"
+                            class="flex flex-wrap gap-1.5"
                         >
-                            <td class="px-5 py-4 text-center text-slate-400">
-                                {{ programFrom + i }}
-                            </td>
-                            <td class="px-5 py-4 font-semibold text-slate-800">
-                                {{ masterName(row.program) }}
-                            </td>
-                            <td class="px-5 py-4">
-                                <span
-                                    v-if="row.modelName"
-                                    class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
-                                    :class="[
-                                        groupColor(row.colorIndex).soft,
-                                        groupColor(row.colorIndex).text,
-                                    ]"
-                                >
-                                    <span
-                                        class="h-2 w-2 rounded-full"
-                                        :class="groupColor(row.colorIndex).bar"
-                                    />
-                                    {{ row.modelName }}
-                                    <span v-if="row.percentage !== null">
-                                        ({{ row.percentage }}%)
-                                    </span>
-                                </span>
-                                <span v-else class="text-xs italic text-slate-300">
-                                    {{ t.idp.settings.noModel }}
-                                </span>
-                            </td>
-                            <td class="px-5 py-4">
-                                <div
-                                    v-if="row.competencies.length"
-                                    class="flex flex-wrap gap-1.5"
-                                >
-                                    <span
-                                        v-for="c in row.competencies"
-                                        :key="c.id"
-                                        class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
-                                    >
-                                        {{ masterName(c) }}
-                                    </span>
-                                </div>
-                                <span v-else class="text-xs italic text-slate-300">
-                                    {{ t.idp.settings.noCompetenciesLinked }}
-                                </span>
-                            </td>
-                            <td
-                                class="border-l border-border/60 px-5 py-4 text-center align-middle"
+                            <span
+                                v-for="c in row.competencies"
+                                :key="c.id"
+                                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
                             >
-                                <div class="inline-flex items-center gap-1">
-                                    <IconButton
-                                        icon="fa-solid fa-pen"
-                                        variant="edit"
-                                        :title="t.idp.settings.editProgram"
-                                        @click="openMaster('development_program', row.program)"
-                                    />
-                                    <IconButton
-                                        icon="fa-solid fa-trash"
-                                        variant="delete"
-                                        :title="t.idp.settings.deleteProgram"
-                                        @click="deleteMaster(row.program.id, masterName(row.program))"
-                                    />
-                                </div>
-                            </td>
-                        </tr>
+                                {{ masterName(c) }}
+                            </span>
+                        </div>
+                        <span
+                            v-else-if="row.customCompetency"
+                            class="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-600"
+                            :title="t.idp.settings.othersType"
+                        >
+                            <i class="fa-solid fa-pen-nib text-[9px]" />
+                            {{ row.customCompetency }}
+                        </span>
+                        <span v-else class="text-xs italic text-slate-300">
+                            {{ t.idp.settings.noCompetenciesLinked }}
+                        </span>
+                    </template>
 
-                        <tr v-if="programRows.length === 0">
-                            <td
-                                colspan="5"
-                                class="px-5 py-10 text-center text-sm text-slate-400"
+                    <template #cell-scope="{ row }">
+                        <div
+                            v-if="row.proficiency || row.businessUnit || row.grade"
+                            class="flex flex-wrap gap-1.5"
+                        >
+                            <span
+                                v-if="row.proficiency"
+                                class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
+                                :title="t.idp.settings.proficiencyLevel"
                             >
-                                {{
-                                    programSearch
-                                        ? t.idp.settings.noProgramsMatch
-                                        : t.idp.settings.none
-                                }}
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+                                <i class="fa-solid fa-signal text-[9px]" />
+                                {{ row.proficiency }}
+                            </span>
+                            <span
+                                v-if="row.businessUnit"
+                                class="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-600"
+                                :title="t.idp.settings.businessUnit"
+                            >
+                                <i class="fa-solid fa-building text-[9px]" />
+                                {{ row.businessUnit }}
+                            </span>
+                            <span
+                                v-if="row.grade"
+                                class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600"
+                                :title="t.idp.settings.grade"
+                            >
+                                <i class="fa-solid fa-layer-group text-[9px]" />
+                                {{ row.grade }}
+                            </span>
+                        </div>
+                        <span v-else class="text-xs italic text-slate-300">—</span>
+                    </template>
 
-            <!-- Pagination -->
-            <Pagination
-                :page="programPage"
-                :per-page="programPerPage"
-                :total="programRows.length"
-                @update:page="programPage = $event"
-                @update:per-page="programPerPage = $event; programPage = 1"
-            />
+                    <template #cell-actions="{ row }">
+                        <div class="flex items-center justify-end gap-1">
+                            <IconButton
+                                icon="fa-solid fa-pen"
+                                variant="edit"
+                                :title="t.idp.settings.editProgram"
+                                @click="openMaster('development_program', row.program)"
+                            />
+                            <IconButton
+                                icon="fa-solid fa-trash"
+                                variant="delete"
+                                :title="t.idp.settings.deleteProgram"
+                                @click="deleteMaster(row.program.id, row.name)"
+                            />
+                        </div>
+                    </template>
+
+                    <template #empty>
+                        {{
+                            programSearch
+                                ? t.idp.settings.noProgramsMatch
+                                : t.idp.settings.none
+                        }}
+                    </template>
+                </ClientTable>
+            </section>
         </div>
 
         <!-- ================================================================
@@ -632,8 +795,191 @@ watch(programTotalPages, (total) => {
                 class="space-y-4"
                 @submit.prevent="submitMaster"
             >
-                <!-- Bilingual name (+ description for competency), grouped by
-                     language. Applies to competency, program and review tool. -->
+                <!-- 1. Development program -> Competency type (scopes competencies) -->
+                <div v-if="masterType === 'development_program'">
+                    <label
+                        class="mb-1.5 block text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.competencyType }}
+                        <span class="text-red-500">*</span>
+                    </label>
+
+                    <SearchableSelect
+                        :model-value="
+                            masterForm.competency_type_id == null
+                                ? ''
+                                : String(masterForm.competency_type_id)
+                        "
+                        :options="competencyTypeOptions"
+                        :placeholder="t.idp.settings.competencyTypePickHint"
+                        @update:model-value="
+                            masterForm.competency_type_id =
+                                $event === '' ? null : Number($event)
+                        "
+                    />
+                    <p
+                        v-if="masterForm.errors.competency_type_id"
+                        class="mt-1 text-xs text-red-600"
+                    >
+                        {{ masterForm.errors.competency_type_id }}
+                    </p>
+                    <!-- <p v-else class="mt-1.5 text-xs text-slate-400">
+                        {{
+                            isOthersType
+                                ? t.idp.settings.othersTypeHint
+                                : t.idp.settings.programTypeHint
+                        }}
+                    </p> -->
+                </div>
+
+                <!-- 2. Development program -> Competencies (after a type is chosen) -->
+                <div
+                    v-if="
+                        masterType === 'development_program' &&
+                        masterForm.competency_type_id != null
+                    "
+                >
+                    <label
+                        class="mb-1.5 flex items-center gap-2 text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.competencies }}
+                        <span
+                            v-if="!isOthersType && masterForm.related_competencies.length"
+                            class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary"
+                        >
+                            {{ masterForm.related_competencies.length }}
+                        </span>
+                    </label>
+
+                    <!-- Real competency type → pick from the competency masters -->
+                    <template v-if="!isOthersType">
+                        <MultiSelect
+                            v-model="relatedCompetencyValues"
+                            :options="competencyOptions"
+                            :placeholder="t.idp.settings.searchCompetency"
+                            selected-below
+                        />
+
+                        <!-- <p class="mt-1.5 text-xs text-slate-400">
+                            {{ t.idp.settings.competencyHint }}
+                        </p> -->
+                    </template>
+
+                    <!-- "Others" type → free-type the competencies -->
+                    <template v-else>
+                        <textarea
+                            v-model="masterForm.custom_competency"
+                            rows="3"
+                            :placeholder="t.idp.settings.customCompetencyPlaceholder"
+                            class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                        <p class="mt-1.5 text-xs text-slate-400">
+                            {{ t.idp.settings.customCompetencyHint }}
+                        </p>
+                    </template>
+                </div>
+
+                <!-- 3. Development program -> Proficiency level (after a type is chosen) -->
+                <div
+                    v-if="
+                        masterType === 'development_program' &&
+                        masterForm.competency_type_id != null
+                    "
+                >
+                    <label
+                        class="mb-1.5 block text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.proficiencyLevel }}
+                        <span class="font-normal text-slate-400">
+                            ({{ t.idp.settings.optional }})
+                        </span>
+                    </label>
+
+                    <!-- Real competency type → pick a level derived from competencies -->
+                    <template v-if="!isOthersType">
+                        <SearchableSelect
+                            v-if="proficiencyLevelOptions.length"
+                            :model-value="
+                                masterForm.proficiency_level_id == null
+                                    ? ''
+                                    : String(masterForm.proficiency_level_id)
+                            "
+                            :options="proficiencyLevelOptions"
+                            :placeholder="t.idp.settings.proficiencyLevelPickHint"
+                            @update:model-value="
+                                masterForm.proficiency_level_id =
+                                    $event === '' ? null : Number($event)
+                            "
+                        />
+                        <p
+                            v-else
+                            class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
+                        >
+                            {{ t.idp.settings.pickCompetencyFirst }}
+                        </p>
+                    </template>
+
+                    <!-- "Others" type → free-type the proficiency level -->
+                    <input
+                        v-else
+                        v-model="masterForm.custom_proficiency_level"
+                        type="text"
+                        :placeholder="t.idp.settings.customProficiencyPlaceholder"
+                        class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                </div>
+
+                <!-- 4. Development program -> Model package (scopes the model list) -->
+                <div v-if="masterType === 'development_program'">
+                    <label
+                        class="mb-1.5 block text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.modelPackage }}
+                    </label>
+
+                    <SearchableSelect
+                        :model-value="
+                            masterPackageId == null ? '' : String(masterPackageId)
+                        "
+                        :options="packageOptions"
+                        :placeholder="t.idp.settings.packagePickHint"
+                        @update:model-value="onProgramPackageChange($event)"
+                    />
+                </div>
+
+                <!-- 4. Development program -> Development model (within package) -->
+                <div v-if="masterType === 'development_program'">
+                    <label
+                        class="mb-1.5 block text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.model }}
+                        <span class="font-normal text-slate-400">
+                            ({{ t.idp.settings.optional }})
+                        </span>
+                    </label>
+
+                    <SearchableSelect
+                        :model-value="
+                            masterForm.development_model_id == null
+                                ? ''
+                                : String(masterForm.development_model_id)
+                        "
+                        :options="packageModelOptions"
+                        :disabled="masterPackageId == null"
+                        :placeholder="
+                            masterPackageId == null
+                                ? t.idp.settings.selectPackageFirst
+                                : t.idp.settings.modelPickHint
+                        "
+                        @update:model-value="
+                            masterForm.development_model_id =
+                                $event === '' ? null : Number($event)
+                        "
+                    />
+                </div>
+
+                <!-- 5. Bilingual name (English + Bahasa), grouped by language.
+                     Applies to program and review tool. -->
                 <!-- English section -->
                 <div class="rounded-lg border border-border bg-slate-50/60 p-4">
                         <div class="mb-3 flex items-center gap-2">
@@ -712,79 +1058,46 @@ watch(programTotalPages, (total) => {
                         </div>
                     </div>
 
-                <!-- Development program -> Model package (scopes the model list) -->
-                <div v-if="masterType === 'development_program'">
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.modelPackage }}
-                    </label>
-
-                    <SearchableSelect
-                        :model-value="
-                            masterPackageId == null ? '' : String(masterPackageId)
-                        "
-                        :options="packageOptions"
-                        :placeholder="t.idp.settings.packagePickHint"
-                        @update:model-value="onProgramPackageChange($event)"
-                    />
-                </div>
-
-                <!-- Development program -> Development model (within package) -->
-                <div v-if="masterType === 'development_program'">
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.model }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
-
-                    <SearchableSelect
-                        :model-value="
-                            masterForm.development_model_id == null
-                                ? ''
-                                : String(masterForm.development_model_id)
-                        "
-                        :options="packageModelOptions"
-                        :disabled="masterPackageId == null"
-                        :placeholder="
-                            masterPackageId == null
-                                ? t.idp.settings.selectPackageFirst
-                                : t.idp.settings.modelPickHint
-                        "
-                        @update:model-value="
-                            masterForm.development_model_id =
-                                $event === '' ? null : Number($event)
-                        "
-                    />
-                </div>
-
-                <!-- Development program -> Competencies -->
-                <div v-if="masterType === 'development_program'">
-                    <label
-                        class="mb-1.5 flex items-center gap-2 text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.competencies }}
-                        <span
-                            v-if="masterForm.related_competencies.length"
-                            class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary"
+                <!-- 6. Development program -> Corporate scope (business unit + grade) -->
+                <div
+                    v-if="masterType === 'development_program'"
+                    class="grid grid-cols-1 gap-4 sm:grid-cols-2"
+                >
+                    <div>
+                        <label
+                            class="mb-1.5 block text-sm font-medium text-slate-700"
                         >
-                            {{ masterForm.related_competencies.length }}
-                        </span>
-                    </label>
+                            {{ t.idp.settings.businessUnit }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
 
-                    <MultiSelect
-                        v-model="relatedCompetencyValues"
-                        :options="competencyOptions"
-                        :placeholder="t.idp.settings.searchCompetency"
-                        selected-below
-                    />
+                        <SearchableSelect
+                            :model-value="masterForm.business_unit"
+                            :options="businessUnitOptions"
+                            :placeholder="t.idp.settings.businessUnitPickHint"
+                            @update:model-value="masterForm.business_unit = $event"
+                        />
+                    </div>
 
-                    <p class="mt-1.5 text-xs text-slate-400">
-                        {{ t.idp.settings.competencyHint }}
-                    </p>
+                    <div>
+                        <label
+                            class="mb-1.5 block text-sm font-medium text-slate-700"
+                        >
+                            {{ t.idp.settings.grade }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
+
+                        <SearchableSelect
+                            :model-value="masterForm.grade"
+                            :options="gradeOptions"
+                            :placeholder="t.idp.settings.gradePickHint"
+                            @update:model-value="masterForm.grade = $event"
+                        />
+                    </div>
                 </div>
             </form>
 

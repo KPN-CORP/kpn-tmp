@@ -19,6 +19,9 @@ class DevelopmentPlanMaster extends Model
 
     protected $casts = [
         'related_program' => 'array',
+        // A competency's multi-selected proficiency levels + key behaviors.
+        'proficiency_level_ids' => 'array',
+        'key_behavior_ids' => 'array',
     ];
 
     public function developmentModel(): BelongsTo
@@ -63,5 +66,14 @@ class DevelopmentPlanMaster extends Model
     {
         return $this->hasMany(self::class, 'proficiency_level_id')
             ->where('type', 'key_behavior');
+    }
+
+    /**
+     * The competency implemented by this row (an `implementation` row).
+     * Self-referencing: the parent is a `competency_name` row.
+     */
+    public function competencyName(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'competency_name_id');
     }
 }

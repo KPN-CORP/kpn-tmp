@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { Head, router, useForm } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
@@ -7,7 +7,7 @@ import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
-import Pagination from '@/Components/UI/Pagination.vue'
+import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t, locale } = useLocale()
@@ -220,59 +220,50 @@ function confirmDelete() {
 
 /**
  * --------------------------------------------------------------------------
- * Table — search, sort, pagination (client-side)
+ * Table — search (external) + ClientTable (sort + pagination)
  * --------------------------------------------------------------------------
  */
 
 const search = ref('')
 
-// null = original order; cycles null → asc → desc → null.
-const sort = ref<'asc' | 'desc' | null>(null)
-
-function toggleSort() {
-    sort.value =
-        sort.value === 'asc' ? 'desc' : sort.value === 'desc' ? null : 'asc'
-}
-
+// Rows carry the derived localized name/description ClientTable sorts + renders.
 const filtered = computed(() => {
     const q = search.value.trim().toLowerCase()
+    const rows = props.proficiencyLevels.map((r) => ({
+        ...r,
+        name: levelName(r),
+        description: levelDescription(r),
+    }))
     return q
-        ? props.proficiencyLevels.filter(
+        ? rows.filter(
               (r) =>
-                  levelName(r).toLowerCase().includes(q) ||
+                  r.name.toLowerCase().includes(q) ||
                   r.value.toLowerCase().includes(q),
           )
-        : props.proficiencyLevels
+        : rows
 })
 
-const sorted = computed(() => {
-    if (!sort.value) return filtered.value
-    const dir = sort.value === 'asc' ? 1 : -1
-    return [...filtered.value].sort(
-        (a, b) => levelName(a).localeCompare(levelName(b)) * dir,
-    )
-})
+const columns = computed<Column[]>(() => [
+    { key: 'name', label: t.value.idp.settings.proficiencyLevel, sortable: true, thClass: 'w-72' },
+    { key: 'description', label: t.value.idp.settings.description },
+    { key: 'key_behaviors', label: t.value.idp.settings.keyBehaviors, align: 'center', thClass: 'w-52' },
+    { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
+])
 
-const page = ref(1)
-const perPage = ref(10)
-
-const totalPages = computed(() =>
-    Math.max(1, Math.ceil(filtered.value.length / perPage.value)),
+// Key behaviors of the managed level as ClientTable rows (in the drawer).
+const kbRows = computed(() =>
+    (kbLevel.value?.key_behaviors ?? []).map((kb) => ({
+        ...kb,
+        name: levelName(kb),
+        description: levelDescription(kb),
+    })),
 )
 
-const paged = computed(() => {
-    const start = (page.value - 1) * perPage.value
-    return sorted.value.slice(start, start + perPage.value)
-})
-
-const from = computed(() =>
-    filtered.value.length === 0 ? 0 : (page.value - 1) * perPage.value + 1,
-)
-
-watch(search, () => (page.value = 1))
-watch(totalPages, (total) => {
-    if (page.value > total) page.value = total
-})
+const kbColumns = computed<Column[]>(() => [
+    { key: 'name', label: t.value.idp.settings.name, sortable: true },
+    { key: 'description', label: t.value.idp.settings.description },
+    { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
+])
 </script>
 
 <template>
@@ -286,165 +277,107 @@ watch(totalPages, (total) => {
 
         <div class="space-y-6">
             <!-- ------------------------------------------------------------
-                 Header: title · search · add
+                 Proficiency levels card: header + toolbar + table
             ------------------------------------------------------------- -->
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h3 class="text-base font-semibold text-slate-800">
-                        {{ t.idp.settings.proficiencyLevels }}
-                    </h3>
-                    <p class="mt-0.5 text-sm text-slate-400">
-                        {{ t.idp.settings.proficiencyLevelsHint }}
-                    </p>
-                </div>
-
-                <div class="flex flex-wrap items-center gap-2">
-                    <div class="relative">
-                        <i
-                            class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
-                        />
-                        <input
-                            v-model="search"
-                            type="search"
-                            :placeholder="t.idp.settings.searchProficiencyLevel"
-                            class="w-56 rounded-md border border-border bg-white py-2 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
+            <section class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 p-5">
+                    <div>
+                        <h3 class="flex items-center gap-2 text-base font-semibold text-slate-800">
+                            {{ t.idp.settings.proficiencyLevels }}
+                            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                                {{ proficiencyLevels.length }}
+                            </span>
+                        </h3>
+                        <p class="mt-0.5 text-sm text-slate-400">
+                            {{ t.idp.settings.proficiencyLevelsHint }}
+                        </p>
                     </div>
 
-                    <button
-                        type="button"
-                        class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
-                        @click="openForm()"
-                    >
-                        <i class="fa-solid fa-plus text-xs" />
-                        {{ t.idp.settings.proficiencyLevel }}
-                    </button>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <div class="relative">
+                            <i
+                                class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
+                            />
+                            <input
+                                v-model="search"
+                                type="search"
+                                :placeholder="t.idp.settings.searchProficiencyLevel"
+                                class="w-56 rounded-md border border-border bg-white py-2 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            >
+                        </div>
+
+                        <button
+                            type="button"
+                            class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
+                            @click="openForm()"
+                        >
+                            <i class="fa-solid fa-plus text-xs" />
+                            {{ t.idp.settings.proficiencyLevel }}
+                        </button>
+                    </div>
                 </div>
-            </div>
 
-            <!-- ------------------------------------------------------------
-                 Table
-            ------------------------------------------------------------- -->
-            <div
-                class="overflow-x-auto rounded-xl border border-border bg-white shadow-sm"
-            >
-                <table class="w-full min-w-[560px] border-collapse text-sm">
-                    <thead>
-                        <tr
-                            class="border-b border-border bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                <ClientTable
+                    :columns="columns"
+                    :rows="filtered"
+                    row-key="id"
+                    :per-page="10"
+                    numbered
+                >
+                    <template #cell-name="{ row }">
+                        <span class="font-semibold text-slate-800">{{ row.name }}</span>
+                    </template>
+
+                    <template #cell-description="{ row }">
+                        <span
+                            v-if="row.description"
+                            class="whitespace-pre-wrap break-words text-slate-500"
                         >
-                            <th class="w-14 px-5 py-3 text-center">#</th>
-                            <th class="w-72 px-5 py-3">
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1.5 uppercase tracking-wide transition hover:text-slate-700"
-                                    @click="toggleSort"
-                                >
-                                    {{ t.idp.settings.proficiencyLevel }}
-                                    <i
-                                        class="text-[10px]"
-                                        :class="
-                                            sort === 'asc'
-                                                ? 'fa-solid fa-sort-up text-primary'
-                                                : sort === 'desc'
-                                                  ? 'fa-solid fa-sort-down text-primary'
-                                                  : 'fa-solid fa-sort text-slate-300'
-                                        "
-                                    />
-                                </button>
-                            </th>
-                            <th class="px-5 py-3">
-                                {{ t.idp.settings.description }}
-                            </th>
-                            <th class="w-52 px-5 py-3 text-center">
-                                {{ t.idp.settings.keyBehaviors }}
-                            </th>
-                            <th
-                                class="w-24 border-l border-border/60 px-5 py-3 text-center"
-                            >
-                                {{ t.idp.settings.action }}
-                            </th>
-                        </tr>
-                    </thead>
+                            {{ row.description }}
+                        </span>
+                        <span v-else class="text-xs italic text-slate-300">
+                            {{ t.idp.settings.noDescription }}
+                        </span>
+                    </template>
 
-                    <tbody>
-                        <tr
-                            v-for="(r, i) in paged"
-                            :key="r.id"
-                            class="border-b border-border/60 align-top transition last:border-0 hover:bg-slate-50/60"
+                    <template #cell-key_behaviors="{ row }">
+                        <button
+                            type="button"
+                            class="inline-flex items-center gap-1.5 rounded-md border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-primary hover:text-primary"
+                            @click="openKeyBehaviors(row as unknown as ProficiencyLevel)"
                         >
-                            <td class="px-5 py-4 text-center text-slate-400">
-                                {{ from + i }}
-                            </td>
-                            <td class="px-5 py-4 font-semibold text-slate-800">
-                                {{ levelName(r) }}
-                            </td>
-                            <td class="px-5 py-4 text-slate-500">
-                                <span
-                                    v-if="levelDescription(r)"
-                                    class="whitespace-pre-wrap break-words"
-                                >
-                                    {{ levelDescription(r) }}
-                                </span>
-                                <span v-else class="text-xs italic text-slate-300">
-                                    {{ t.idp.settings.noDescription }}
-                                </span>
-                            </td>
-                            <td class="px-5 py-4 text-center align-middle">
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1.5 rounded-md border border-border bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-primary hover:text-primary"
-                                    @click="openKeyBehaviors(r)"
-                                >
-                                    <i class="fa-solid fa-list-check text-[11px]" />
-                                    {{ t.idp.settings.manageKeyBehaviors }}
-                                    <span
-                                        class="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-slate-100 px-1.5 text-[11px] font-semibold text-slate-600"
-                                    >
-                                        {{ r.key_behaviors.length }}
-                                    </span>
-                                </button>
-                            </td>
-                            <td
-                                class="border-l border-border/60 px-5 py-4 text-center align-middle"
+                            <i class="fa-solid fa-list-check text-[11px]" />
+                            {{ t.idp.settings.manageKeyBehaviors }}
+                            <span
+                                class="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-slate-100 px-1.5 text-[11px] font-semibold text-slate-600"
                             >
-                                <div class="inline-flex items-center gap-1">
-                                    <IconButton
-                                        icon="fa-solid fa-pen"
-                                        variant="edit"
-                                        :title="t.idp.settings.editProficiencyLevel"
-                                        @click="openForm(r)"
-                                    />
-                                    <IconButton
-                                        icon="fa-solid fa-trash"
-                                        variant="delete"
-                                        :title="t.idp.settings.deleteProficiencyLevel"
-                                        @click="deleteLevel(r)"
-                                    />
-                                </div>
-                            </td>
-                        </tr>
+                                {{ row.key_behaviors.length }}
+                            </span>
+                        </button>
+                    </template>
 
-                        <tr v-if="filtered.length === 0">
-                            <td
-                                colspan="5"
-                                class="px-5 py-10 text-center text-sm text-slate-400"
-                            >
-                                {{ search ? t.idp.settings.noMatch : t.idp.settings.none }}
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+                    <template #cell-actions="{ row }">
+                        <div class="flex items-center justify-end gap-1">
+                            <IconButton
+                                icon="fa-solid fa-pen"
+                                variant="edit"
+                                :title="t.idp.settings.editProficiencyLevel"
+                                @click="openForm(row as unknown as ProficiencyLevel)"
+                            />
+                            <IconButton
+                                icon="fa-solid fa-trash"
+                                variant="delete"
+                                :title="t.idp.settings.deleteProficiencyLevel"
+                                @click="deleteLevel(row as unknown as ProficiencyLevel)"
+                            />
+                        </div>
+                    </template>
 
-            <!-- Pagination -->
-            <Pagination
-                :page="page"
-                :per-page="perPage"
-                :total="filtered.length"
-                @update:page="page = $event"
-                @update:per-page="perPage = $event; page = 1"
-            />
+                    <template #empty>
+                        {{ search ? t.idp.settings.noMatch : t.idp.settings.none }}
+                    </template>
+                </ClientTable>
+            </section>
         </div>
 
         <!-- ================================================================
@@ -698,46 +631,52 @@ watch(totalPages, (total) => {
                 </button>
 
                 <!-- List -->
-                <ul class="space-y-2">
-                    <li
-                        v-for="kb in kbLevel?.key_behaviors ?? []"
-                        :key="kb.id"
-                        class="flex items-start justify-between gap-3 rounded-lg border border-border bg-white p-3"
+                <div class="overflow-hidden rounded-lg border border-border">
+                    <ClientTable
+                        :columns="kbColumns"
+                        :rows="kbRows"
+                        row-key="id"
+                        :per-page="8"
+                        numbered
                     >
-                        <div class="min-w-0">
-                            <p class="text-sm font-semibold text-slate-800">
-                                {{ levelName(kb) }}
-                            </p>
-                            <p
-                                v-if="levelDescription(kb)"
-                                class="mt-0.5 whitespace-pre-wrap break-words text-xs text-slate-500"
-                            >
-                                {{ levelDescription(kb) }}
-                            </p>
-                        </div>
-                        <div class="inline-flex shrink-0 items-center gap-1">
-                            <IconButton
-                                icon="fa-solid fa-pen"
-                                variant="edit"
-                                :title="t.idp.settings.editKeyBehavior"
-                                @click="openKbForm(kb)"
-                            />
-                            <IconButton
-                                icon="fa-solid fa-trash"
-                                variant="delete"
-                                :title="t.idp.settings.deleteKeyBehavior"
-                                @click="deleteKeyBehavior(kb)"
-                            />
-                        </div>
-                    </li>
+                        <template #cell-name="{ row }">
+                            <span class="font-semibold text-slate-800">{{ row.name }}</span>
+                        </template>
 
-                    <li
-                        v-if="(kbLevel?.key_behaviors.length ?? 0) === 0"
-                        class="rounded-lg border border-dashed border-border px-3 py-8 text-center text-sm text-slate-400"
-                    >
-                        {{ t.idp.settings.noKeyBehaviors }}
-                    </li>
-                </ul>
+                        <template #cell-description="{ row }">
+                            <span
+                                v-if="row.description"
+                                class="whitespace-pre-wrap break-words text-slate-500"
+                            >
+                                {{ row.description }}
+                            </span>
+                            <span v-else class="text-xs italic text-slate-300">
+                                {{ t.idp.settings.noDescription }}
+                            </span>
+                        </template>
+
+                        <template #cell-actions="{ row }">
+                            <div class="flex items-center justify-end gap-1">
+                                <IconButton
+                                    icon="fa-solid fa-pen"
+                                    variant="edit"
+                                    :title="t.idp.settings.editKeyBehavior"
+                                    @click="openKbForm(row as unknown as KeyBehavior)"
+                                />
+                                <IconButton
+                                    icon="fa-solid fa-trash"
+                                    variant="delete"
+                                    :title="t.idp.settings.deleteKeyBehavior"
+                                    @click="deleteKeyBehavior(row as unknown as KeyBehavior)"
+                                />
+                            </div>
+                        </template>
+
+                        <template #empty>
+                            {{ t.idp.settings.noKeyBehaviors }}
+                        </template>
+                    </ClientTable>
+                </div>
             </div>
 
             <template #footer>

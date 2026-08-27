@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import Pagination from '@/Components/UI/Pagination.vue'
 
 export interface Column {
     key: string
@@ -20,12 +21,25 @@ const props = withDefaults(
         perPage?: number
         initialSort?: { key: string; dir: 'asc' | 'desc' } | null
         emptyText?: string
+        // When true, prepend an auto-numbered "#" column showing each row's
+        // running position across pages.
+        numbered?: boolean
         // When true, rows are clickable (cursor + hover) and emit `row-click`;
         // the row whose `rowKey` matches `selectedKey` is highlighted.
         selectable?: boolean
         selectedKey?: string | number | null
+        // Options for the "rows per page" selector in the pager.
+        perPageOptions?: number[]
     }>(),
-    { perPage: 5, initialSort: null, emptyText: 'No data.', selectable: false, selectedKey: null },
+    {
+        perPage: 5,
+        initialSort: null,
+        emptyText: 'No data.',
+        numbered: false,
+        selectable: false,
+        selectedKey: null,
+        perPageOptions: () => [10, 20, 50, 100],
+    },
 )
 
 const emit = defineEmits<{ (e: 'row-click', row: Record<string, any>): void }>()
@@ -33,6 +47,19 @@ const emit = defineEmits<{ (e: 'row-click', row: Record<string, any>): void }>()
 const sortKey = ref(props.initialSort?.key ?? '')
 const sortDir = ref<'asc' | 'desc'>(props.initialSort?.dir ?? 'asc')
 const page = ref(1)
+
+// The page size is user-adjustable via the pager's "rows per page" selector;
+// seed it from the `perPage` prop and keep it in sync if the prop changes.
+const perPageState = ref(props.perPage)
+watch(
+    () => props.perPage,
+    (v) => (perPageState.value = v),
+)
+
+function changePerPage(size: number) {
+    perPageState.value = size
+    page.value = 1
+}
 
 function toggleSort(col: Column) {
     if (!col.sortable) return
@@ -66,7 +93,7 @@ const sorted = computed(() => {
     return [...props.rows].sort((a, b) => cmp(a?.[k], b?.[k]) * dir)
 })
 
-const totalPages = computed(() => Math.max(1, Math.ceil(sorted.value.length / props.perPage)))
+const totalPages = computed(() => Math.max(1, Math.ceil(sorted.value.length / perPageState.value)))
 
 watch(
     () => props.rows.length,
@@ -77,12 +104,21 @@ watch(
 
 const pageRows = computed(() => {
     if (page.value > totalPages.value) page.value = totalPages.value
-    const start = (page.value - 1) * props.perPage
-    return sorted.value.slice(start, start + props.perPage)
+    const start = (page.value - 1) * perPageState.value
+    return sorted.value.slice(start, start + perPageState.value)
 })
 
-const from = computed(() => (sorted.value.length ? (page.value - 1) * props.perPage + 1 : 0))
-const to = computed(() => Math.min(page.value * props.perPage, sorted.value.length))
+const from = computed(() => (sorted.value.length ? (page.value - 1) * perPageState.value + 1 : 0))
+const to = computed(() => Math.min(page.value * perPageState.value, sorted.value.length))
+
+// Mirror Pagination's own visibility rule so the bordered footer only appears
+// when there is actually a pager to show (more than one page, or enough rows to
+// let the "rows per page" selector matter).
+const showPager = computed(
+    () =>
+        totalPages.value > 1 ||
+        sorted.value.length > Math.min(...props.perPageOptions),
+)
 
 function rowKeyVal(row: Record<string, any>, i: number) {
     return props.rowKey ? row[props.rowKey] : i
@@ -103,6 +139,9 @@ function isActive(col: Column) {
             <table class="w-full text-left text-sm">
                 <thead>
                     <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
+                        <th v-if="numbered" class="w-14 px-4 py-2.5 text-center font-semibold">
+                            #
+                        </th>
                         <th
                             v-for="col in columns"
                             :key="col.key"
@@ -139,6 +178,9 @@ function isActive(col: Column) {
                         ]"
                         @click="selectable && emit('row-click', row)"
                     >
+                        <td v-if="numbered" class="px-4 py-3 text-center text-slate-400">
+                            {{ (page - 1) * perPage + i + 1 }}
+                        </td>
                         <td
                             v-for="col in columns"
                             :key="col.key"
@@ -151,7 +193,7 @@ function isActive(col: Column) {
                         </td>
                     </tr>
                     <tr v-if="pageRows.length === 0">
-                        <td :colspan="columns.length" class="px-4 py-8 text-center text-slate-400">
+                        <td :colspan="columns.length + (numbered ? 1 : 0)" class="px-4 py-8 text-center text-slate-400">
                             <slot name="empty">{{ emptyText }}</slot>
                         </td>
                     </tr>
@@ -159,40 +201,21 @@ function isActive(col: Column) {
             </table>
         </div>
 
-        <!-- Pager -->
+        <!-- Pager: shared rows-per-page + windowed page strip (client mode). -->
         <div
-            v-if="totalPages > 1"
-            class="flex flex-col gap-2 border-t border-border px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+            v-if="showPager"
+            class="border-t border-border px-4 py-2.5 [&>div]:!mt-0"
         >
-            <span class="text-xs text-slate-400">{{ from }}–{{ to }} / {{ sorted.length }}</span>
-            <div class="flex gap-1">
-                <button
-                    type="button"
-                    class="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-white text-slate-600 transition hover:bg-slate-50 disabled:opacity-40"
-                    :disabled="page === 1"
-                    @click="page--"
-                >
-                    <i class="fa-solid fa-chevron-left text-xs" />
-                </button>
-                <button
-                    v-for="p in totalPages"
-                    :key="p"
-                    type="button"
-                    class="h-8 min-w-8 rounded-md border px-2 text-sm transition"
-                    :class="p === page ? 'border-primary bg-primary text-white' : 'border-border bg-white text-slate-600 hover:bg-slate-50'"
-                    @click="page = p"
-                >
-                    {{ p }}
-                </button>
-                <button
-                    type="button"
-                    class="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-white text-slate-600 transition hover:bg-slate-50 disabled:opacity-40"
-                    :disabled="page === totalPages"
-                    @click="page++"
-                >
-                    <i class="fa-solid fa-chevron-right text-xs" />
-                </button>
-            </div>
+            <Pagination
+                :page="page"
+                :per-page="perPageState"
+                :total="sorted.length"
+                :from="from"
+                :to="to"
+                :per-page-options="perPageOptions"
+                @update:page="page = $event"
+                @update:per-page="changePerPage"
+            />
         </div>
     </div>
 </template>

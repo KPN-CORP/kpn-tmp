@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Corporate business-unit master (read-only), on the kpncorp connection. Its
- * `nama_bisnis` values are the business units a development-model package can be
+ * `nama_bisnis` values are the business units a development program can be
  * scoped to, matched against an employee's `group_company`.
  */
 class MasterBisnisunit extends Model

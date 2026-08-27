@@ -97,6 +97,11 @@ export const navigation: NavItem[] = [
                 permission: 'view_idp_master',
             },
             {
+                label: 'idpSettingMasterImplementation',
+                href: '/idp-setting/master-implementation',
+                permission: 'view_idp_master',
+            },
+            {
                 label: 'idpSettingMasterData',
                 href: '/idp-setting',
                 permission: 'view_idp_master',

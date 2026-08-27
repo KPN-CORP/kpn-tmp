@@ -8,7 +8,6 @@ import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
-import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
 
@@ -30,8 +29,6 @@ interface Model {
 interface Package {
     id: number
     name: string
-    business_units: string[]
-    grades: string[]
     start_date: string
     end_date: string | null
     is_current: boolean
@@ -43,16 +40,7 @@ interface Package {
 const props = defineProps<{
     developmentModels: Model[]
     packages: Package[]
-    scopeOptions: { businessUnits: string[]; grades: string[] }
 }>()
-
-// Business unit / grade audience options for the package scope multiselects.
-const businessUnitOptions = computed(() =>
-    props.scopeOptions.businessUnits.map((v) => ({ value: v, label: v })),
-)
-const gradeOptions = computed(() =>
-    props.scopeOptions.grades.map((v) => ({ value: v, label: v })),
-)
 
 /**
  * After a create/update/delete the server redirects back here. We only need
@@ -213,6 +201,27 @@ const packageTotalPercentage = computed(() =>
     packageModels.value.reduce((sum, m) => sum + m.percentage, 0),
 )
 
+// Selected package's models as ClientTable rows: carry the localized name /
+// description ClientTable sorts + renders, plus the palette accent used for the
+// name dot (matched to the weighting bar above).
+const modelRows = computed(() =>
+    packageModels.value.map((m, i) => ({
+        ...m,
+        _name: modelName(m),
+        _description: modelDescription(m),
+        _bar: colorFor(i).bar,
+    })),
+)
+
+const modelColumns = computed<Column[]>(() => [
+    { key: 'name', label: t.value.idp.settings.name, sortable: true, sortKey: '_name', thClass: 'w-64' },
+    { key: 'percentage', label: t.value.idp.settings.percentage, sortable: true, align: 'center', thClass: 'w-28' },
+    { key: 'description', label: t.value.idp.settings.description },
+    { key: 'programs', label: t.value.idp.settings.programs, sortable: true, sortKey: 'development_programs_count', align: 'center', thClass: 'w-24' },
+    { key: 'plans', label: t.value.idp.settings.plansInUse, sortable: true, sortKey: 'individual_development_plans_count', align: 'center', thClass: 'w-24' },
+    { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
+])
+
 // Format a package period as "start – end" (open-ended when no end date).
 function packagePeriod(p: Package): string {
     const end = p.end_date ? formatDate(p.end_date) : t.value.idp.settings.ongoing
@@ -235,8 +244,6 @@ const editingPackageId = ref<number | null>(null)
 
 const packageForm = useForm({
     name: '',
-    business_units: [] as string[],
-    grades: [] as string[],
     start_date: '',
     end_date: '',
     is_current: false,
@@ -247,8 +254,6 @@ function openPackage(pkg?: Package) {
 
     packageForm.clearErrors()
     packageForm.name = pkg?.name ?? ''
-    packageForm.business_units = [...(pkg?.business_units ?? [])]
-    packageForm.grades = [...(pkg?.grades ?? [])]
     packageForm.start_date = pkg?.start_date ?? ''
     packageForm.end_date = pkg?.end_date ?? ''
     packageForm.is_current = pkg?.is_current ?? false
@@ -270,6 +275,34 @@ function submitPackage() {
         packageForm.post('/idp-setting/packages', opts)
     }
 }
+
+// A package can only be pinned active while its period covers today. Mirror the
+// server rule so the checkbox is disabled (and any stale tick cleared) the
+// moment the chosen dates no longer include today.
+const packageValidToday = computed(() => {
+    if (!packageForm.start_date) return false
+
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    const start = new Date(packageForm.start_date)
+    if (Number.isNaN(start.getTime()) || start.getTime() > today.getTime()) {
+        return false
+    }
+
+    if (packageForm.end_date) {
+        const end = new Date(packageForm.end_date)
+        if (Number.isNaN(end.getTime()) || end.getTime() < today.getTime()) {
+            return false
+        }
+    }
+
+    return true
+})
+
+watch(packageValidToday, (valid) => {
+    if (!valid) packageForm.is_current = false
+})
 
 // A package's lifecycle status for the table's Status column.
 type PackageStatus = 'active' | 'scheduled' | 'expired'
@@ -297,8 +330,6 @@ function packageStatus(pkg: Package): PackageStatus {
  */
 
 const packageSearch = ref('')
-const filterBusinessUnit = ref('')
-const filterGrade = ref('')
 const filterStatus = ref<'' | PackageStatus>('')
 
 // Sort rank so the Status column sorts active → scheduled → ended (not A–Z).
@@ -328,41 +359,23 @@ const filteredPackages = computed<PackageRow[]>(() => {
 
     return decoratedPackages.value.filter((p) => {
         if (q && !p.name.toLowerCase().includes(q)) return false
-        if (filterBusinessUnit.value && !p.business_units.includes(filterBusinessUnit.value))
-            return false
-        if (filterGrade.value && !p.grades.includes(filterGrade.value)) return false
         if (filterStatus.value && p.status !== filterStatus.value) return false
         return true
     })
 })
 
 const hasPackageFilters = computed(
-    () =>
-        !!packageSearch.value ||
-        !!filterBusinessUnit.value ||
-        !!filterGrade.value ||
-        !!filterStatus.value,
+    () => !!packageSearch.value || !!filterStatus.value,
 )
 
 function clearPackageFilters() {
     packageSearch.value = ''
-    filterBusinessUnit.value = ''
-    filterGrade.value = ''
     filterStatus.value = ''
 }
-
-const statusLabel = (s: PackageStatus): string =>
-    s === 'active'
-        ? t.value.idp.settings.statusActive
-        : s === 'scheduled'
-          ? t.value.idp.settings.statusScheduled
-          : t.value.idp.settings.statusExpired
 
 const packageColumns = computed<Column[]>(() => [
     { key: 'name', label: t.value.idp.settings.packageName, sortable: true },
     { key: 'period_label', label: t.value.idp.settings.colPeriod, sortable: true, sortKey: 'start_date' },
-    { key: 'business_units', label: t.value.idp.settings.businessUnits },
-    { key: 'grades', label: t.value.idp.settings.grades },
     { key: 'models_count', label: t.value.idp.settings.models, sortable: true, align: 'center' },
     { key: 'total_percentage', label: t.value.idp.settings.colWeight, sortable: true, align: 'center' },
     { key: 'status', label: t.value.idp.settings.colStatus, sortable: true, sortKey: 'status_rank' },
@@ -416,32 +429,36 @@ function confirmDelete() {
             <!-- ------------------------------------------------------------
                  Packages (period-scoped bundles)
             ------------------------------------------------------------- -->
-            <section class="rounded-xl border border-border bg-white p-5 shadow-sm">
-                <div class="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                        <h3 class="text-base font-semibold text-slate-800">
-                            {{ t.idp.settings.packages }}
-                        </h3>
-                        <p class="mt-0.5 text-sm text-slate-400">
-                            {{ t.idp.settings.packagesHint }}
-                        </p>
+            <section class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+                <div class="border-b border-border/60 p-5">
+                    <div class="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                            <h3 class="flex items-center gap-2 text-base font-semibold text-slate-800">
+                                {{ t.idp.settings.packages }}
+                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                                    {{ packages.length }}
+                                </span>
+                            </h3>
+                            <p class="mt-0.5 text-sm text-slate-400">
+                                {{ t.idp.settings.packagesHint }}
+                            </p>
+                        </div>
+
+                        <button
+                            type="button"
+                            class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
+                            @click="openPackage()"
+                        >
+                            <i class="fa-solid fa-plus text-xs" />
+                            {{ t.idp.settings.addPackage }}
+                        </button>
                     </div>
 
-                    <button
-                        type="button"
-                        class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
-                        @click="openPackage()"
+                    <!-- Toolbar: search + filters -->
+                    <div
+                        v-if="packages.length"
+                        class="mt-4 flex flex-wrap items-center gap-3"
                     >
-                        <i class="fa-solid fa-plus text-xs" />
-                        {{ t.idp.settings.addPackage }}
-                    </button>
-                </div>
-
-                <!-- Toolbar: search + filters -->
-                <div
-                    v-if="packages.length"
-                    class="mt-5 flex flex-wrap items-center gap-3"
-                >
                     <div class="relative min-w-[200px] flex-1">
                         <i
                             class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
@@ -453,26 +470,6 @@ function confirmDelete() {
                             class="w-full rounded-md border border-border bg-white py-2 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                         >
                     </div>
-
-                    <select
-                        v-model="filterBusinessUnit"
-                        class="rounded-md border border-border bg-white px-3 py-2 text-sm text-slate-600 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    >
-                        <option value="">{{ t.idp.settings.allBusinessUnits }}</option>
-                        <option v-for="bu in scopeOptions.businessUnits" :key="bu" :value="bu">
-                            {{ bu }}
-                        </option>
-                    </select>
-
-                    <select
-                        v-model="filterGrade"
-                        class="rounded-md border border-border bg-white px-3 py-2 text-sm text-slate-600 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    >
-                        <option value="">{{ t.idp.settings.allGrades }}</option>
-                        <option v-for="g in scopeOptions.grades" :key="g" :value="g">
-                            {{ g }}
-                        </option>
-                    </select>
 
                     <select
                         v-model="filterStatus"
@@ -493,23 +490,21 @@ function confirmDelete() {
                         <i class="fa-solid fa-xmark text-xs" />
                         {{ t.idp.settings.clearFilters }}
                     </button>
+                    </div>
                 </div>
 
                 <!-- Package table (sort · filter · search · pagination) -->
-                <div
+                <ClientTable
                     v-if="packages.length"
-                    class="mt-4 overflow-hidden rounded-lg border border-border"
+                    :columns="packageColumns"
+                    :rows="filteredPackages"
+                    row-key="id"
+                    :per-page="10"
+                    :initial-sort="{ key: 'start_date', dir: 'desc' }"
+                    selectable
+                    :selected-key="selectedPackageId"
+                    @row-click="selectedPackageId = ($event as { id: number }).id"
                 >
-                    <ClientTable
-                        :columns="packageColumns"
-                        :rows="filteredPackages"
-                        row-key="id"
-                        :per-page="10"
-                        :initial-sort="{ key: 'start_date', dir: 'desc' }"
-                        selectable
-                        :selected-key="selectedPackageId"
-                        @row-click="selectedPackageId = ($event as { id: number }).id"
-                    >
                         <template #cell-name="{ row }">
                             <div class="flex items-center gap-2 font-semibold text-slate-800">
                                 <span
@@ -524,52 +519,6 @@ function confirmDelete() {
                             <span class="whitespace-nowrap text-slate-500">
                                 <i class="fa-regular fa-calendar mr-1 text-slate-400" />
                                 {{ row.period_label }}
-                            </span>
-                        </template>
-
-                        <!-- Business units (chips, first 2 + overflow) -->
-                        <template #cell-business_units="{ row }">
-                            <div v-if="row.business_units.length" class="flex flex-wrap items-center gap-1">
-                                <span
-                                    v-for="bu in row.business_units.slice(0, 2)"
-                                    :key="bu"
-                                    class="inline-flex rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700"
-                                >
-                                    {{ bu }}
-                                </span>
-                                <span
-                                    v-if="row.business_units.length > 2"
-                                    class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-500"
-                                    :title="row.business_units.join(', ')"
-                                >
-                                    +{{ row.business_units.length - 2 }}
-                                </span>
-                            </div>
-                            <span v-else class="text-xs italic text-slate-300">
-                                {{ t.idp.settings.noneSelected }}
-                            </span>
-                        </template>
-
-                        <!-- Grade levels (chips, first 3 + overflow) -->
-                        <template #cell-grades="{ row }">
-                            <div v-if="row.grades.length" class="flex flex-wrap items-center gap-1">
-                                <span
-                                    v-for="g in row.grades.slice(0, 3)"
-                                    :key="g"
-                                    class="inline-flex rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700"
-                                >
-                                    {{ g }}
-                                </span>
-                                <span
-                                    v-if="row.grades.length > 3"
-                                    class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-500"
-                                    :title="row.grades.join(', ')"
-                                >
-                                    +{{ row.grades.length - 3 }}
-                                </span>
-                            </div>
-                            <span v-else class="text-xs italic text-slate-300">
-                                {{ t.idp.settings.noneSelected }}
                             </span>
                         </template>
 
@@ -649,12 +598,11 @@ function confirmDelete() {
                             {{ t.idp.settings.noMatchingPackages }}
                         </template>
                     </ClientTable>
-                </div>
 
                 <!-- No packages yet -->
                 <div
                     v-else
-                    class="mt-4 rounded-lg border border-dashed border-border px-6 py-8 text-center text-sm text-slate-400"
+                    class="m-5 rounded-lg border border-dashed border-border px-6 py-8 text-center text-sm text-slate-400"
                 >
                     {{ t.idp.settings.noPackages }}
                 </div>
@@ -664,12 +612,16 @@ function confirmDelete() {
                  Selected package · weighting summary + models
             ------------------------------------------------------------- -->
             <template v-if="selectedPackage">
-                <section class="rounded-xl border border-border bg-white p-5 shadow-sm">
+                <section class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+                    <div class="border-b border-border/60 p-5">
                     <div class="flex flex-wrap items-start justify-between gap-4">
                         <div>
-                            <h3 class="text-base font-semibold text-slate-800">
+                            <h3 class="flex flex-wrap items-center gap-2 text-base font-semibold text-slate-800">
                                 {{ t.idp.settings.models }}
                                 <span class="text-slate-400">· {{ selectedPackage.name }}</span>
+                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                                    {{ packageModels.length }}
+                                </span>
                             </h3>
                             <p class="mt-0.5 text-sm text-slate-400">
                                 {{ t.idp.settings.modelsHint }}
@@ -745,97 +697,80 @@ function confirmDelete() {
                             </span>
                         </div>
                     </div>
-                </section>
+                    </div>
 
-                <!-- Model cards -->
-                <div
-                    v-if="packageModels.length"
-                    class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
-                >
-                    <div
-                        v-for="(model, i) in packageModels"
-                        :key="model.id"
-                        class="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-white shadow-sm transition hover:shadow-md"
+                    <!-- Model table -->
+                    <ClientTable
+                        v-if="packageModels.length"
+                        :columns="modelColumns"
+                        :rows="modelRows"
+                        row-key="id"
+                        :per-page="10"
+                        numbered
                     >
-                        <span
-                            class="absolute inset-x-0 top-0 h-1"
-                            :class="colorFor(i).bar"
-                        />
-
-                        <div class="flex items-start justify-between gap-3 p-5 pb-3">
-                            <div class="min-w-0">
-                                <h4 class="truncate font-semibold text-slate-800">
-                                    {{ modelName(model) }}
-                                </h4>
-                                <p class="mt-0.5 text-xs text-slate-400">
-                                    {{ t.idp.settings.ofTotal }}
-                                </p>
+                        <template #cell-name="{ row }">
+                            <div class="flex items-center gap-2 font-semibold text-slate-800">
+                                <span class="h-2.5 w-2.5 shrink-0 rounded-full" :class="row._bar" />
+                                {{ row._name }}
                             </div>
+                        </template>
 
-                            <div
-                                class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-sm font-bold ring-4"
-                                :class="[
-                                    colorFor(i).soft,
-                                    colorFor(i).text,
-                                    colorFor(i).ring,
-                                ]"
+                        <template #cell-percentage="{ row }">
+                            <span
+                                class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-bold text-slate-600"
                             >
-                                {{ model.percentage }}%
-                            </div>
-                        </div>
+                                {{ row.percentage }}%
+                            </span>
+                        </template>
 
-                        <p
-                            v-if="modelDescription(model)"
-                            class="whitespace-pre-wrap break-words px-5 text-sm leading-relaxed text-slate-500"
-                        >
-                            {{ modelDescription(model) }}
-                        </p>
-                        <p v-else class="px-5 text-sm italic text-slate-300">
-                            {{ t.idp.settings.noDescription }}
-                        </p>
+                        <template #cell-description="{ row }">
+                            <span
+                                v-if="row._description"
+                                class="whitespace-pre-wrap break-words text-slate-500"
+                            >
+                                {{ row._description }}
+                            </span>
+                            <span v-else class="text-xs italic text-slate-300">
+                                {{ t.idp.settings.noDescription }}
+                            </span>
+                        </template>
 
-                        <div
-                            class="mt-auto flex items-center justify-between gap-2 border-t border-border/60 px-5 py-3"
-                        >
-                            <div class="flex items-center gap-3 text-xs text-slate-400">
-                                <span
-                                    class="inline-flex items-center gap-1"
-                                    :title="t.idp.settings.programs"
-                                >
-                                    <i class="fa-solid fa-book-open text-[11px]" />
-                                    {{ model.development_programs_count }}
-                                </span>
-                                <span
-                                    class="inline-flex items-center gap-1"
-                                    :title="t.idp.settings.plansInUse"
-                                >
-                                    <i class="fa-solid fa-user-check text-[11px]" />
-                                    {{ model.individual_development_plans_count }}
-                                </span>
-                            </div>
+                        <template #cell-programs="{ row }">
+                            <span class="inline-flex items-center gap-1 text-slate-500">
+                                <i class="fa-solid fa-book-open text-[11px] text-slate-400" />
+                                {{ row.development_programs_count }}
+                            </span>
+                        </template>
 
-                            <div class="flex items-center gap-1">
+                        <template #cell-plans="{ row }">
+                            <span class="inline-flex items-center gap-1 text-slate-500">
+                                <i class="fa-solid fa-user-check text-[11px] text-slate-400" />
+                                {{ row.individual_development_plans_count }}
+                            </span>
+                        </template>
+
+                        <template #cell-actions="{ row }">
+                            <div class="flex items-center justify-end gap-1">
                                 <IconButton
                                     icon="fa-solid fa-pen"
                                     variant="edit"
                                     :title="t.idp.settings.editModel"
-                                    @click="openModel(model)"
+                                    @click="openModel(row as unknown as Model)"
                                 />
                                 <IconButton
                                     icon="fa-solid fa-trash"
                                     variant="delete"
                                     :title="t.idp.settings.deleteModel"
-                                    @click="deleteModel(model)"
+                                    @click="deleteModel(row as unknown as Model)"
                                 />
                             </div>
-                        </div>
-                    </div>
-                </div>
+                        </template>
+                    </ClientTable>
 
                 <!-- Package has no models yet -->
                 <div
                     v-else
-                    class="rounded-xl border border-dashed border-border bg-white px-6 py-14 text-center"
+                    class="m-5 rounded-xl border border-dashed border-border bg-white px-6 py-14 text-center"
                 >
                     <div
                         class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary"
@@ -857,6 +792,7 @@ function confirmDelete() {
                         {{ t.idp.settings.addModel }}
                     </button>
                 </div>
+                </section>
             </template>
         </div>
 
@@ -897,41 +833,6 @@ function confirmDelete() {
                     </p>
                 </div>
 
-                <!-- Audience scope: business units + grade levels -->
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.businessUnits }}
-                    </label>
-                    <MultiSelect
-                        v-model="packageForm.business_units"
-                        :options="businessUnitOptions"
-                        :placeholder="t.idp.settings.selectBusinessUnits"
-                        :invalid="!!packageForm.errors.business_units"
-                    />
-                    <p v-if="packageForm.errors.business_units" class="mt-1 text-xs text-red-600">
-                        {{ packageForm.errors.business_units }}
-                    </p>
-                </div>
-
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.grades }}
-                    </label>
-                    <MultiSelect
-                        v-model="packageForm.grades"
-                        :options="gradeOptions"
-                        :placeholder="t.idp.settings.selectGrades"
-                        :invalid="!!packageForm.errors.grades"
-                    />
-                    <p v-if="packageForm.errors.grades" class="mt-1 text-xs text-red-600">
-                        {{ packageForm.errors.grades }}
-                    </p>
-                    <p class="mt-1.5 text-xs text-slate-400">
-                        <i class="fa-solid fa-circle-info mr-1" />
-                        {{ t.idp.settings.audienceHint }}
-                    </p>
-                </div>
-
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">
@@ -964,12 +865,18 @@ function confirmDelete() {
                 </div>
 
                 <label
-                    class="flex items-start gap-2.5 rounded-lg border border-border bg-slate-50/60 p-3"
+                    class="flex items-start gap-2.5 rounded-lg border p-3"
+                    :class="
+                        packageValidToday
+                            ? 'border-border bg-slate-50/60'
+                            : 'cursor-not-allowed border-border bg-slate-100/60 opacity-70'
+                    "
                 >
                     <input
                         v-model="packageForm.is_current"
                         type="checkbox"
-                        class="mt-0.5 h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                        :disabled="!packageValidToday"
+                        class="mt-0.5 h-4 w-4 rounded border-border text-primary focus:ring-primary disabled:cursor-not-allowed"
                     >
                     <span class="text-sm">
                         <span class="font-medium text-slate-700">
@@ -977,6 +884,14 @@ function confirmDelete() {
                         </span>
                         <span class="mt-0.5 block text-xs text-slate-400">
                             {{ t.idp.settings.setCurrentHint }}
+                        </span>
+                        <!-- Why the pin is unavailable for these dates. -->
+                        <span
+                            v-if="!packageValidToday"
+                            class="mt-1 block text-xs font-medium text-amber-600"
+                        >
+                            <i class="fa-solid fa-triangle-exclamation mr-1" />
+                            {{ t.idp.settings.setCurrentUnavailable }}
                         </span>
                     </span>
                 </label>

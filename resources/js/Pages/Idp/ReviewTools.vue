@@ -146,12 +146,15 @@ function confirmDelete() {
         />
 
         <div class="space-y-6">
-            <section class="rounded-xl border border-border bg-white p-5 shadow-sm">
+            <section class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
                 <!-- Header: title · search · add -->
-                <div class="flex flex-wrap items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 p-5">
                     <div>
-                        <h3 class="text-base font-semibold text-slate-800">
+                        <h3 class="flex items-center gap-2 text-base font-semibold text-slate-800">
                             {{ t.idp.settings.reviewTools }}
+                            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                                {{ reviewTools.length }}
+                            </span>
                         </h3>
                         <p class="mt-0.5 text-sm text-slate-400">
                             {{ t.idp.settings.reviewToolsHint }}
@@ -183,13 +186,12 @@ function confirmDelete() {
                 </div>
 
                 <!-- Table -->
-                <div class="mt-5 overflow-hidden rounded-lg border border-border">
-                    <ClientTable
-                        :columns="columns"
-                        :rows="filteredTools"
-                        row-key="id"
-                        :per-page="10"
-                    >
+                <ClientTable
+                    :columns="columns"
+                    :rows="filteredTools"
+                    row-key="id"
+                    :per-page="10"
+                >
                         <template #cell-name="{ row }">
                             <span class="font-medium text-slate-700">{{ row.name }}</span>
                         </template>
@@ -215,7 +217,6 @@ function confirmDelete() {
                             {{ search ? t.idp.settings.noToolsMatch : t.idp.settings.none }}
                         </template>
                     </ClientTable>
-                </div>
             </section>
         </div>
 

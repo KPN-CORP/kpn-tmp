@@ -116,6 +116,7 @@ Route::middleware('auth')->group(function () use ($stub) {
         Route::get('/idp-setting/proficiency-level', [IdpSettingController::class, 'proficiencyLevel'])->name('idp.setting.proficiency_level');
         Route::get('/idp-setting/competency', [IdpSettingController::class, 'competency'])->name('idp.setting.competency');
         Route::get('/idp-setting/review-tools', [IdpSettingController::class, 'reviewTools'])->name('idp.setting.review_tools');
+        Route::get('/idp-setting/master-implementation', [IdpSettingController::class, 'masterImplementation'])->name('idp.setting.master_implementation');
 
         Route::post('/idp-setting/packages', [IdpSettingController::class, 'storePackage'])->name('idp.setting.packages.store');
         Route::put('/idp-setting/packages/{developmentModelPackage}', [IdpSettingController::class, 'updatePackage'])->name('idp.setting.packages.update');
@@ -128,6 +129,10 @@ Route::middleware('auth')->group(function () use ($stub) {
         Route::post('/idp-setting/masters', [IdpSettingController::class, 'storeMaster'])->name('idp.setting.masters.store');
         Route::put('/idp-setting/masters/{master}', [IdpSettingController::class, 'updateMaster'])->name('idp.setting.masters.update');
         Route::delete('/idp-setting/masters/{master}', [IdpSettingController::class, 'destroyMaster'])->name('idp.setting.masters.destroy');
+
+        Route::post('/idp-setting/implementations', [IdpSettingController::class, 'storeImplementation'])->name('idp.setting.implementations.store');
+        Route::put('/idp-setting/implementations/{master}', [IdpSettingController::class, 'updateImplementation'])->name('idp.setting.implementations.update');
+        Route::delete('/idp-setting/implementations/{master}', [IdpSettingController::class, 'destroyImplementation'])->name('idp.setting.implementations.destroy');
     });
 
     Route::middleware('permission:view_admin_setting')->group(function () {

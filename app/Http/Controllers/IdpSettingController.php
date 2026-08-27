@@ -15,7 +15,9 @@ use App\Models\MasterBisnisunit;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -26,13 +28,13 @@ class IdpSettingController extends Controller
         $programs = DevelopmentPlanMaster::where('type', 'development_program')
             ->with('developmentModel:id,name,name_en,name_id,percentage')
             ->orderBy('value')
-            ->get(['id', 'value', 'value_en', 'value_id', 'development_model_id']);
+            ->get(['id', 'value', 'value_en', 'value_id', 'development_model_id', 'competency_type_id', 'proficiency_level_id', 'custom_competency', 'custom_proficiency_level', 'business_unit', 'grade']);
 
         $programValues = $programs->keyBy('id');
 
         $competencies = DevelopmentPlanMaster::where('type', 'competency_name')
             ->orderBy('value')
-            ->get(['id', 'value', 'value_en', 'value_id', 'description_en', 'description_id', 'related_program', 'competency_type_id'])
+            ->get(['id', 'value', 'value_en', 'value_id', 'description_en', 'description_id', 'related_program', 'competency_type_id', 'proficiency_level_id'])
             ->map(fn ($c) => [
                 'id' => $c->id,
                 'value' => $c->value,
@@ -41,6 +43,9 @@ class IdpSettingController extends Controller
                 'description_en' => $c->description_en,
                 'description_id' => $c->description_id,
                 'competency_type_id' => $c->competency_type_id,
+                // The competency's chosen proficiency level — the program form
+                // derives its proficiency options from the selected competencies.
+                'proficiency_level_id' => $c->proficiency_level_id,
                 'related_program' => collect($c->related_program ?? [])->map(fn ($id) => (int) $id)->values(),
                 'linked_programs' => collect($c->related_program ?? [])
                     ->map(fn ($id) => $programValues->get($id)?->value)
@@ -48,17 +53,21 @@ class IdpSettingController extends Controller
                     ->values(),
             ]);
 
-        $packages = $this->packagesData();
+        [$packages, $activePackageId] = $this->packagesData();
 
         return Inertia::render('Idp/Settings', [
             'packages' => $packages,
-            // Default package for the program form's model dropdown: the first
-            // package in effect today (packages are audience-scoped, but a
-            // development program is a global master, so any active one seeds the
-            // dropdown). Null when none are active.
-            'activePackageId' => $packages->firstWhere('is_active', true)['id'] ?? null,
+            'activePackageId' => $activePackageId,
             'developmentModels' => $this->developmentModelsData(),
             'competencies' => $competencies,
+            'competencyTypes' => $this->competencyTypesData(),
+            'proficiencyLevels' => DevelopmentPlanMaster::where('type', 'proficiency_level')
+                ->orderBy('value')->get(['id', 'value', 'value_en', 'value_id']),
+            // Corporate scope option lists for the program form (business unit /
+            // grade), read defensively so an unreachable kpncorp never breaks the
+            // settings screen.
+            'businessUnits' => $this->businessUnitOptions(),
+            'grades' => $this->gradeOptions(),
             'developmentPrograms' => $programs->map(fn ($p) => [
                 'id' => $p->id,
                 'value' => $p->value,
@@ -66,6 +75,13 @@ class IdpSettingController extends Controller
                 'value_id' => $p->value_id,
                 'development_model_id' => $p->development_model_id,
                 'model_name' => $p->developmentModel?->name,
+                'competency_type_id' => $p->competency_type_id,
+                'proficiency_level_id' => $p->proficiency_level_id,
+                // Free-typed competencies / proficiency (used when the type is "Others").
+                'custom_competency' => $p->custom_competency,
+                'custom_proficiency_level' => $p->custom_proficiency_level,
+                'business_unit' => $p->business_unit,
+                'grade' => $p->grade,
             ]),
         ]);
     }
@@ -88,38 +104,13 @@ class IdpSettingController extends Controller
      */
     public function developmentModel(): Response
     {
+        [$packages, $activePackageId] = $this->packagesData();
+
         return Inertia::render('Idp/DevelopmentModel', [
-            'packages' => $this->packagesData(),
+            'packages' => $packages,
+            'activePackageId' => $activePackageId,
             'developmentModels' => $this->developmentModelsData(),
-            'scopeOptions' => $this->scopeOptions(),
         ]);
-    }
-
-    /**
-     * The audience options a package can be scoped to: corporate business units
-     * (`master_bisnisunits.nama_bisnis`) and the grade levels present on
-     * employees (`employees.job_level`). Both are read defensively so a downed
-     * kpncorp connection yields empty lists rather than an error.
-     *
-     * @return array{businessUnits: list<string>, grades: list<string>}
-     */
-    private function scopeOptions(): array
-    {
-        try {
-            $businessUnits = MasterBisnisunit::orderBy('nama_bisnis')
-                ->pluck('nama_bisnis')->filter()->values()->all();
-        } catch (\Throwable) {
-            $businessUnits = [];
-        }
-
-        try {
-            $grades = Employee::query()->distinct()->orderBy('job_level')
-                ->pluck('job_level')->filter()->values()->all();
-        } catch (\Throwable) {
-            $grades = [];
-        }
-
-        return ['businessUnits' => $businessUnits, 'grades' => $grades];
     }
 
     /**
@@ -130,7 +121,24 @@ class IdpSettingController extends Controller
     {
         $competencies = DevelopmentPlanMaster::where('type', 'competency_name')
             ->orderBy('value')
-            ->get(['id', 'value', 'value_en', 'value_id', 'description_en', 'description_id', 'competency_type_id', 'proficiency_level_id', 'key_behavior_id']);
+            ->get(['id', 'value', 'value_en', 'value_id', 'description_en', 'description_id', 'competency_type_id', 'proficiency_level_id', 'key_behavior_id', 'proficiency_level_ids', 'key_behavior_ids'])
+            ->map(fn ($c) => [
+                'id' => $c->id,
+                'value' => $c->value,
+                'value_en' => $c->value_en,
+                'value_id' => $c->value_id,
+                'description_en' => $c->description_en,
+                'description_id' => $c->description_id,
+                'competency_type_id' => $c->competency_type_id,
+                // Multi-selected proficiency levels + key behaviors, falling back
+                // to the legacy singular pins for rows created before the change.
+                'proficiency_level_ids' => ! empty($c->proficiency_level_ids)
+                    ? array_map('intval', $c->proficiency_level_ids)
+                    : array_values(array_filter([$c->proficiency_level_id], fn ($v) => $v !== null)),
+                'key_behavior_ids' => ! empty($c->key_behavior_ids)
+                    ? array_map('intval', $c->key_behavior_ids)
+                    : array_values(array_filter([$c->key_behavior_id], fn ($v) => $v !== null)),
+            ]);
 
         return Inertia::render('Idp/Competency', [
             'competencies' => $competencies,
@@ -141,6 +149,63 @@ class IdpSettingController extends Controller
             // competency form can scope the behavior dropdown to the chosen level.
             'keyBehaviors' => DevelopmentPlanMaster::where('type', 'key_behavior')
                 ->orderBy('value')->get(['id', 'value', 'value_en', 'value_id', 'proficiency_level_id']),
+        ]);
+    }
+
+    /**
+     * Master Implementation — maps a single competency (+ its proficiency level)
+     * to a corporate org scope: grade plus a dynamic business-unit hierarchy
+     * (business unit → job family / function → position). Set up here before the
+     * Master Development screen. Stored as `development_plan_masters` rows with
+     * type='implementation'.
+     */
+    public function masterImplementation(): Response
+    {
+        $implementations = DevelopmentPlanMaster::where('type', 'implementation')
+            ->orderByDesc('id')
+            ->get([
+                'id', 'competency_type_id', 'competency_name_id', 'proficiency_level_id',
+                'grade', 'business_unit', 'job_family', 'function_name', 'position',
+            ]);
+
+        // Competencies carry their type + chosen proficiency level so the form
+        // can cascade (type → competency → proficiency level).
+        $competencies = DevelopmentPlanMaster::where('type', 'competency_name')
+            ->orderBy('value')
+            ->get(['id', 'value', 'value_en', 'value_id', 'competency_type_id', 'proficiency_level_id']);
+
+        // Proficiency levels carry their key behaviors so the form can surface
+        // the behaviors of the competency's level.
+        $proficiencyLevels = DevelopmentPlanMaster::where('type', 'proficiency_level')
+            ->with(['keyBehaviors' => fn ($q) => $q->orderBy('value')])
+            ->orderBy('value')
+            ->get(['id', 'value', 'value_en', 'value_id'])
+            ->map(fn ($level) => [
+                'id' => $level->id,
+                'value' => $level->value,
+                'value_en' => $level->value_en,
+                'value_id' => $level->value_id,
+                'key_behaviors' => $level->keyBehaviors->map(fn ($kb) => [
+                    'id' => $kb->id,
+                    'value' => $kb->value,
+                    'value_en' => $kb->value_en,
+                    'value_id' => $kb->value_id,
+                ])->values(),
+            ]);
+
+        $hierarchy = $this->orgHierarchyData();
+
+        return Inertia::render('Idp/MasterImplementation', [
+            'implementations' => $implementations,
+            'competencyTypes' => $this->competencyTypesData(),
+            'competencies' => $competencies,
+            'proficiencyLevels' => $proficiencyLevels,
+            'grades' => $this->gradeOptions(),
+            // Dynamic org-scope hierarchy (all guarded reads off kpncorp).
+            'businessUnits' => $hierarchy['businessUnits'],
+            'jobFamiliesByBu' => $hierarchy['jobFamiliesByBu'],
+            'functionsByBu' => $hierarchy['functionsByBu'],
+            'positionsByBuFunction' => $hierarchy['positionsByBuFunction'],
         ]);
     }
 
@@ -204,30 +269,214 @@ class IdpSettingController extends Controller
     }
 
     /**
-     * Packages with per-package roll-ups (model count + total weighting), their
-     * business-unit / grade audience, and whether each is in effect today.
-     * Several packages can be in effect at once (scoping keeps their audiences
-     * apart), so "active" is a per-row flag rather than a single id.
+     * Business units a development program can be scoped to. Sourced from the
+     * corporate `master_bisnisunits.nama_bisnis`, falling back to the distinct
+     * `group_company` values already used across the app when that master is
+     * unreachable or empty. Read guarded so kpncorp being down never 500s.
+     *
+     * @return array<int, string>
      */
-    private function packagesData(): Collection
+    private function businessUnitOptions(): array
+    {
+        try {
+            $units = MasterBisnisunit::query()
+                ->whereNotNull('nama_bisnis')
+                ->orderBy('nama_bisnis')
+                ->pluck('nama_bisnis')
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if (! empty($units)) {
+                return $units;
+            }
+        } catch (\Throwable) {
+            // fall through to the employee-derived list
+        }
+
+        try {
+            return Employee::whereNotNull('group_company')
+                ->distinct()->orderBy('group_company')
+                ->pluck('group_company')->filter()->values()->all();
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Whether the given competency_type master is the catch-all "Others" type.
+     * A program on this type free-types its competencies + proficiency level
+     * instead of picking them from the masters.
+     */
+    private function isOthersCompetencyType(?int $id): bool
+    {
+        if ($id === null) {
+            return false;
+        }
+
+        $value = DevelopmentPlanMaster::where('type', 'competency_type')
+            ->whereKey($id)
+            ->value('value');
+
+        return in_array(strtolower(trim((string) $value)), ['others', 'other', 'lainnya'], true);
+    }
+
+    /**
+     * Grades a development program can be scoped to — the distinct employee
+     * `job_level` values, matching how the rest of the app treats "grade".
+     *
+     * @return array<int, string>
+     */
+    private function gradeOptions(): array
+    {
+        try {
+            return Employee::whereNotNull('job_level')
+                ->distinct()->orderBy('job_level')
+                ->pluck('job_level')->filter()->values()->all();
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * The dynamic org-scope hierarchy sourced from kpncorp, shaped so the form
+     * can cascade purely client-side (business unit → job family / function →
+     * position):
+     *
+     *  - businessUnits         — the union of every business-unit grouping value
+     *    across the source tables (employees, departments, designations).
+     *  - jobFamiliesByBu       — bu ⇒ distinct employee `company_name`.
+     *  - functionsByBu         — bu ⇒ distinct `departments.department_name`.
+     *  - positionsByBuFunction — bu ⇒ function ⇒ distinct
+     *    `designations.designation_name`.
+     *
+     * The business unit is the employee `group_company` (matched to
+     * `departments`/`designations.parent_company_id`). Everything is read
+     * defensively so an unreachable kpncorp never 500s the screen.
+     *
+     * @return array{businessUnits: list<string>, jobFamiliesByBu: array<string, list<string>>, functionsByBu: array<string, list<string>>, positionsByBuFunction: array<string, array<string, list<string>>>}
+     */
+    private function orgHierarchyData(): array
+    {
+        $clean = fn ($v) => trim((string) $v);
+        $isReal = fn ($v) => $v !== '' && $v !== '-';
+
+        // bu ⇒ [company_name] from the employee master.
+        $jobFamiliesByBu = [];
+        try {
+            Employee::query()
+                ->select('group_company', 'company_name')
+                ->whereNotNull('group_company')
+                ->whereNotNull('company_name')
+                ->distinct()
+                ->orderBy('company_name')
+                ->get()
+                ->each(function ($row) use (&$jobFamiliesByBu, $clean, $isReal) {
+                    $bu = $clean($row->group_company);
+                    $family = $clean($row->company_name);
+                    if ($isReal($bu) && $isReal($family)) {
+                        $jobFamiliesByBu[$bu][$family] = true;
+                    }
+                });
+        } catch (\Throwable) {
+        }
+
+        // bu ⇒ [department_name] from the corporate departments table.
+        $functionsByBu = [];
+        try {
+            DB::connection('kpncorp')->table('departments')
+                ->select('parent_company_id', 'department_name')
+                ->where('status', 'Active')
+                ->whereNotNull('parent_company_id')
+                ->whereNotNull('department_name')
+                ->distinct()
+                ->orderBy('department_name')
+                ->get()
+                ->each(function ($row) use (&$functionsByBu, $clean, $isReal) {
+                    $bu = $clean($row->parent_company_id);
+                    $fn = $clean($row->department_name);
+                    if ($isReal($bu) && $isReal($fn)) {
+                        $functionsByBu[$bu][$fn] = true;
+                    }
+                });
+        } catch (\Throwable) {
+        }
+
+        // bu ⇒ function ⇒ [designation_name] from the corporate designations table.
+        $positionsByBuFunction = [];
+        try {
+            DB::connection('kpncorp')->table('designations')
+                ->select('parent_company_id', 'department_name', 'designation_name')
+                ->where('status', 'Active')
+                ->whereNotNull('parent_company_id')
+                ->whereNotNull('department_name')
+                ->whereNotNull('designation_name')
+                ->distinct()
+                ->orderBy('designation_name')
+                ->get()
+                ->each(function ($row) use (&$positionsByBuFunction, $clean, $isReal) {
+                    $bu = $clean($row->parent_company_id);
+                    $fn = $clean($row->department_name);
+                    $pos = $clean($row->designation_name);
+                    if ($isReal($bu) && $isReal($fn) && $isReal($pos)) {
+                        $positionsByBuFunction[$bu][$fn][$pos] = true;
+                    }
+                });
+        } catch (\Throwable) {
+        }
+
+        // Flatten the de-dup maps to ordered lists.
+        $toList = fn (array $m) => collect(array_keys($m))->sort()->values()->all();
+
+        $jobFamiliesByBu = collect($jobFamiliesByBu)->map($toList)->all();
+        $functionsByBu = collect($functionsByBu)->map($toList)->all();
+        $positionsByBuFunction = collect($positionsByBuFunction)
+            ->map(fn ($byFn) => collect($byFn)->map($toList)->all())
+            ->all();
+
+        // The business-unit list is the union of every grouping value seen.
+        $businessUnits = collect([
+            ...array_keys($jobFamiliesByBu),
+            ...array_keys($functionsByBu),
+            ...array_keys($positionsByBuFunction),
+        ])->unique()->sort()->values()->all();
+
+        return [
+            'businessUnits' => $businessUnits,
+            'jobFamiliesByBu' => $jobFamiliesByBu,
+            'functionsByBu' => $functionsByBu,
+            'positionsByBuFunction' => $positionsByBuFunction,
+        ];
+    }
+
+    /**
+     * Packages with per-package roll-ups (model count + total weighting) plus
+     * the active package id. Shared by the settings + development-model screens.
+     *
+     * @return array{0: Collection, 1: int|null}
+     */
+    private function packagesData(): array
     {
         $packageRollup = DevelopmentModel::selectRaw(
             'development_model_package_id, COUNT(*) as models_count, COALESCE(SUM(percentage), 0) as total_percentage'
         )->groupBy('development_model_package_id')->get()->keyBy('development_model_package_id');
 
-        return DevelopmentModelPackage::orderByDesc('start_date')->orderByDesc('id')->get()
+        $activePackageId = DevelopmentModelPackage::active()?->id;
+
+        $packages = DevelopmentModelPackage::orderByDesc('start_date')->orderByDesc('id')->get()
             ->map(fn ($p) => [
                 'id' => $p->id,
                 'name' => $p->name,
-                'business_units' => array_values($p->business_units ?? []),
-                'grades' => array_values($p->grades ?? []),
                 'start_date' => $p->start_date?->toDateString(),
                 'end_date' => $p->end_date?->toDateString(),
                 'is_current' => $p->is_current,
-                'is_active' => $p->isInEffect(),
+                'is_active' => $p->id === $activePackageId,
                 'models_count' => (int) ($packageRollup[$p->id]->models_count ?? 0),
                 'total_percentage' => (int) ($packageRollup[$p->id]->total_percentage ?? 0),
             ]);
+
+        return [$packages, $activePackageId];
     }
 
     /**
@@ -301,14 +550,17 @@ class IdpSettingController extends Controller
     {
         $data = $request->validated();
 
-        DevelopmentModelPackage::create([
+        $package = DevelopmentModelPackage::create([
             'name' => $data['name'],
-            'business_units' => array_values($data['business_units']),
-            'grades' => array_values($data['grades']),
             'start_date' => $data['start_date'],
             'end_date' => $data['end_date'] ?? null,
             'is_current' => $data['is_current'] ?? false,
         ]);
+
+        // Only one package may be pinned as current.
+        if ($package->is_current) {
+            DevelopmentModelPackage::where('id', '!=', $package->id)->update(['is_current' => false]);
+        }
 
         return back()->with('success', 'Package added successfully.');
     }
@@ -319,23 +571,26 @@ class IdpSettingController extends Controller
 
         $developmentModelPackage->update([
             'name' => $data['name'],
-            'business_units' => array_values($data['business_units']),
-            'grades' => array_values($data['grades']),
             'start_date' => $data['start_date'],
             'end_date' => $data['end_date'] ?? null,
             'is_current' => $data['is_current'] ?? false,
         ]);
+
+        if ($developmentModelPackage->is_current) {
+            DevelopmentModelPackage::where('id', '!=', $developmentModelPackage->id)->update(['is_current' => false]);
+        }
 
         return back()->with('success', 'Package updated successfully.');
     }
 
     public function destroyPackage(DevelopmentModelPackage $developmentModelPackage): RedirectResponse
     {
-        // A package that is in effect today drives new development plans for its
-        // audience — it can't be removed while active (either its period covers
-        // today, or it is manually pinned as current).
-        if ($developmentModelPackage->isInEffect()) {
-            return back()->with('error', 'Cannot delete: this package is currently active.');
+        // The active/current package drives new development plans — it can't be
+        // removed while it's in effect (either resolved active by date, or
+        // manually pinned as current).
+        if ($developmentModelPackage->is_current
+            || $developmentModelPackage->id === DevelopmentModelPackage::active()?->id) {
+            return back()->with('error', 'Cannot delete: this is the active package.');
         }
 
         // Block deleting a package whose models are still referenced by IDP
@@ -370,9 +625,17 @@ class IdpSettingController extends Controller
         $isCompetency = $data['type'] === 'competency_name';
         // A key behavior belongs to a proficiency level via proficiency_level_id.
         $isKeyBehavior = $data['type'] === 'key_behavior';
+        // A development program carries a competency type + proficiency level
+        // (which scope its competency picker) plus a business unit / grade scope.
+        $isProgram = $data['type'] === 'development_program';
+        // "Others" programs free-type their competencies + proficiency level.
+        $isOthers = $isProgram && $this->isOthersCompetencyType($data['competency_type_id'] ?? null);
         // Competency, competency type, proficiency level and key behavior all
         // carry a bilingual description.
         $hasDescription = in_array($data['type'], ['competency_name', 'competency_type', 'proficiency_level', 'key_behavior'], true);
+
+        // A competency now pins several proficiency levels + key behaviors.
+        $sel = $isCompetency ? $this->competencyProficiencySelection($data) : null;
 
         $master = DevelopmentPlanMaster::create([
             'type' => $data['type'],
@@ -383,19 +646,35 @@ class IdpSettingController extends Controller
             'description_en' => $hasDescription ? ($data['description_en'] ?? null) : null,
             'description_id' => $hasDescription ? ($data['description_id'] ?? null) : null,
             'development_model_id' => $data['development_model_id'] ?? null,
-            'competency_type_id' => $isCompetency ? ($data['competency_type_id'] ?? null) : null,
-            'proficiency_level_id' => ($isCompetency || $isKeyBehavior) ? ($data['proficiency_level_id'] ?? null) : null,
+            'competency_type_id' => ($isCompetency || $isProgram) ? ($data['competency_type_id'] ?? null) : null,
+            // A picked proficiency level applies to a competency / key behavior,
+            // and to a program only when it maps to real competencies (not "Others").
+            // For a competency the singular column mirrors the first of its array.
+            'proficiency_level_id' => $isCompetency
+                ? $sel['proficiency_level_id']
+                : (($isKeyBehavior || ($isProgram && ! $isOthers)) ? ($data['proficiency_level_id'] ?? null) : null),
             // A pinned key behavior only makes sense when a level is chosen.
-            'key_behavior_id' => ($isCompetency && ! empty($data['proficiency_level_id']))
-                ? ($data['key_behavior_id'] ?? null)
-                : null,
+            'key_behavior_id' => $isCompetency ? $sel['key_behavior_id'] : null,
+            // The full multi-selection (competency only).
+            'proficiency_level_ids' => $isCompetency ? $sel['proficiency_level_ids'] : null,
+            'key_behavior_ids' => $isCompetency ? $sel['key_behavior_ids'] : null,
+            // Free-typed competencies / proficiency — an "Others" program only.
+            'custom_competency' => $isOthers ? ($data['custom_competency'] ?? null) : null,
+            'custom_proficiency_level' => $isOthers ? ($data['custom_proficiency_level'] ?? null) : null,
+            // Corporate scope — a program only.
+            'business_unit' => $isProgram ? ($data['business_unit'] ?? null) : null,
+            'grade' => $isProgram ? ($data['grade'] ?? null) : null,
             'related_program' => $isCompetency
                 ? array_map('strval', $request->input('related_programs', []))
                 : null,
         ]);
 
         if ($data['type'] === 'development_program') {
-            $this->linkProgramToCompetencies($master->id, $request->input('related_competencies', []));
+            // "Others" programs link no master competencies (they free-type instead).
+            $this->linkProgramToCompetencies(
+                $master->id,
+                $isOthers ? [] : $request->input('related_competencies', []),
+            );
         }
 
         return back()->with('success', 'Master data added successfully.');
@@ -423,11 +702,14 @@ class IdpSettingController extends Controller
 
         if ($master->type === 'competency_name') {
             $master->competency_type_id = $data['competency_type_id'] ?? null;
-            $master->proficiency_level_id = $data['proficiency_level_id'] ?? null;
-            // A pinned key behavior only makes sense when a level is chosen.
-            $master->key_behavior_id = ! empty($data['proficiency_level_id'])
-                ? ($data['key_behavior_id'] ?? null)
-                : null;
+
+            // Several proficiency levels + key behaviors; the singular columns
+            // mirror the first of each array for the screens that read one value.
+            $sel = $this->competencyProficiencySelection($data);
+            $master->proficiency_level_ids = $sel['proficiency_level_ids'];
+            $master->key_behavior_ids = $sel['key_behavior_ids'];
+            $master->proficiency_level_id = $sel['proficiency_level_id'];
+            $master->key_behavior_id = $sel['key_behavior_id'];
 
             // Only touch the program links when the form actually sent them,
             // so editing a competency's name/description never wipes links
@@ -437,10 +719,29 @@ class IdpSettingController extends Controller
             }
         }
 
+        // A development program carries its competency type + proficiency level
+        // (scoping its competency picker) and a business unit / grade scope.
+        // "Others" programs free-type their competencies + proficiency instead.
+        $programIsOthers = false;
+        if ($master->type === 'development_program') {
+            $programIsOthers = $this->isOthersCompetencyType($data['competency_type_id'] ?? null);
+
+            $master->competency_type_id = $data['competency_type_id'] ?? null;
+            $master->proficiency_level_id = $programIsOthers ? null : ($data['proficiency_level_id'] ?? null);
+            $master->custom_competency = $programIsOthers ? ($data['custom_competency'] ?? null) : null;
+            $master->custom_proficiency_level = $programIsOthers ? ($data['custom_proficiency_level'] ?? null) : null;
+            $master->business_unit = $data['business_unit'] ?? null;
+            $master->grade = $data['grade'] ?? null;
+        }
+
         $master->save();
 
         if ($master->type === 'development_program') {
-            $this->syncProgramCompetencies($master->id, $request->input('related_competencies', []));
+            // "Others" programs link no master competencies (they free-type instead).
+            $this->syncProgramCompetencies(
+                $master->id,
+                $programIsOthers ? [] : $request->input('related_competencies', []),
+            );
         }
 
         // Keep existing IDP rows in step with a renamed master value — but only
@@ -517,6 +818,116 @@ class IdpSettingController extends Controller
         return back()->with('success', 'Master data deleted successfully.');
     }
 
+    // --- Master implementation (competency → org scope) ---
+
+    public function storeImplementation(Request $request): RedirectResponse
+    {
+        $data = $this->validateImplementation($request);
+
+        DevelopmentPlanMaster::create([
+            'type' => 'implementation',
+            // Canonical `value` tracks the implemented competency's name so the
+            // row is never empty (it has no name of its own).
+            'value' => DevelopmentPlanMaster::whereKey($data['competency_name_id'])->value('value'),
+            'competency_type_id' => $data['competency_type_id'],
+            'competency_name_id' => $data['competency_name_id'],
+            'proficiency_level_id' => $data['proficiency_level_id'] ?? null,
+            'grade' => $data['grade'] ?? null,
+            'business_unit' => $data['business_unit'] ?? null,
+            'job_family' => $data['job_family'] ?? null,
+            'function_name' => $data['function_name'] ?? null,
+            'position' => $data['position'] ?? null,
+        ]);
+
+        return back()->with('success', 'Master implementation added successfully.');
+    }
+
+    public function updateImplementation(Request $request, DevelopmentPlanMaster $master): RedirectResponse
+    {
+        abort_unless($master->type === 'implementation', 404);
+
+        $data = $this->validateImplementation($request, $master);
+
+        $master->update([
+            'value' => DevelopmentPlanMaster::whereKey($data['competency_name_id'])->value('value'),
+            'competency_type_id' => $data['competency_type_id'],
+            'competency_name_id' => $data['competency_name_id'],
+            'proficiency_level_id' => $data['proficiency_level_id'] ?? null,
+            'grade' => $data['grade'] ?? null,
+            'business_unit' => $data['business_unit'] ?? null,
+            'job_family' => $data['job_family'] ?? null,
+            'function_name' => $data['function_name'] ?? null,
+            'position' => $data['position'] ?? null,
+        ]);
+
+        return back()->with('success', 'Master implementation updated successfully.');
+    }
+
+    public function destroyImplementation(DevelopmentPlanMaster $master): RedirectResponse
+    {
+        abort_unless($master->type === 'implementation', 404);
+
+        $master->delete();
+
+        return back()->with('success', 'Master implementation deleted successfully.');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function validateImplementation(Request $request, ?DevelopmentPlanMaster $master = null): array
+    {
+        $data = $request->validate([
+            'competency_type_id' => [
+                'required', 'integer',
+                Rule::exists('development_plan_masters', 'id')->where('type', 'competency_type'),
+            ],
+            'competency_name_id' => [
+                'required', 'integer',
+                Rule::exists('development_plan_masters', 'id')->where('type', 'competency_name'),
+            ],
+            'proficiency_level_id' => [
+                'nullable', 'integer',
+                Rule::exists('development_plan_masters', 'id')->where('type', 'proficiency_level'),
+            ],
+            'grade' => ['nullable', 'string', 'max:255'],
+            'business_unit' => ['nullable', 'string', 'max:255'],
+            'job_family' => ['nullable', 'string', 'max:255'],
+            'function_name' => ['nullable', 'string', 'max:255'],
+            'position' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        // The chosen competency must belong to the chosen competency type.
+        $validator = validator([], []);
+        $competency = DevelopmentPlanMaster::where('type', 'competency_name')
+            ->whereKey($data['competency_name_id'])
+            ->first(['id', 'competency_type_id']);
+
+        if ($competency && (int) $competency->competency_type_id !== (int) $data['competency_type_id']) {
+            $validator->errors()->add('competency_name_id', 'The selected competency does not belong to the chosen competency type.');
+            throw new ValidationException($validator);
+        }
+
+        // Guard against a duplicate implementation for the same competency + scope.
+        $duplicate = DevelopmentPlanMaster::where('type', 'implementation')
+            ->when($master, fn ($q) => $q->whereKeyNot($master->id))
+            ->where('competency_name_id', $data['competency_name_id'])
+            ->where('grade', $data['grade'] ?? null)
+            ->where('business_unit', $data['business_unit'] ?? null)
+            ->where('job_family', $data['job_family'] ?? null)
+            ->where('function_name', $data['function_name'] ?? null)
+            ->where('position', $data['position'] ?? null)
+            ->exists();
+
+        if ($duplicate) {
+            $validator = validator([], []);
+            $validator->errors()->add('competency_name_id', 'A master implementation with the same competency and scope already exists.');
+            throw new ValidationException($validator);
+        }
+
+        return $data;
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -547,7 +958,9 @@ class IdpSettingController extends Controller
             'description_id' => ['nullable', 'string'],
             'development_model_id' => ['nullable', 'integer', 'exists:development_models,id'],
             'competency_type_id' => [
-                'nullable', 'integer',
+                // A development program must be classified by a competency type.
+                $type === 'development_program' ? 'required' : 'nullable',
+                'integer',
                 Rule::exists('development_plan_masters', 'id')->where('type', 'competency_type'),
             ],
             'proficiency_level_id' => [
@@ -574,9 +987,64 @@ class IdpSettingController extends Controller
                     }
                 },
             ],
+            // A competency's multi-selected proficiency levels + key behaviors.
+            'proficiency_level_ids' => ['nullable', 'array'],
+            'proficiency_level_ids.*' => [
+                'integer',
+                Rule::exists('development_plan_masters', 'id')->where('type', 'proficiency_level'),
+            ],
+            'key_behavior_ids' => ['nullable', 'array'],
+            'key_behavior_ids.*' => [
+                'integer',
+                Rule::exists('development_plan_masters', 'id')->where('type', 'key_behavior'),
+            ],
             'related_programs' => ['nullable', 'array'],
             'related_competencies' => ['nullable', 'array'],
+            // Free-typed competencies / proficiency for an "Others" program.
+            'custom_competency' => ['nullable', 'string', 'max:2000'],
+            'custom_proficiency_level' => ['nullable', 'string', 'max:255'],
+            // Development-program corporate scope (stored as the raw string).
+            'business_unit' => ['nullable', 'string', 'max:255'],
+            'grade' => ['nullable', 'string', 'max:255'],
         ]);
+    }
+
+    /**
+     * Normalize a competency's proficiency-level + key-behavior selections into
+     * the stored shape: the multi-value array columns plus the legacy singular
+     * columns kept in step (first element) for the screens that still read one
+     * value. Key behaviors are dropped unless they belong to one of the chosen
+     * levels, and cleared entirely when no level is chosen.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{proficiency_level_ids: array<int>, key_behavior_ids: array<int>, proficiency_level_id: int|null, key_behavior_id: int|null}
+     */
+    private function competencyProficiencySelection(array $data): array
+    {
+        $levelIds = array_values(array_unique(array_map('intval', $data['proficiency_level_ids'] ?? [])));
+
+        $behaviorIds = array_values(array_unique(array_map('intval', $data['key_behavior_ids'] ?? [])));
+
+        if (empty($levelIds)) {
+            $behaviorIds = [];
+        } elseif (! empty($behaviorIds)) {
+            // Keep only behaviors that actually belong to one of the chosen levels.
+            $valid = DevelopmentPlanMaster::where('type', 'key_behavior')
+                ->whereIn('id', $behaviorIds)
+                ->whereIn('proficiency_level_id', $levelIds)
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+
+            $behaviorIds = array_values(array_filter($behaviorIds, fn ($id) => in_array($id, $valid, true)));
+        }
+
+        return [
+            'proficiency_level_ids' => $levelIds,
+            'key_behavior_ids' => $behaviorIds,
+            'proficiency_level_id' => $levelIds[0] ?? null,
+            'key_behavior_id' => $behaviorIds[0] ?? null,
+        ];
     }
 
     /**
