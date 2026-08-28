@@ -11,7 +11,6 @@ use App\Models\DevelopmentModelPackage;
 use App\Models\DevelopmentPlanMaster;
 use App\Models\Employee;
 use App\Models\IndividualDevelopmentPlan;
-use App\Models\MasterBisnisunit;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -28,7 +27,7 @@ class IdpSettingController extends Controller
         $programs = DevelopmentPlanMaster::where('type', 'development_program')
             ->with('developmentModel:id,name,name_en,name_id,percentage')
             ->orderBy('value')
-            ->get(['id', 'value', 'value_en', 'value_id', 'development_model_id', 'competency_type_id', 'proficiency_level_id', 'custom_competency', 'custom_proficiency_level', 'business_unit', 'grade']);
+            ->get(['id', 'value', 'value_en', 'value_id', 'development_model_id', 'competency_type_id', 'proficiency_level_id', 'custom_competency', 'custom_proficiency_level', 'grade', 'grades']);
 
         $programValues = $programs->keyBy('id');
 
@@ -63,10 +62,8 @@ class IdpSettingController extends Controller
             'competencyTypes' => $this->competencyTypesData(),
             'proficiencyLevels' => DevelopmentPlanMaster::where('type', 'proficiency_level')
                 ->orderBy('value')->get(['id', 'value', 'value_en', 'value_id']),
-            // Corporate scope option lists for the program form (business unit /
-            // grade), read defensively so an unreachable kpncorp never breaks the
-            // settings screen.
-            'businessUnits' => $this->businessUnitOptions(),
+            // Corporate scope option list for the program form (grades), read
+            // defensively so an unreachable kpncorp never breaks the settings screen.
             'grades' => $this->gradeOptions(),
             'developmentPrograms' => $programs->map(fn ($p) => [
                 'id' => $p->id,
@@ -80,8 +77,11 @@ class IdpSettingController extends Controller
                 // Free-typed competencies / proficiency (used when the type is "Others").
                 'custom_competency' => $p->custom_competency,
                 'custom_proficiency_level' => $p->custom_proficiency_level,
-                'business_unit' => $p->business_unit,
-                'grade' => $p->grade,
+                // A program is scoped to any number of grades; older rows that
+                // only carry the singular pin still surface as a one-item list.
+                'grades' => ! empty($p->grades)
+                    ? array_values($p->grades)
+                    : array_values(array_filter([$p->grade], fn ($v) => $v !== null && $v !== '')),
             ]),
         ]);
     }
@@ -266,42 +266,6 @@ class IdpSettingController extends Controller
                 'description_id' => $ct->description_id,
                 'competencies_count' => (int) ($typeUsage[$ct->id] ?? 0),
             ]);
-    }
-
-    /**
-     * Business units a development program can be scoped to. Sourced from the
-     * corporate `master_bisnisunits.nama_bisnis`, falling back to the distinct
-     * `group_company` values already used across the app when that master is
-     * unreachable or empty. Read guarded so kpncorp being down never 500s.
-     *
-     * @return array<int, string>
-     */
-    private function businessUnitOptions(): array
-    {
-        try {
-            $units = MasterBisnisunit::query()
-                ->whereNotNull('nama_bisnis')
-                ->orderBy('nama_bisnis')
-                ->pluck('nama_bisnis')
-                ->filter()
-                ->unique()
-                ->values()
-                ->all();
-
-            if (! empty($units)) {
-                return $units;
-            }
-        } catch (\Throwable) {
-            // fall through to the employee-derived list
-        }
-
-        try {
-            return Employee::whereNotNull('group_company')
-                ->distinct()->orderBy('group_company')
-                ->pluck('group_company')->filter()->values()->all();
-        } catch (\Throwable) {
-            return [];
-        }
     }
 
     /**
@@ -626,7 +590,7 @@ class IdpSettingController extends Controller
         // A key behavior belongs to a proficiency level via proficiency_level_id.
         $isKeyBehavior = $data['type'] === 'key_behavior';
         // A development program carries a competency type + proficiency level
-        // (which scope its competency picker) plus a business unit / grade scope.
+        // (which scope its competency picker) plus a grade scope.
         $isProgram = $data['type'] === 'development_program';
         // "Others" programs free-type their competencies + proficiency level.
         $isOthers = $isProgram && $this->isOthersCompetencyType($data['competency_type_id'] ?? null);
@@ -636,6 +600,9 @@ class IdpSettingController extends Controller
 
         // A competency now pins several proficiency levels + key behaviors.
         $sel = $isCompetency ? $this->competencyProficiencySelection($data) : null;
+
+        // A program is scoped to any number of grades.
+        $grades = $isProgram ? $this->programGrades($data) : [];
 
         $master = DevelopmentPlanMaster::create([
             'type' => $data['type'],
@@ -661,9 +628,10 @@ class IdpSettingController extends Controller
             // Free-typed competencies / proficiency — an "Others" program only.
             'custom_competency' => $isOthers ? ($data['custom_competency'] ?? null) : null,
             'custom_proficiency_level' => $isOthers ? ($data['custom_proficiency_level'] ?? null) : null,
-            // Corporate scope — a program only.
-            'business_unit' => $isProgram ? ($data['business_unit'] ?? null) : null,
-            'grade' => $isProgram ? ($data['grade'] ?? null) : null,
+            // Corporate scope — a program only. The singular column mirrors the
+            // first of the array for anything that reads one value.
+            'grades' => $isProgram ? $grades : null,
+            'grade' => $isProgram ? ($grades[0] ?? null) : null,
             'related_program' => $isCompetency
                 ? array_map('strval', $request->input('related_programs', []))
                 : null,
@@ -720,7 +688,7 @@ class IdpSettingController extends Controller
         }
 
         // A development program carries its competency type + proficiency level
-        // (scoping its competency picker) and a business unit / grade scope.
+        // (scoping its competency picker) and a grade scope.
         // "Others" programs free-type their competencies + proficiency instead.
         $programIsOthers = false;
         if ($master->type === 'development_program') {
@@ -730,8 +698,9 @@ class IdpSettingController extends Controller
             $master->proficiency_level_id = $programIsOthers ? null : ($data['proficiency_level_id'] ?? null);
             $master->custom_competency = $programIsOthers ? ($data['custom_competency'] ?? null) : null;
             $master->custom_proficiency_level = $programIsOthers ? ($data['custom_proficiency_level'] ?? null) : null;
-            $master->business_unit = $data['business_unit'] ?? null;
-            $master->grade = $data['grade'] ?? null;
+            $grades = $this->programGrades($data);
+            $master->grades = $grades;
+            $master->grade = $grades[0] ?? null;
         }
 
         $master->save();
@@ -1003,10 +972,27 @@ class IdpSettingController extends Controller
             // Free-typed competencies / proficiency for an "Others" program.
             'custom_competency' => ['nullable', 'string', 'max:2000'],
             'custom_proficiency_level' => ['nullable', 'string', 'max:255'],
-            // Development-program corporate scope (stored as the raw string).
-            'business_unit' => ['nullable', 'string', 'max:255'],
-            'grade' => ['nullable', 'string', 'max:255'],
+            // Development-program corporate scope — any number of grades,
+            // each stored as the raw string.
+            'grades' => ['nullable', 'array'],
+            'grades.*' => ['string', 'max:255'],
         ]);
+    }
+
+    /**
+     * The distinct, non-empty grades a development program is scoped to, in the
+     * order they were picked. An empty list means the program applies to every
+     * grade.
+     *
+     * @param  array<string, mixed>  $data
+     * @return list<string>
+     */
+    private function programGrades(array $data): array
+    {
+        return array_values(array_unique(array_filter(
+            array_map(fn ($g) => trim((string) $g), $data['grades'] ?? []),
+            fn ($g) => $g !== '',
+        )));
     }
 
     /**

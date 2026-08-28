@@ -112,17 +112,6 @@ const masterForm = useForm({
     key_behavior_ids: [] as number[],
 })
 
-// Bridge the numeric form arrays to the string[] the MultiSelect binds.
-const proficiencyLevelSelection = computed<string[]>({
-    get: () => masterForm.proficiency_level_ids.map(String),
-    set: (v) => (masterForm.proficiency_level_ids = v.map(Number)),
-})
-
-const keyBehaviorSelection = computed<string[]>({
-    get: () => masterForm.key_behavior_ids.map(String),
-    set: (v) => (masterForm.key_behavior_ids = v.map(Number)),
-})
-
 /**
  * How a competency relates to a proficiency level:
  *  - 'none'     → no proficiency level at all
@@ -161,33 +150,133 @@ function openMaster(type: MasterType, item?: Competency | CompetencyType) {
               ? 'level'
               : 'none'
 
+    // One editable row per stored level, each holding that level's behaviors.
+    levelRows.value = rowsFromIds(
+        masterForm.proficiency_level_ids,
+        masterForm.key_behavior_ids,
+    )
+
     masterModal.value = true
 }
 
-// Keep the form fields consistent with the chosen mode.
+/**
+ * Proficiency rows — the editing model behind the two flat id arrays. One row
+ * is one proficiency level plus the key behaviors chosen *under that level*,
+ * so picking behaviors never means hunting through a pooled list. The form's
+ * proficiency_level_ids / key_behavior_ids stay the wire format and are kept
+ * in sync from the rows.
+ */
+interface LevelRow {
+    // Stable key so Vue keeps a row's inputs when siblings are added/removed.
+    uid: number
+    levelId: number | null
+    keyBehaviorIds: number[]
+}
+
+let rowUid = 0
+const levelRows = ref<LevelRow[]>([])
+
+function newRow(
+    levelId: number | null = null,
+    keyBehaviorIds: number[] = [],
+): LevelRow {
+    return { uid: ++rowUid, levelId, keyBehaviorIds }
+}
+
+// Rebuild the rows from the stored ids (on edit), grouping each key behavior
+// under the level it belongs to.
+function rowsFromIds(levelIds: number[], keyBehaviorIds: number[]): LevelRow[] {
+    const behaviorsByLevel = new Map<number, number[]>()
+
+    for (const id of keyBehaviorIds) {
+        const kb = props.keyBehaviors.find((k) => k.id === id)
+        if (!kb) continue
+        const bucket = behaviorsByLevel.get(kb.proficiency_level_id) ?? []
+        bucket.push(id)
+        behaviorsByLevel.set(kb.proficiency_level_id, bucket)
+    }
+
+    // A level reachable only through one of its key behaviors still gets a row.
+    const ordered = [...levelIds]
+    for (const levelId of behaviorsByLevel.keys()) {
+        if (!ordered.includes(levelId)) ordered.push(levelId)
+    }
+
+    return ordered.map((id) => newRow(id, behaviorsByLevel.get(id) ?? []))
+}
+
+// Flatten the rows back into the arrays the controller validates. Key
+// behaviors only travel in 'behavior' mode.
+function syncFormIds() {
+    const rows = levelRows.value
+
+    masterForm.proficiency_level_ids = rows
+        .map((r) => r.levelId)
+        .filter((id): id is number => id != null)
+
+    masterForm.key_behavior_ids =
+        proficiencyMode.value === 'behavior'
+            ? rows.flatMap((r) => (r.levelId == null ? [] : r.keyBehaviorIds))
+            : []
+}
+
+watch(levelRows, syncFormIds, { deep: true })
+
+// Keep the rows consistent with the chosen mode: 'none' clears them, the other
+// two always leave one row on screen to fill in.
 watch(proficiencyMode, (mode) => {
     if (mode === 'none') {
-        masterForm.proficiency_level_ids = []
-        masterForm.key_behavior_ids = []
-    } else if (mode === 'level') {
-        masterForm.key_behavior_ids = []
+        levelRows.value = []
+    } else if (levelRows.value.length === 0) {
+        levelRows.value = [newRow()]
     }
+
+    syncFormIds()
 })
 
-// Changing the levels (in behavior mode) drops key behaviors that no longer
-// belong to any selected level.
-watch(
-    () => masterForm.proficiency_level_ids,
-    (levels) => {
-        if (proficiencyMode.value !== 'behavior') return
-        masterForm.key_behavior_ids = masterForm.key_behavior_ids.filter(
-            (id) => {
-                const kb = keyBehaviorById.value.get(id)
-                return kb != null && levels.includes(kb.proficiency_level_id)
-            },
-        )
-    },
-    { deep: true },
+function addLevelRow() {
+    levelRows.value.push(newRow())
+}
+
+function removeLevelRow(uid: number) {
+    levelRows.value = levelRows.value.filter((r) => r.uid !== uid)
+}
+
+// Swapping a row's level invalidates the behaviors picked under the old one.
+function setRowLevel(row: LevelRow, value: string) {
+    row.levelId = value === '' ? null : Number(value)
+    row.keyBehaviorIds = []
+}
+
+function setRowBehaviors(row: LevelRow, values: string[]) {
+    row.keyBehaviorIds = values.map(Number)
+}
+
+// Levels not already claimed by another row (this row's own stays selectable).
+function levelOptionsFor(row: LevelRow): Option[] {
+    const taken = new Set(
+        levelRows.value
+            .filter((r) => r.uid !== row.uid && r.levelId != null)
+            .map((r) => r.levelId as number),
+    )
+
+    return proficiencyLevelOptions.value.filter(
+        (o) => !taken.has(Number(o.value)),
+    )
+}
+
+// Key behaviors belonging to this row's level — scoped, so no level prefix.
+function keyBehaviorOptionsFor(row: LevelRow): Option[] {
+    if (row.levelId == null) return []
+
+    return props.keyBehaviors
+        .filter((kb) => kb.proficiency_level_id === row.levelId)
+        .map((kb) => ({ value: String(kb.id), label: masterName(kb) }))
+}
+
+// Once every level has a row there is nothing left to add.
+const canAddLevelRow = computed(
+    () => levelRows.value.length < props.proficiencyLevels.length,
 )
 
 function submitMaster() {
@@ -310,23 +399,6 @@ function proficiencyLevelName(id: number | null): string {
     const pl = proficiencyLevelById.value.get(id)
     return pl ? masterName(pl) : ''
 }
-
-// Key behaviors of every chosen level, as dropdown options. When more than one
-// level is selected the option label is prefixed with its level name so
-// same-named behaviors across levels stay distinguishable.
-const keyBehaviorOptions = computed<Option[]>(() => {
-    const levels = masterForm.proficiency_level_ids
-    if (levels.length === 0) return []
-    const multi = levels.length > 1
-    return props.keyBehaviors
-        .filter((kb) => levels.includes(kb.proficiency_level_id))
-        .map((kb) => ({
-            value: String(kb.id),
-            label: multi
-                ? `${proficiencyLevelName(kb.proficiency_level_id)} · ${masterName(kb)}`
-                : masterName(kb),
-        }))
-})
 
 const keyBehaviorById = computed(() => {
     const m = new Map<number, KeyBehavior>()
@@ -881,59 +953,107 @@ const competencyColumns = computed<Column[]>(() => [
                         </label>
                     </div>
 
-                    <!-- Proficiency level select (level or behavior mode) -->
-                    <div v-if="proficiencyMode !== 'none'">
-                        <label
-                            class="mb-1.5 block text-xs font-medium text-slate-500"
+                    <!-- One card per proficiency level, each carrying its own
+                         key behaviors; levels are added/removed a row at a time. -->
+                    <div v-if="proficiencyMode !== 'none'" class="space-y-2">
+                        <p
+                            v-if="proficiencyMode === 'behavior'"
+                            class="text-xs text-slate-400"
                         >
-                            {{ t.idp.settings.proficiencyLevel }}
-                        </label>
+                            {{ t.idp.settings.levelRowsHint }}
+                        </p>
 
-                        <MultiSelect
-                            v-model="proficiencyLevelSelection"
-                            :options="proficiencyLevelOptions"
-                            :placeholder="t.idp.settings.proficiencyLevelPickHint"
-                            :invalid="!!masterForm.errors.proficiency_level_ids"
-                        />
+                        <div
+                            v-for="(row, i) in levelRows"
+                            :key="row.uid"
+                            class="rounded-lg border border-border bg-slate-50/60 p-3"
+                        >
+                            <div class="mb-2 flex items-center justify-between">
+                                <span
+                                    class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[11px] font-semibold text-slate-600"
+                                >
+                                    {{ i + 1 }}
+                                </span>
+
+                                <button
+                                    type="button"
+                                    class="rounded p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                                    :title="t.idp.settings.removeLevelRow"
+                                    @click="removeLevelRow(row.uid)"
+                                >
+                                    <i class="fa-solid fa-xmark text-xs" />
+                                </button>
+                            </div>
+
+                            <div class="space-y-2">
+                                <div>
+                                    <label
+                                        class="mb-1 block text-xs font-medium text-slate-500"
+                                    >
+                                        {{ t.idp.settings.proficiencyLevel }}
+                                    </label>
+
+                                    <SearchableSelect
+                                        :model-value="
+                                            row.levelId == null
+                                                ? ''
+                                                : String(row.levelId)
+                                        "
+                                        :options="levelOptionsFor(row)"
+                                        :placeholder="t.idp.settings.proficiencyLevelPickHint"
+                                        :invalid="!!masterForm.errors.proficiency_level_ids"
+                                        @update:model-value="setRowLevel(row, $event)"
+                                    />
+                                </div>
+
+                                <div v-if="proficiencyMode === 'behavior'">
+                                    <label
+                                        class="mb-1 block text-xs font-medium text-slate-500"
+                                    >
+                                        {{ t.idp.settings.keyBehavior }}
+                                    </label>
+
+                                    <MultiSelect
+                                        v-if="keyBehaviorOptionsFor(row).length > 0"
+                                        :model-value="row.keyBehaviorIds.map(String)"
+                                        :options="keyBehaviorOptionsFor(row)"
+                                        :placeholder="t.idp.settings.keyBehaviorPickHint"
+                                        :invalid="!!masterForm.errors.key_behavior_ids"
+                                        @update:model-value="setRowBehaviors(row, $event)"
+                                    />
+                                    <p
+                                        v-else
+                                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
+                                    >
+                                        {{
+                                            row.levelId == null
+                                                ? t.idp.settings.pickLevelFirst
+                                                : t.idp.settings.noKeyBehaviorsForLevel
+                                        }}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button
+                            v-if="canAddLevelRow"
+                            type="button"
+                            class="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-2 text-sm font-medium text-slate-500 transition hover:border-primary hover:bg-primary/5 hover:text-primary"
+                            @click="addLevelRow"
+                        >
+                            <i class="fa-solid fa-plus text-xs" />
+                            {{ t.idp.settings.addLevelRow }}
+                        </button>
+
                         <p
                             v-if="masterForm.errors.proficiency_level_ids"
-                            class="mt-1 text-xs text-red-600"
+                            class="text-xs text-red-600"
                         >
                             {{ masterForm.errors.proficiency_level_ids }}
                         </p>
-                    </div>
-
-                    <!-- Key behavior select (behavior mode) -->
-                    <div v-if="proficiencyMode === 'behavior'">
-                        <label
-                            class="mb-1.5 block text-xs font-medium text-slate-500"
-                        >
-                            {{ t.idp.settings.keyBehavior }}
-                        </label>
-
-                        <MultiSelect
-                            v-if="
-                                masterForm.proficiency_level_ids.length > 0 &&
-                                keyBehaviorOptions.length > 0
-                            "
-                            v-model="keyBehaviorSelection"
-                            :options="keyBehaviorOptions"
-                            :placeholder="t.idp.settings.keyBehaviorPickHint"
-                            :invalid="!!masterForm.errors.key_behavior_ids"
-                        />
-                        <p
-                            v-else
-                            class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                        >
-                            {{
-                                masterForm.proficiency_level_ids.length === 0
-                                    ? t.idp.settings.pickLevelFirst
-                                    : t.idp.settings.noKeyBehaviorsForLevel
-                            }}
-                        </p>
                         <p
                             v-if="masterForm.errors.key_behavior_ids"
-                            class="mt-1 text-xs text-red-600"
+                            class="text-xs text-red-600"
                         >
                             {{ masterForm.errors.key_behavior_ids }}
                         </p>

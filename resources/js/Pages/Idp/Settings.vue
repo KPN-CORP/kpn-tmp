@@ -62,8 +62,7 @@ interface Program {
     proficiency_level_id: number | null
     custom_competency: string | null
     custom_proficiency_level: string | null
-    business_unit: string | null
-    grade: string | null
+    grades: string[]
 }
 
 interface CompetencyType {
@@ -88,7 +87,6 @@ const props = defineProps<{
     developmentPrograms: Program[]
     competencyTypes: CompetencyType[]
     proficiencyLevels: ProficiencyLevel[]
-    businessUnits: string[]
     grades: string[]
 }>()
 
@@ -166,9 +164,8 @@ const masterForm = useForm({
     // "Others"-type program → free-typed competencies + proficiency level.
     custom_competency: '' as string,
     custom_proficiency_level: '' as string,
-    // Program → corporate scope.
-    business_unit: '' as string,
-    grade: '' as string,
+    // Program → corporate scope (any number of grades).
+    grades: [] as string[],
 })
 
 // Localized name for a competency / program, falling back to the canonical value.
@@ -225,7 +222,7 @@ function openMaster(type: MasterType, item?: Program) {
                   .map((c) => c.id)
             : []
 
-    // Program scope fields (competency type / proficiency level / BU / grade).
+    // Program scope fields (competency type / proficiency level / grades).
     const program = item as Partial<Program> | undefined
     masterForm.competency_type_id =
         type === 'development_program' ? program?.competency_type_id ?? null : null
@@ -235,10 +232,8 @@ function openMaster(type: MasterType, item?: Program) {
         type === 'development_program' ? program?.custom_competency ?? '' : ''
     masterForm.custom_proficiency_level =
         type === 'development_program' ? program?.custom_proficiency_level ?? '' : ''
-    masterForm.business_unit =
-        type === 'development_program' ? program?.business_unit ?? '' : ''
-    masterForm.grade =
-        type === 'development_program' ? program?.grade ?? '' : ''
+    masterForm.grades =
+        type === 'development_program' ? [...(program?.grades ?? [])] : []
 
     // Seed the cache with the loaded type's selection so that leaving it and
     // coming back restores exactly what was stored.
@@ -389,10 +384,7 @@ const isOthersType = computed<boolean>(() => {
     return v === 'others' || v === 'other' || v === 'lainnya'
 })
 
-// Business unit / grade options (corporate scope) for the program form.
-const businessUnitOptions = computed<Option[]>(() =>
-    props.businessUnits.map((bu) => ({ value: bu, label: bu })),
-)
+// Grade options (corporate scope) for the program form.
 const gradeOptions = computed<Option[]>(() =>
     props.grades.map((g) => ({ value: g, label: g })),
 )
@@ -553,8 +545,7 @@ interface ProgramRow {
     competencies: Competency[]
     customCompetency: string
     proficiency: string
-    businessUnit: string
-    grade: string
+    grades: string[]
 }
 
 const programRows = computed<ProgramRow[]>(() => {
@@ -583,8 +574,7 @@ const programRows = computed<ProgramRow[]>(() => {
             proficiency:
                 proficiencyLevelName(p.proficiency_level_id) ||
                 (p.custom_proficiency_level ?? ''),
-            businessUnit: p.business_unit ?? '',
-            grade: p.grade ?? '',
+            grades: p.grades ?? [],
         }))
         .filter((row) => {
             if (!q) return true
@@ -722,7 +712,7 @@ const programColumns = computed<Column[]>(() => [
 
                     <template #cell-scope="{ row }">
                         <div
-                            v-if="row.proficiency || row.businessUnit || row.grade"
+                            v-if="row.proficiency || row.grades.length"
                             class="flex flex-wrap gap-1.5"
                         >
                             <span
@@ -734,20 +724,13 @@ const programColumns = computed<Column[]>(() => [
                                 {{ row.proficiency }}
                             </span>
                             <span
-                                v-if="row.businessUnit"
-                                class="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-600"
-                                :title="t.idp.settings.businessUnit"
-                            >
-                                <i class="fa-solid fa-building text-[9px]" />
-                                {{ row.businessUnit }}
-                            </span>
-                            <span
-                                v-if="row.grade"
+                                v-for="g in row.grades"
+                                :key="g"
                                 class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600"
                                 :title="t.idp.settings.grade"
                             >
                                 <i class="fa-solid fa-layer-group text-[9px]" />
-                                {{ row.grade }}
+                                {{ g }}
                             </span>
                         </div>
                         <span v-else class="text-xs italic text-slate-300">—</span>
@@ -1058,46 +1041,25 @@ const programColumns = computed<Column[]>(() => [
                         </div>
                     </div>
 
-                <!-- 6. Development program -> Corporate scope (business unit + grade) -->
-                <div
-                    v-if="masterType === 'development_program'"
-                    class="grid grid-cols-1 gap-4 sm:grid-cols-2"
-                >
-                    <div>
-                        <label
-                            class="mb-1.5 block text-sm font-medium text-slate-700"
-                        >
-                            {{ t.idp.settings.businessUnit }}
-                            <span class="font-normal text-slate-400">
-                                ({{ t.idp.settings.optional }})
-                            </span>
-                        </label>
+                <!-- 6. Development program -> Corporate scope (grades) -->
+                <div v-if="masterType === 'development_program'">
+                    <label
+                        class="mb-1.5 block text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.grade }}
+                        <span class="font-normal text-slate-400">
+                            ({{ t.idp.settings.optional }})
+                        </span>
+                    </label>
 
-                        <SearchableSelect
-                            :model-value="masterForm.business_unit"
-                            :options="businessUnitOptions"
-                            :placeholder="t.idp.settings.businessUnitPickHint"
-                            @update:model-value="masterForm.business_unit = $event"
-                        />
-                    </div>
-
-                    <div>
-                        <label
-                            class="mb-1.5 block text-sm font-medium text-slate-700"
-                        >
-                            {{ t.idp.settings.grade }}
-                            <span class="font-normal text-slate-400">
-                                ({{ t.idp.settings.optional }})
-                            </span>
-                        </label>
-
-                        <SearchableSelect
-                            :model-value="masterForm.grade"
-                            :options="gradeOptions"
-                            :placeholder="t.idp.settings.gradePickHint"
-                            @update:model-value="masterForm.grade = $event"
-                        />
-                    </div>
+                    <MultiSelect
+                        v-model="masterForm.grades"
+                        :options="gradeOptions"
+                        :placeholder="t.idp.settings.gradePickHint"
+                        select-all
+                        :select-all-label="t.idp.settings.selectAllGrades"
+                        :clear-all-label="t.idp.settings.clearAllGrades"
+                    />
                 </div>
             </form>
 

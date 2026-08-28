@@ -21,6 +21,15 @@ const props = defineProps<{
      * search-and-add trigger.
      */
     selectedBelow?: boolean
+    /**
+     * When true, the dropdown gets a "select all" row above the options. It
+     * acts on whatever the search currently shows, and flips to "clear all"
+     * once every shown option is selected.
+     */
+    selectAll?: boolean
+    /** Labels for the select-all row (pass locale strings). */
+    selectAllLabel?: string
+    clearAllLabel?: string
 }>()
 
 const emit = defineEmits<{ (e: 'update:modelValue', value: string[]): void }>()
@@ -41,6 +50,26 @@ const filtered = computed(() => {
 
 function isSelected(value: string): boolean {
     return props.modelValue.includes(value)
+}
+
+// Whether every currently shown option is already selected — the select-all
+// row then acts as "clear all" for those same options.
+const allFilteredSelected = computed(
+    () => filtered.value.length > 0 && filtered.value.every((o) => isSelected(o.value)),
+)
+
+function toggleAllFiltered() {
+    if (allFilteredSelected.value) {
+        const shown = new Set(filtered.value.map((o) => o.value))
+        emit('update:modelValue', props.modelValue.filter((v) => !shown.has(v)))
+        return
+    }
+
+    const next = [...props.modelValue]
+    for (const option of filtered.value) {
+        if (!next.includes(option.value)) next.push(option.value)
+    }
+    emit('update:modelValue', next)
 }
 
 function toggle(option: Option) {
@@ -113,6 +142,35 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
             </div>
 
             <ul class="max-h-56 overflow-y-auto py-1">
+                <li
+                    v-if="selectAll && filtered.length"
+                    class="border-b border-border"
+                >
+                    <button
+                        type="button"
+                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium transition hover:bg-slate-50"
+                        :class="allFilteredSelected ? 'text-primary' : 'text-slate-600'"
+                        @click="toggleAllFiltered"
+                    >
+                        <span
+                            class="flex h-4 w-4 shrink-0 items-center justify-center rounded border"
+                            :class="allFilteredSelected ? 'border-primary bg-primary text-white' : 'border-slate-300'"
+                        >
+                            <i v-if="allFilteredSelected" class="fa-solid fa-check text-[9px]" />
+                        </span>
+                        <span class="truncate">
+                            {{
+                                allFilteredSelected
+                                    ? clearAllLabel || 'Clear all'
+                                    : selectAllLabel || 'Select all'
+                            }}
+                        </span>
+                        <span class="ml-auto shrink-0 text-xs font-normal text-slate-400">
+                            {{ filtered.length }}
+                        </span>
+                    </button>
+                </li>
+
                 <li v-for="option in filtered" :key="option.value">
                     <button
                         type="button"

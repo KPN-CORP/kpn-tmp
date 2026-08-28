@@ -22,6 +22,8 @@ class DevelopmentPlanMaster extends Model
         // A competency's multi-selected proficiency levels + key behaviors.
         'proficiency_level_ids' => 'array',
         'key_behavior_ids' => 'array',
+        // A development program's multi-selected grades.
+        'grades' => 'array',
     ];
 
     public function developmentModel(): BelongsTo
