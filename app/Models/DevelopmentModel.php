@@ -33,12 +33,11 @@ class DevelopmentModel extends Model
     }
 
     /**
-     * Master "development program" entries filed under this model.
+     * Development programs filed under this model.
      */
     public function developmentPrograms(): HasMany
     {
-        return $this->hasMany(DevelopmentPlanMaster::class, 'development_model_id')
-            ->where('type', 'development_program');
+        return $this->hasMany(DevelopmentProgram::class);
     }
 
     public function individualDevelopmentPlans(): HasMany

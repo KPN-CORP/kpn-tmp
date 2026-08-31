@@ -2,14 +2,17 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Requests\ActOnIdpApprovalRequest;
 use App\Models\Employee;
 use App\Models\IdpApproval;
 use App\Models\IndividualDevelopmentPlan;
+use App\Models\User;
 use App\Services\EmployeeScopeService;
 use App\Services\IdpApprovalService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
@@ -22,6 +25,20 @@ use Inertia\Response;
  */
 class IdpApprovalController extends Controller
 {
+    use ReadsSort;
+
+    /**
+     * Sortable inbox columns → the path of the row value they sort on.
+     */
+    private const SORT_PATHS = [
+        'owner_id' => 'owner_id',
+        'owner_name' => 'owner_name',
+        'competency_name' => 'plan.competency_name',
+        'development_program' => 'plan.development_program',
+        'submitted_at' => 'submitted_at',
+        'level' => 'level',
+    ];
+
     public function __construct(
         private readonly EmployeeScopeService $scope,
         private readonly IdpApprovalService $approvals,
@@ -110,19 +127,78 @@ class IdpApprovalController extends Controller
     }
 
     /**
-     * The signed-in user's approval inbox — items awaiting their decision.
+     * The signed-in user's approval inbox — items awaiting their decision, as a
+     * searchable / sortable / paginated table.
+     *
+     * The pending set is already scoped to a single approver (so it stays
+     * small) and the owner names come from the corporate DB, so search and sort
+     * are applied to the resolved rows and then paginated in memory.
      */
     public function inbox(Request $request): Response
     {
-        $steps = $this->approvals->pendingFor($request->user());
+        $filters = [
+            'search' => $request->string('search')->trim()->value(),
+            'type' => $request->string('type')->value(),
+        ];
 
-        // Resolve owner + approver names in one guarded query.
-        $ids = $steps->flatMap(fn ($s) => [$s->approval?->employee_id])
-            ->merge($steps->pluck('approver_employee_id'))
-            ->filter()->unique();
-        $names = $this->resolveNames($ids);
+        $sort = $this->readSort($request, array_keys(self::SORT_PATHS), 'submitted_at');
 
-        $items = $steps->map(function ($step) use ($names) {
+        $rows = $this->inboxRows($request->user());
+
+        // Competency types across the whole inbox, not just the current page.
+        $types = $rows->pluck('plan.competency_type')->filter()->unique()->sort()->values();
+
+        $path = self::SORT_PATHS[$sort['key']];
+
+        $matched = $rows
+            ->when(
+                $filters['type'],
+                fn (Collection $c, string $type) => $c->where('plan.competency_type', $type),
+            )
+            ->when(
+                $filters['search'],
+                fn (Collection $c, string $term) => $c->filter(fn (array $row) => $this->matches($row, $term)),
+            )
+            ->sortBy(
+                fn (array $row) => data_get($row, $path),
+                SORT_NATURAL | SORT_FLAG_CASE,
+                $sort['dir'] === 'desc',
+            )
+            ->values();
+
+        $perPage = max(1, (int) $request->integer('per_page', 25));
+        $page = LengthAwarePaginator::resolveCurrentPage();
+
+        $items = new LengthAwarePaginator(
+            $matched->forPage($page, $perPage)->values(),
+            $matched->count(),
+            $perPage,
+            $page,
+            ['path' => $request->url(), 'query' => $request->query()],
+        );
+
+        return Inertia::render('Approvals/Inbox', [
+            'items' => $items,
+            'filters' => $filters,
+            'sort' => $sort,
+            'filterOptions' => ['types' => $types],
+            'pendingTotal' => $rows->count(),
+        ]);
+    }
+
+    /**
+     * Every approval step awaiting this user's decision, shaped for the table.
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function inboxRows(User $user): Collection
+    {
+        $steps = $this->approvals->pendingFor($user);
+
+        // Resolve owner names in one guarded query.
+        $names = $this->resolveNames($steps->map(fn ($step) => $step->approval?->employee_id));
+
+        return $steps->map(function ($step) use ($names) {
             $approval = $step->approval;
             $plan = $approval?->plan;
 
@@ -143,11 +219,33 @@ class IdpApprovalController extends Controller
                     'time_frame_end' => $plan->time_frame_end?->toDateString(),
                 ] : null,
             ];
-        })->filter(fn ($i) => $i['approval_id'] !== null && $i['plan'] !== null)->values();
+        })->filter(fn ($row) => $row['approval_id'] !== null && $row['plan'] !== null)->values();
+    }
 
-        return Inertia::render('Approvals/Inbox', [
-            'items' => $items,
-        ]);
+    /**
+     * Free-text match across the employee, competency and program columns.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function matches(array $row, string $term): bool
+    {
+        $term = mb_strtolower($term);
+
+        $haystack = [
+            $row['owner_id'],
+            $row['owner_name'],
+            data_get($row, 'plan.competency_name'),
+            data_get($row, 'plan.competency_type'),
+            data_get($row, 'plan.development_program'),
+        ];
+
+        foreach ($haystack as $value) {
+            if (filled($value) && str_contains(mb_strtolower((string) $value), $term)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

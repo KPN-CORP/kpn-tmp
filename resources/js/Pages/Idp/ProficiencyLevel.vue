@@ -107,7 +107,7 @@ function submitForm() {
     }
 
     if (editingId.value) {
-        form.put(`/idp-setting/masters/${editingId.value}`, opts)
+        form.put(`/idp-setting/masters/proficiency_level/${editingId.value}`, opts)
     } else {
         form.post('/idp-setting/masters', opts)
     }
@@ -115,7 +115,7 @@ function submitForm() {
 
 function deleteLevel(item: ProficiencyLevel) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/${item.id}`,
+        url: `/idp-setting/masters/proficiency_level/${item.id}`,
         name: levelName(item),
     }
 }
@@ -183,7 +183,7 @@ function submitKbForm() {
     }
 
     if (kbEditingId.value) {
-        kbForm.put(`/idp-setting/masters/${kbEditingId.value}`, opts)
+        kbForm.put(`/idp-setting/masters/key_behavior/${kbEditingId.value}`, opts)
     } else {
         kbForm.post('/idp-setting/masters', opts)
     }
@@ -191,7 +191,7 @@ function submitKbForm() {
 
 function deleteKeyBehavior(item: KeyBehavior) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/${item.id}`,
+        url: `/idp-setting/masters/key_behavior/${item.id}`,
         name: levelName(item),
     }
 }

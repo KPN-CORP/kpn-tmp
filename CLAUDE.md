@@ -225,7 +225,8 @@ Static-verified (lint, autoload, `route:list`, `npm run build`). Runtime/DB chec
 - **`IdpSettingController`**: development models CRUD (`SumPercentageCheck` ≤100, delete
   guards, replace-with reassign) + master data CRUD for `competency_name` /
   `development_program` / `review_tools`, with the competency↔program `related_program`
-  linking kept in sync on create/update/delete.
+  linking kept in sync on create/update/delete. *(Superseded by Phase 5.3 — the master
+  tables were split apart and `related_program` is now a pivot.)*
 - **`App\Rules\SumPercentageCheck`** (modern `ValidationRule`).
 - **Vue**: `Pages/Idp/Index.vue`, `Manage.vue` (plans grouped by model, add/edit/delete via
   modal, soft-competency program filtering), `Settings.vue`; reusable
@@ -383,9 +384,56 @@ employee via Inertia middleware; real permission-gated navigation.
 polling; reusable Vue (DataTable, Modal, FileUpload, NineBoxGrid, FormField); complete i18n
 keys; Pest/PHPUnit feature tests + policies per controller.
 
+## Phase 5.3 — Normalize the IDP master data ✅ DONE (code + runtime-verified)
+`development_plan_masters` was single-table inheritance: a `type` discriminator over seven
+unrelated entities sharing 21 mostly-nullable columns. It is **gone**, split one table per
+entity. All 409 live rows migrated and verified; the rollback round-trips byte-identically.
+
+- **New tables**: `competency_types`, `proficiency_levels`, `key_behaviors`, `competencies`,
+  `development_programs`, `review_tools`, `trainings`, `competency_implementations`, plus the
+  link tables `competency_proficiency_level`, `competency_key_behavior`,
+  `competency_development_program`, `development_program_grades`,
+  `implementation_proficiency_level`. Models: `Competency`, `CompetencyType`,
+  `ProficiencyLevel`, `KeyBehavior`, `DevelopmentProgram`, `DevelopmentProgramGrade`,
+  `ReviewTool`, `Training`, `CompetencyImplementation`.
+- **What the split fixed**
+  - `proficiency_level_id` meant *two* things — the owning level on `key_behavior` rows, a
+    *selected* level everywhere else. Now `key_behaviors.proficiency_level_id` (ownership,
+    a real FK) vs the `competency_proficiency_level` pivot (selection).
+  - Hand-synced mirror columns are gone: `value`↔`value_en`, `grade`↔`grades[0]`,
+    `key_behavior_id`↔`key_behavior_ids[0]`, `proficiency_level_id`↔`proficiency_level_ids[0]`.
+    **`name_en` is now the single canonical name** (`name_id` is the optional Indonesian
+    display name). Note the legacy data had `value_en` blank on 400/409 rows, so the backfill
+    is `name_en = COALESCE(NULLIF(value_en,''), value)`.
+  - `related_program` (a json list of id *strings*) is now the
+    `competency_development_program` pivot. `syncProgramCompetencies()` used to load every
+    competency into PHP and diff arrays; it is a `sync()` call now.
+  - `grades` json → `development_program_grades` rows.
+- **`App\Enums\MasterDataType`** (backed enum) replaces the `type` string. It maps a kind to
+  its model/table, whether it has a description, and which
+  `individual_development_plans` column stores its name verbatim (rename cascades + delete
+  guards key off that). It is still the wire value the settings screens post as `type`.
+- **`App\Services\IdpMasterService`** holds the master writes (create/update/deletionBlocker/
+  delete); `IdpSettingController` is back to validation + prop shaping.
+- **Wire contract mostly unchanged** — props are still `{id, value, value_en, value_id, …}`
+  (`value` and `value_en` both come from `name_en`). Three deliberate breaks:
+  `/idp-setting/masters/{id}` → **`/idp-setting/masters/{type}/{id}`** for PUT/DELETE (ids are
+  only unique within a kind now); an implementation's `competency_name_id` → `competency_id`;
+  and a competency exposes `proficiency_level_ids` rather than the first-of-list mirror.
+- **Migrations** are a reversible trio: `..._create_idp_master_tables`,
+  `..._migrate_development_plan_masters_data` (copies rows **keeping their ids**, so every
+  existing reference stays valid with no remapping), `..._drop_development_plan_masters_table`.
+- `development_programs.name_en` is **TEXT**, not a string: program names are activity
+  descriptions up to ~353 chars. Its validation cap is 1000 (255 for every other master, as
+  before); uniqueness stays in validation since TEXT needs a prefix index.
+- ⚠️ Not verified: SQLite (no `pdo_sqlite` in the local PHP), so the migrations were only run
+  against MySQL. The one MySQL-specific statement (the `name_en(191)` prefix index) is guarded
+  by a driver check.
+
 ## Entity map (facecard → kpn-tmp)
-App-owned: CompetencyAssessment, DevelopmentModel, DevelopmentPlanMaster,
-IndividualDevelopmentPlan, ResultSummary, MatrixGradeConfig, JobStatus, PerformanceAppraisal,
-ImportLog, UserGuide, User + Spatie Role/Permission.
+App-owned: CompetencyAssessment, DevelopmentModel, Competency, CompetencyType,
+ProficiencyLevel, KeyBehavior, DevelopmentProgram, ReviewTool, Training,
+CompetencyImplementation, IndividualDevelopmentPlan, ResultSummary, MatrixGradeConfig,
+JobStatus, PerformanceAppraisal, ImportLog, UserGuide, User + Spatie Role/Permission.
 `kpncorp` (read-only): Employee, FormalEducation, WorkExperience, TrainingCertification,
 MovementTransaction, PromotionTransaction.

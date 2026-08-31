@@ -9,10 +9,11 @@ use App\Http\Requests\UpdateIndividualDevelopmentPlanRequest;
 use App\Http\Resources\EmployeeResource;
 use App\Imports\SingleEmployeeDevelopmentPlanImport;
 use App\Jobs\GenerateIdpZip;
-use App\Models\DevelopmentPlanMaster;
+use App\Models\Competency;
 use App\Models\ImportLog;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\JobStatus;
+use App\Models\ReviewTool;
 use App\Services\EmployeeScopeService;
 use App\Services\IdpService;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -190,23 +191,14 @@ class IdpController extends Controller
     {
         // Sort competencies by the legacy S-I-G-A-P priority, then alphabetically.
         $priority = ['S' => 1, 'I' => 2, 'G' => 3, 'A' => 4, 'P' => 5];
-        $competencyNames = DevelopmentPlanMaster::where('type', 'competency_name')->get()
-            ->sortBy(fn ($item) => [$priority[strtoupper(substr($item->value, 0, 1))] ?? 99, $item->value])
+        $competencyNames = Competency::with('developmentPrograms.developmentModel')->get()
+            ->sortBy(fn ($item) => [$priority[strtoupper(substr($item->name_en, 0, 1))] ?? 99, $item->name_en])
             ->values();
-
-        $programsById = DevelopmentPlanMaster::where('type', 'development_program')
-            ->with('developmentModel')
-            ->orderBy('value')
-            ->get()
-            ->keyBy('id');
 
         $competencyGroupedMap = [];
         foreach ($competencyNames as $comp) {
-            $programs = collect($comp->related_program ?? [])
-                ->map(fn ($pid) => $programsById->get($pid) ?? $programsById->get((int) $pid))
-                ->filter();
-
-            $competencyGroupedMap[$comp->id] = $programs
+            $competencyGroupedMap[$comp->id] = $comp->developmentPrograms
+                ->sortBy('name_en')
                 ->groupBy(fn ($item) => $item->developmentModel
                     ? $item->developmentModel->name.' ('.$item->developmentModel->percentage.'%)'
                     : 'Uncategorized')
@@ -215,7 +207,7 @@ class IdpController extends Controller
                     : ($group->first()->developmentModel->percentage ?? 999));
         }
 
-        $reviewTools = DevelopmentPlanMaster::where('type', 'review_tools')->orderBy('value')->get();
+        $reviewTools = ReviewTool::orderBy('name_en')->get();
 
         $pdf = Pdf::loadView('pdf.idp_master_list', [
             'competencyNames' => $competencyNames,

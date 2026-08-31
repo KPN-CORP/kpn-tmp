@@ -2,12 +2,14 @@
 
 namespace App\Services;
 
+use App\Models\Competency;
 use App\Models\DevelopmentModel;
 use App\Models\DevelopmentModelPackage;
-use App\Models\DevelopmentPlanMaster;
+use App\Models\DevelopmentProgram;
 use App\Models\Employee;
 use App\Models\IdpApproval;
 use App\Models\IndividualDevelopmentPlan;
+use App\Models\ReviewTool;
 use App\Models\User;
 use Illuminate\Support\Collection;
 
@@ -55,44 +57,33 @@ class IdpService
 
         $approvalFor = $this->approvalResolver($employeeId, $viewer, $canManage);
 
-        $programs = DevelopmentPlanMaster::where('type', 'development_program')
-            ->orderBy('value')
-            ->get(['id', 'value', 'value_en', 'value_id', 'development_model_id']);
+        $programs = DevelopmentProgram::orderBy('name_en')
+            ->get(['id', 'name_en', 'name_id', 'development_model_id']);
 
-        $programsById = $programs->keyBy('id');
+        $competencies = Competency::with('developmentPrograms:id,name_en,name_id,development_model_id')
+            ->orderBy('name_en')
+            ->get(['id', 'name_en', 'name_id']);
 
-        $competencies = DevelopmentPlanMaster::where('type', 'competency_name')
-            ->orderBy('value')
-            ->get(['id', 'value', 'value_en', 'value_id', 'related_program']);
+        $reviewTools = ReviewTool::orderBy('name_en')->get(['id', 'name_en', 'name_id']);
 
-        $reviewTools = DevelopmentPlanMaster::where('type', 'review_tools')
-            ->orderBy('value')
-            ->get(['id', 'value', 'value_en', 'value_id']);
-
-        // Shape a master row into a localizable option (canonical value stays the
-        // stored/matched key; value_en/value_id drive the display label).
+        // Shape a master row into a localizable option. `value` is the canonical
+        // name that IDP rows store and match on; value_en/value_id drive the
+        // display label.
         $option = fn ($m) => [
-            'value' => $m->value,
-            'value_en' => $m->value_en,
-            'value_id' => $m->value_id,
+            'value' => $m->name_en,
+            'value_en' => $m->name_en,
+            'value_id' => $m->name_id,
         ];
 
-        // competency value (lower-cased) => [{ value, value_en, value_id, model_id }]
+        // competency name (lower-cased) => [{ value, value_en, value_id, model_id }]
         $competencyMap = [];
         foreach ($competencies as $competency) {
-            $linked = collect($competency->related_program ?? [])
-                ->map(fn ($id) => $programsById->get($id))
-                ->filter()
-                ->map(fn ($p) => [
-                    'value' => $p->value,
-                    'value_en' => $p->value_en,
-                    'value_id' => $p->value_id,
-                    'model_id' => $p->development_model_id,
-                ])
+            $linked = $competency->developmentPrograms
+                ->map(fn ($p) => $option($p) + ['model_id' => $p->development_model_id])
                 ->values();
 
             if ($linked->isNotEmpty()) {
-                $competencyMap[strtolower(trim($competency->value))] = $linked;
+                $competencyMap[strtolower(trim($competency->name_en))] = $linked;
             }
         }
 

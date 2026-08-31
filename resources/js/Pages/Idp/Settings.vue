@@ -46,7 +46,7 @@ interface Competency {
     description_en: string | null
     description_id: string | null
     competency_type_id: number | null
-    proficiency_level_id: number | null
+    proficiency_level_ids: number[]
     related_program: number[]
     linked_programs: string[]
 }
@@ -255,7 +255,7 @@ function submitMaster() {
 
     if (editingMasterId.value) {
         masterForm.put(
-            `/idp-setting/masters/${editingMasterId.value}`,
+            `/idp-setting/masters/${masterType.value}/${editingMasterId.value}`,
             opts,
         )
     } else {
@@ -263,9 +263,9 @@ function submitMaster() {
     }
 }
 
-function deleteMaster(id: number, name?: string) {
+function deleteMaster(type: MasterType, id: number, name?: string) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/${id}`,
+        url: `/idp-setting/masters/${type}/${id}`,
         name,
     }
 }
@@ -402,8 +402,8 @@ const proficiencyLevelOptions = computed<Option[]>(() => {
     const levelIds = new Set<number>()
 
     for (const c of props.competencies) {
-        if (selected.has(c.id) && c.proficiency_level_id != null) {
-            levelIds.add(c.proficiency_level_id)
+        if (selected.has(c.id)) {
+            for (const levelId of c.proficiency_level_ids) levelIds.add(levelId)
         }
     }
 
@@ -748,7 +748,7 @@ const programColumns = computed<Column[]>(() => [
                                 icon="fa-solid fa-trash"
                                 variant="delete"
                                 :title="t.idp.settings.deleteProgram"
-                                @click="deleteMaster(row.program.id, row.name)"
+                                @click="deleteMaster('development_program', row.program.id, row.name)"
                             />
                         </div>
                     </template>

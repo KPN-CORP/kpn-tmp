@@ -2,7 +2,7 @@
 
 namespace App\Http\Requests;
 
-use App\Models\DevelopmentPlanMaster;
+use App\Models\Competency;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -71,15 +71,10 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
                 return;
             }
 
-            $allowed = DevelopmentPlanMaster::where('type', 'competency_name')
-                ->where('value', $competency)
-                ->whereNotNull('related_program')
+            $allowed = Competency::where('name_en', $competency)
+                ->with('developmentPrograms:id,name_en')
                 ->get()
-                ->flatMap(function ($comp) {
-                    return DevelopmentPlanMaster::where('type', 'development_program')
-                        ->whereIn('id', $comp->related_program ?? [])
-                        ->pluck('value');
-                })
+                ->flatMap(fn (Competency $comp) => $comp->developmentPrograms->pluck('name_en'))
                 ->all();
 
             if ($allowed && ! in_array($program, $allowed, true)) {

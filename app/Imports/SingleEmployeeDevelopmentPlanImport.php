@@ -2,9 +2,11 @@
 
 namespace App\Imports;
 
+use App\Models\Competency;
 use App\Models\DevelopmentModel;
-use App\Models\DevelopmentPlanMaster;
+use App\Models\DevelopmentProgram;
 use App\Models\IndividualDevelopmentPlan;
+use App\Models\ReviewTool;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Concerns\ToCollection;
@@ -28,10 +30,10 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
     /** development-model key (lowercase name / percentage) => id */
     private array $modelsMap = [];
 
-    /** lowercase competency value => canonical value */
+    /** lowercase competency name => canonical name */
     private array $canonicalCompetency = [];
 
-    /** lowercase competency value => id */
+    /** lowercase competency name => id */
     private array $competencyMap = [];
 
     /** "{modelId}_{lower program}" => program id */
@@ -40,7 +42,7 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
     /** competency id => string[] of linked program ids */
     private array $relationsMap = [];
 
-    /** lowercase review-tool values */
+    /** lowercase review-tool names */
     private array $validReviewTools = [];
 
     private int $imported = 0;
@@ -56,21 +58,21 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
             $this->modelsMap[$model->percentage.'%'] = $model->id;
         }
 
-        $competencies = DevelopmentPlanMaster::where('type', 'competency_name')->get();
+        $competencies = Competency::with('developmentPrograms:id')->get();
         foreach ($competencies as $competency) {
-            $key = strtolower(trim($competency->value));
+            $key = strtolower(trim($competency->name_en));
             $this->competencyMap[$key] = $competency->id;
-            $this->canonicalCompetency[$key] = $competency->value;
-            $this->relationsMap[$competency->id] = array_map('strval', $competency->related_program ?? []);
+            $this->canonicalCompetency[$key] = $competency->name_en;
+            $this->relationsMap[$competency->id] = $competency->developmentPrograms
+                ->pluck('id')->map('strval')->all();
         }
 
-        foreach (DevelopmentPlanMaster::where('type', 'development_program')->get() as $program) {
-            $key = $program->development_model_id.'_'.strtolower(trim($program->value));
+        foreach (DevelopmentProgram::all() as $program) {
+            $key = $program->development_model_id.'_'.strtolower(trim($program->name_en));
             $this->programMap[$key] = (string) $program->id;
         }
 
-        $this->validReviewTools = DevelopmentPlanMaster::where('type', 'review_tools')
-            ->pluck('value')
+        $this->validReviewTools = ReviewTool::pluck('name_en')
             ->map(fn ($value) => strtolower(trim($value)))
             ->all();
     }

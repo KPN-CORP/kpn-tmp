@@ -8,6 +8,7 @@ import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
+import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
 
@@ -26,20 +27,18 @@ interface CompetencyType extends Localized {
 
 interface Competency extends Localized {
     competency_type_id: number | null
-    proficiency_level_id: number | null
+    // The proficiency levels available for this competency.
+    proficiency_level_ids: number[]
 }
 
-type KeyBehavior = Localized
-
-interface ProficiencyLevel extends Localized {
-    key_behaviors: KeyBehavior[]
-}
+type ProficiencyLevel = Localized
 
 interface Implementation {
     id: number
     competency_type_id: number | null
-    competency_name_id: number | null
-    proficiency_level_id: number | null
+    competency_id: number | null
+    // One or more proficiency levels pinned to this implementation.
+    proficiency_level_ids: number[]
     grade: string | null
     business_unit: string | null
     job_family: string | null
@@ -162,8 +161,9 @@ const editingImplId = ref<number | null>(null)
 
 const implForm = useForm({
     competency_type_id: null as number | null,
-    competency_name_id: null as number | null,
-    proficiency_level_id: null as number | null,
+    competency_id: null as number | null,
+    // MultiSelect binds string[]; converted to ints server-side.
+    proficiency_level_ids: [] as string[],
     grade: '',
     business_unit: '',
     job_family: '',
@@ -171,23 +171,29 @@ const implForm = useForm({
     position: '',
 })
 
-// The competency currently chosen in the form (drives the proficiency panel).
+// The competency currently chosen in the form (scopes the proficiency options).
 const selectedCompetency = computed<Competency | null>(() =>
-    implForm.competency_name_id == null
+    implForm.competency_id == null
         ? null
-        : competencyById.value.get(implForm.competency_name_id) ?? null,
+        : competencyById.value.get(implForm.competency_id) ?? null,
 )
 
-// The proficiency level derived from the chosen competency (with key behaviors).
-const derivedProficiency = computed<ProficiencyLevel | null>(() => {
+// Proficiency levels the chosen competency offers (only the name is shown).
+const proficiencyOptions = computed<Option[]>(() => {
     const c = selectedCompetency.value
-    if (!c || c.proficiency_level_id == null) return null
-    return proficiencyLevelById.value.get(c.proficiency_level_id) ?? null
+    if (!c) return []
+    return c.proficiency_level_ids
+        .map((id) => proficiencyLevelById.value.get(id))
+        .filter((p): p is ProficiencyLevel => !!p)
+        .map((p) => ({ value: String(p.id), label: masterName(p) }))
 })
 
-// Keep proficiency_level_id in step with the chosen competency (it owns one).
+// Drop any pinned proficiency level the newly chosen competency doesn't offer.
 watch(selectedCompetency, (c) => {
-    implForm.proficiency_level_id = c?.proficiency_level_id ?? null
+    const valid = new Set((c?.proficiency_level_ids ?? []).map(String))
+    implForm.proficiency_level_ids = implForm.proficiency_level_ids.filter((id) =>
+        valid.has(id),
+    )
 })
 
 // Changing the competency type drops a competency that no longer belongs to it.
@@ -196,7 +202,7 @@ watch(
     (typeId) => {
         const c = selectedCompetency.value
         if (c && c.competency_type_id !== typeId) {
-            implForm.competency_name_id = null
+            implForm.competency_id = null
         }
     },
 )
@@ -227,8 +233,8 @@ function openImpl(item?: Implementation) {
     // the child values we're restoring on edit. Vue flushes watchers after this
     // synchronous block, so the final child assignments below win.
     implForm.competency_type_id = item?.competency_type_id ?? null
-    implForm.competency_name_id = item?.competency_name_id ?? null
-    implForm.proficiency_level_id = item?.proficiency_level_id ?? null
+    implForm.competency_id = item?.competency_id ?? null
+    implForm.proficiency_level_ids = (item?.proficiency_level_ids ?? []).map(String)
     implForm.grade = item?.grade ?? ''
     implForm.business_unit = item?.business_unit ?? ''
     implForm.job_family = item?.job_family ?? ''
@@ -272,21 +278,21 @@ const implRows = computed(() => {
 
     return props.implementations
         .map((row) => {
-            const competency = row.competency_name_id != null
-                ? competencyById.value.get(row.competency_name_id)
+            const competency = row.competency_id != null
+                ? competencyById.value.get(row.competency_id)
                 : null
             const type = row.competency_type_id != null
                 ? competencyTypeById.value.get(row.competency_type_id)
                 : null
-            const level = row.proficiency_level_id != null
-                ? proficiencyLevelById.value.get(row.proficiency_level_id)
-                : null
+            const proficiencyNames = (row.proficiency_level_ids ?? [])
+                .map((id) => masterName(proficiencyLevelById.value.get(id)))
+                .filter((n) => n !== '')
 
             return {
                 ...row,
                 competency_name: masterName(competency),
                 type_name: masterName(type),
-                proficiency_name: masterName(level),
+                proficiency_names: proficiencyNames,
             }
         })
         .filter((row) => {
@@ -294,7 +300,7 @@ const implRows = computed(() => {
             return [
                 row.competency_name,
                 row.type_name,
-                row.proficiency_name,
+                ...row.proficiency_names,
                 row.grade ?? '',
                 row.business_unit ?? '',
                 row.job_family ?? '',
@@ -306,12 +312,9 @@ const implRows = computed(() => {
 
 const implColumns = computed<Column[]>(() => [
     { key: 'competency_name', label: t.value.idp.settings.competency, sortable: true, thClass: 'w-56' },
-    { key: 'proficiency_name', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-40' },
+    { key: 'proficiency_names', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-48' },
     { key: 'grade', label: t.value.idp.settings.grade, sortable: true, thClass: 'w-28' },
     { key: 'business_unit', label: t.value.idp.settings.businessUnit, sortable: true, thClass: 'w-40' },
-    { key: 'job_family', label: t.value.idp.settings.jobFamily, sortable: true, thClass: 'w-40' },
-    { key: 'function_name', label: t.value.idp.settings.functionLabel, sortable: true, thClass: 'w-40' },
-    { key: 'position', label: t.value.idp.settings.position, sortable: true, thClass: 'w-40' },
     { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
 ])
 
@@ -416,14 +419,17 @@ function confirmDelete() {
                         </div>
                     </template>
 
-                    <template #cell-proficiency_name="{ row }">
-                        <span
-                            v-if="row.proficiency_name"
-                            class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
-                        >
-                            <i class="fa-solid fa-signal text-[9px]" />
-                            {{ row.proficiency_name }}
-                        </span>
+                    <template #cell-proficiency_names="{ row }">
+                        <div v-if="row.proficiency_names.length" class="flex flex-wrap gap-1">
+                            <span
+                                v-for="(name, i) in row.proficiency_names"
+                                :key="i"
+                                class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
+                            >
+                                <i class="fa-solid fa-signal text-[9px]" />
+                                {{ name }}
+                            </span>
+                        </div>
                         <span v-else class="text-xs italic text-slate-300">—</span>
                     </template>
 
@@ -434,21 +440,6 @@ function confirmDelete() {
 
                     <template #cell-business_unit="{ row }">
                         <span v-if="row.business_unit" class="text-slate-600">{{ row.business_unit }}</span>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
-
-                    <template #cell-job_family="{ row }">
-                        <span v-if="row.job_family" class="text-slate-600">{{ row.job_family }}</span>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
-
-                    <template #cell-function_name="{ row }">
-                        <span v-if="row.function_name" class="text-slate-600">{{ row.function_name }}</span>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
-
-                    <template #cell-position="{ row }">
-                        <span v-if="row.position" class="text-slate-600">{{ row.position }}</span>
                         <span v-else class="text-xs italic text-slate-300">—</span>
                     </template>
 
@@ -506,11 +497,11 @@ function confirmDelete() {
                     </label>
                     <SearchableSelect
                         v-if="implForm.competency_type_id != null && competencyOptions.length > 0"
-                        :model-value="implForm.competency_name_id == null ? '' : String(implForm.competency_name_id)"
+                        :model-value="implForm.competency_id == null ? '' : String(implForm.competency_id)"
                         :options="competencyOptions"
                         :placeholder="t.idp.settings.competencyPickHint"
-                        :invalid="!!implForm.errors.competency_name_id"
-                        @update:model-value="implForm.competency_name_id = $event === '' ? null : Number($event)"
+                        :invalid="!!implForm.errors.competency_id"
+                        @update:model-value="implForm.competency_id = $event === '' ? null : Number($event)"
                     />
                     <p
                         v-else
@@ -522,47 +513,25 @@ function confirmDelete() {
                                 : t.idp.settings.noCompetenciesForType
                         }}
                     </p>
-                    <p v-if="implForm.errors.competency_name_id" class="mt-1 text-xs text-red-600">
-                        {{ implForm.errors.competency_name_id }}
+                    <p v-if="implForm.errors.competency_id" class="mt-1 text-xs text-red-600">
+                        {{ implForm.errors.competency_id }}
                     </p>
                 </div>
 
-                <!-- Proficiency level (derived from the chosen competency) -->
+                <!-- Proficiency levels (multi-select, scoped to the competency) -->
                 <div>
                     <label class="mb-1.5 block text-sm font-medium text-slate-700">
                         {{ t.idp.settings.proficiencyLevel }}
                     </label>
 
-                    <div
-                        v-if="derivedProficiency"
-                        class="rounded-lg border border-border bg-slate-50/60 p-3"
-                    >
-                        <div class="flex items-center gap-2">
-                            <span
-                                class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
-                            >
-                                <i class="fa-solid fa-signal text-[9px]" />
-                                {{ masterName(derivedProficiency) }}
-                            </span>
-                        </div>
-
-                        <div v-if="derivedProficiency.key_behaviors.length" class="mt-2">
-                            <p class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                                {{ t.idp.settings.keyBehaviorsOfLevel }}
-                            </p>
-                            <ul class="space-y-1">
-                                <li
-                                    v-for="kb in derivedProficiency.key_behaviors"
-                                    :key="kb.id"
-                                    class="flex items-start gap-1.5 text-xs text-slate-600"
-                                >
-                                    <i class="fa-solid fa-list-check mt-0.5 text-[9px] text-amber-500" />
-                                    {{ masterName(kb) }}
-                                </li>
-                            </ul>
-                        </div>
-                    </div>
-
+                    <MultiSelect
+                        v-if="selectedCompetency && proficiencyOptions.length"
+                        :model-value="implForm.proficiency_level_ids"
+                        :options="proficiencyOptions"
+                        :placeholder="t.idp.settings.proficiencyLevelPickHint"
+                        :invalid="!!implForm.errors.proficiency_level_ids"
+                        @update:model-value="implForm.proficiency_level_ids = $event"
+                    />
                     <p
                         v-else
                         class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
@@ -572,6 +541,9 @@ function confirmDelete() {
                                 ? t.idp.settings.noProficiencyForCompetency
                                 : t.idp.settings.proficiencyFromCompetency
                         }}
+                    </p>
+                    <p v-if="implForm.errors.proficiency_level_ids" class="mt-1 text-xs text-red-600">
+                        {{ implForm.errors.proficiency_level_ids }}
                     </p>
                 </div>
 
@@ -594,7 +566,7 @@ function confirmDelete() {
                     {{ t.idp.settings.orgScope }}
                 </p>
 
-                <!-- Business unit (top of the hierarchy) -->
+                <!-- Business unit -->
                 <div>
                     <label class="mb-1.5 block text-sm font-medium text-slate-700">
                         {{ t.idp.settings.businessUnit }}
@@ -605,57 +577,6 @@ function confirmDelete() {
                         :placeholder="t.idp.settings.businessUnitPickHint"
                         @update:model-value="implForm.business_unit = $event"
                     />
-                </div>
-
-                <!-- Job family (scoped to business unit) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.jobFamily }}
-                    </label>
-                    <SearchableSelect
-                        v-if="implForm.business_unit && jobFamilyOptions.length"
-                        :model-value="implForm.job_family"
-                        :options="jobFamilyOptions"
-                        :placeholder="t.idp.settings.jobFamilyPickHint"
-                        @update:model-value="implForm.job_family = $event"
-                    />
-                    <p v-else class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400">
-                        {{ implForm.business_unit ? t.idp.settings.noneForBu : t.idp.settings.pickBusinessUnitFirst }}
-                    </p>
-                </div>
-
-                <!-- Function / department (scoped to business unit) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.functionLabel }}
-                    </label>
-                    <SearchableSelect
-                        v-if="implForm.business_unit && functionOptions.length"
-                        :model-value="implForm.function_name"
-                        :options="functionOptions"
-                        :placeholder="t.idp.settings.functionPickHint"
-                        @update:model-value="implForm.function_name = $event"
-                    />
-                    <p v-else class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400">
-                        {{ implForm.business_unit ? t.idp.settings.noneForBu : t.idp.settings.pickBusinessUnitFirst }}
-                    </p>
-                </div>
-
-                <!-- Position / designation (scoped to business unit + function) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.position }}
-                    </label>
-                    <SearchableSelect
-                        v-if="implForm.function_name && positionOptions.length"
-                        :model-value="implForm.position"
-                        :options="positionOptions"
-                        :placeholder="t.idp.settings.positionPickHint"
-                        @update:model-value="implForm.position = $event"
-                    />
-                    <p v-else class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400">
-                        {{ implForm.function_name ? t.idp.settings.noneForFunction : t.idp.settings.pickFunctionFirst }}
-                    </p>
                 </div>
             </form>
 

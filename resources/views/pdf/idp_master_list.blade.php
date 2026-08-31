@@ -109,7 +109,7 @@
 
                 @if($groupedPrograms->isEmpty())
                     <tr>
-                        <td style="font-weight: bold;">{{ $comp->value }}</td>
+                        <td style="font-weight: bold;">{{ $comp->name_en }}</td>
                         <td class="no-data">-</td>
                         <td class="no-data">No programs assigned</td>
                     </tr>
@@ -119,7 +119,7 @@
                         <tr>
                             <td style="font-weight: bold; vertical-align: top;">
                                 @if($isFirstRow)
-                                    {{ $comp->value }}
+                                    {{ $comp->name_en }}
                                     @php $isFirstRow = false; @endphp
                                 @endif
                             </td>
@@ -127,7 +127,7 @@
                             <td>
                                 <ul class="prog-list">
                                     @foreach($programs as $prog)
-                                        <li>{{ $prog->value }}</li>
+                                        <li>{{ $prog->name_en }}</li>
                                     @endforeach
                                 </ul>
                             </td>
@@ -149,7 +149,7 @@
         </thead>
         <tbody>
             @forelse($reviewTools as $tool)
-                <tr><td>{{ $tool->value }}</td></tr>
+                <tr><td>{{ $tool->name_en }}</td></tr>
             @empty
                 <tr><td class="no-data">No review tools available.</td></tr>
             @endforelse

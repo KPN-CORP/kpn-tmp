@@ -288,15 +288,18 @@ function submitMaster() {
     }
 
     if (editingMasterId.value) {
-        masterForm.put(`/idp-setting/masters/${editingMasterId.value}`, opts)
+        masterForm.put(
+            `/idp-setting/masters/${masterType.value}/${editingMasterId.value}`,
+            opts,
+        )
     } else {
         masterForm.post('/idp-setting/masters', opts)
     }
 }
 
-function deleteMaster(id: number, name?: string) {
+function deleteMaster(type: MasterType, id: number, name?: string) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/${id}`,
+        url: `/idp-setting/masters/${type}/${id}`,
         name,
     }
 }
@@ -601,7 +604,7 @@ const competencyColumns = computed<Column[]>(() => [
                                     icon="fa-solid fa-trash"
                                     variant="delete"
                                     :title="t.idp.settings.deleteCompetencyType"
-                                    @click="deleteMaster(row.id, row._name)"
+                                    @click="deleteMaster('competency_type', row.id, row._name)"
                                 />
                             </div>
                         </template>
@@ -753,7 +756,7 @@ const competencyColumns = computed<Column[]>(() => [
                                 icon="fa-solid fa-trash"
                                 variant="delete"
                                 :title="t.idp.settings.deleteCompetency"
-                                @click="deleteMaster(row.id, row.name)"
+                                @click="deleteMaster('competency_name', row.id, row.name)"
                             />
                         </div>
                     </template>

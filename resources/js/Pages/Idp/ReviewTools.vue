@@ -94,7 +94,7 @@ function submit() {
     }
 
     if (editingId.value) {
-        form.put(`/idp-setting/masters/${editingId.value}`, opts)
+        form.put(`/idp-setting/masters/review_tools/${editingId.value}`, opts)
     } else {
         form.post('/idp-setting/masters', opts)
     }
@@ -117,7 +117,7 @@ const deleting = ref(false)
 
 function deleteTool(tool: ReviewTool) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/${tool.id}`,
+        url: `/idp-setting/masters/review_tools/${tool.id}`,
         name: toolName(tool),
     }
 }
