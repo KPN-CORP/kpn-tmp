@@ -9,6 +9,7 @@ import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
+import Pagination from '@/Components/UI/Pagination.vue'
 import { useLocale } from '@/Composables/useLocale'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 
@@ -42,6 +43,8 @@ interface ProficiencyLevel {
     value: string
     value_en: string | null
     value_id: string | null
+    // The type this level is filed under; null = global (fits any type).
+    competency_type_id: number | null
 }
 
 interface KeyBehavior {
@@ -156,6 +159,10 @@ function openMaster(type: MasterType, item?: Competency | CompetencyType) {
         masterForm.key_behavior_ids,
     )
 
+    // Legacy rows may hold a level from another type; clear those so the form
+    // never submits a level its own dropdown does not offer.
+    pruneLevelRows()
+
     masterModal.value = true
 }
 
@@ -234,6 +241,29 @@ watch(proficiencyMode, (mode) => {
     syncFormIds()
 })
 
+/**
+ * Drop any level a row holds that the current competency type does not offer,
+ * along with the key behaviors picked under it. Called whenever the type
+ * changes and when an existing competency is opened, so what the form submits
+ * always matches what the level dropdown offers.
+ */
+function pruneLevelRows() {
+    const allowed = new Set(availableProficiencyLevels.value.map((pl) => pl.id))
+
+    for (const row of levelRows.value) {
+        if (row.levelId != null && !allowed.has(row.levelId)) {
+            row.levelId = null
+            row.keyBehaviorIds = []
+        }
+    }
+
+    syncFormIds()
+}
+
+// Changing the competency type re-scopes the level dropdown, so levels picked
+// under the previous type no longer apply.
+watch(() => masterForm.competency_type_id, pruneLevelRows)
+
 function addLevelRow() {
     levelRows.value.push(newRow())
 }
@@ -274,9 +304,9 @@ function keyBehaviorOptionsFor(row: LevelRow): Option[] {
         .map((kb) => ({ value: String(kb.id), label: masterName(kb) }))
 }
 
-// Once every level has a row there is nothing left to add.
+// Once every selectable level has a row there is nothing left to add.
 const canAddLevelRow = computed(
-    () => levelRows.value.length < props.proficiencyLevels.length,
+    () => levelRows.value.length < availableProficiencyLevels.value.length,
 )
 
 function submitMaster() {
@@ -382,9 +412,23 @@ const competencyTypeOptions = computed<Option[]>(() =>
     })),
 )
 
+/**
+ * The proficiency levels the form may pick from: those filed under the chosen
+ * competency type, plus the untyped (global) ones. No type chosen means no
+ * levels to choose — the type is picked first.
+ */
+const availableProficiencyLevels = computed<ProficiencyLevel[]>(() => {
+    const typeId = masterForm.competency_type_id
+    if (typeId == null) return []
+
+    return props.proficiencyLevels.filter(
+        (pl) => pl.competency_type_id == null || pl.competency_type_id === typeId,
+    )
+})
+
 // Proficiency levels as dropdown options for the competency form.
 const proficiencyLevelOptions = computed<Option[]>(() =>
-    props.proficiencyLevels.map((pl) => ({
+    availableProficiencyLevels.value.map((pl) => ({
         value: String(pl.id),
         label: masterName(pl),
     })),
@@ -511,13 +555,148 @@ const competencyRows = computed(() => {
         }))
 })
 
-const competencyColumns = computed<Column[]>(() => [
-    { key: 'name', label: t.value.idp.settings.competency, sortable: true, thClass: 'w-72' },
-    { key: 'type_name', label: t.value.idp.settings.competencyType, sortable: true, thClass: 'w-48' },
-    { key: 'proficiency', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-40' },
-    { key: 'description', label: t.value.idp.settings.description },
-    { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
-])
+/**
+ * The competency table is a grouped (rowspan) grid rather than a ClientTable:
+ * one competency owns a block of rows — one row per key behavior, those rows
+ * grouped by the proficiency level that owns the behavior — so levels and their
+ * behaviors read as a nested table. Competency / description / type / actions
+ * are single cells spanning the whole block.
+ *
+ * Sorting and paging therefore work on competencies, not on rendered rows,
+ * which is why they live here instead of coming from ClientTable.
+ */
+
+// One rendered <tr> of a competency block.
+interface CompetencyLine {
+    // Level cell: rendered only on the first line of its level group.
+    levelName: string | null
+    levelRowspan: number
+    // 2 when the competency has no levels at all — the empty level cell then
+    // covers the key-behavior column too.
+    levelColspan: number
+    behaviorName: string | null
+}
+
+// Build one competency's lines: its levels in order, each expanded to one line
+// per key behavior (a level with no behaviors still gets a single line).
+function linesFor(row: { proficiency_level_ids: number[]; key_behavior_ids: number[] }): CompetencyLine[] {
+    const behaviorsByLevel = new Map<number, number[]>()
+
+    for (const id of row.key_behavior_ids ?? []) {
+        const kb = keyBehaviorById.value.get(id)
+        if (!kb) continue
+        const bucket = behaviorsByLevel.get(kb.proficiency_level_id) ?? []
+        bucket.push(id)
+        behaviorsByLevel.set(kb.proficiency_level_id, bucket)
+    }
+
+    // A level reachable only through one of its key behaviors still gets rows.
+    const levelIds = [...(row.proficiency_level_ids ?? [])]
+    for (const levelId of behaviorsByLevel.keys()) {
+        if (!levelIds.includes(levelId)) levelIds.push(levelId)
+    }
+
+    if (levelIds.length === 0) {
+        return [{ levelName: null, levelRowspan: 1, levelColspan: 2, behaviorName: null }]
+    }
+
+    const lines: CompetencyLine[] = []
+
+    for (const levelId of levelIds) {
+        const behaviors = (behaviorsByLevel.get(levelId) ?? []).map((id) =>
+            keyBehaviorName(id),
+        )
+        const span = Math.max(1, behaviors.length)
+        const name = proficiencyLevelName(levelId)
+
+        for (let i = 0; i < span; i++) {
+            lines.push({
+                // Only the group's first line paints the level cell.
+                levelName: i === 0 ? name : null,
+                levelRowspan: i === 0 ? span : 0,
+                levelColspan: 1,
+                behaviorName: behaviors[i] ?? null,
+            })
+        }
+    }
+
+    return lines
+}
+
+// --- sorting (competency / type) ---
+
+const competencySort = ref<{ key: 'name' | 'type_name'; dir: 'asc' | 'desc' }>({
+    key: 'name',
+    dir: 'asc',
+})
+
+function toggleCompetencySort(key: 'name' | 'type_name') {
+    const s = competencySort.value
+    competencySort.value =
+        s.key === key
+            ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+            : { key, dir: 'asc' }
+    competencyPage.value = 1
+}
+
+const sortedCompetencies = computed(() => {
+    const { key, dir } = competencySort.value
+    const sign = dir === 'asc' ? 1 : -1
+
+    return [...competencyRows.value].sort(
+        (a, b) => String(a[key] ?? '').localeCompare(String(b[key] ?? '')) * sign,
+    )
+})
+
+// --- paging (by competency, so a block is never split across pages) ---
+
+const competencyPage = ref(1)
+const competencyPerPage = ref(10)
+
+const competencyTotalPages = computed(() =>
+    Math.max(1, Math.ceil(sortedCompetencies.value.length / competencyPerPage.value)),
+)
+
+// Any change to the filtered set sends the user back to the first page.
+watch(() => competencyRows.value.length, () => (competencyPage.value = 1))
+
+const competencyFrom = computed(() =>
+    sortedCompetencies.value.length
+        ? (competencyPage.value - 1) * competencyPerPage.value + 1
+        : 0,
+)
+
+const competencyTo = computed(() =>
+    Math.min(competencyPage.value * competencyPerPage.value, sortedCompetencies.value.length),
+)
+
+// The competencies on the current page, each expanded into its rendered lines.
+const competencyBlocks = computed(() => {
+    if (competencyPage.value > competencyTotalPages.value) {
+        competencyPage.value = competencyTotalPages.value
+    }
+
+    const start = (competencyPage.value - 1) * competencyPerPage.value
+
+    return sortedCompetencies.value
+        .slice(start, start + competencyPerPage.value)
+        .map((row, i) => {
+            const lines = linesFor(row)
+
+            return {
+                ...row,
+                lines,
+                rowspan: lines.length,
+                // Running position across pages, matching ClientTable's "#".
+                index: start + i + 1,
+            }
+        })
+})
+
+function changeCompetencyPerPage(size: number) {
+    competencyPerPage.value = size
+    competencyPage.value = 1
+}
 </script>
 
 <template>
@@ -674,101 +853,217 @@ const competencyColumns = computed<Column[]>(() => [
                 </div>
             </div>
 
-                <!-- Competency table -->
-                <ClientTable
-                    :columns="competencyColumns"
-                    :rows="competencyRows"
-                    row-key="id"
-                    :per-page="10"
-                    numbered
-                >
-                    <template #cell-name="{ row }">
-                        <span class="font-semibold text-slate-800">{{ row.name }}</span>
-                    </template>
-
-                    <template #cell-type_name="{ row }">
-                        <span
-                            v-if="row.type_name"
-                            class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600"
-                        >
-                            <i class="fa-solid fa-tag text-[9px]" />
-                            {{ row.type_name }}
-                        </span>
-                        <span v-else class="text-xs italic text-slate-300">
-                            {{ t.idp.settings.untyped }}
-                        </span>
-                    </template>
-
-                    <template #cell-proficiency="{ row }">
-                        <div
-                            v-if="proficiencyLevelNames(row.proficiency_level_ids).length"
-                            class="flex flex-col items-start gap-1"
-                        >
-                            <div class="flex flex-wrap gap-1">
-                                <span
-                                    v-for="name in proficiencyLevelNames(row.proficiency_level_ids)"
-                                    :key="name"
-                                    class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
-                                >
-                                    <i class="fa-solid fa-signal text-[9px]" />
-                                    {{ name }}
-                                </span>
-                            </div>
-                            <div
-                                v-if="keyBehaviorNames(row.key_behavior_ids).length"
-                                class="flex flex-wrap gap-1"
+                <!-- Competency table — grouped rows: one competency spans a
+                     block, split by proficiency level and then key behavior. -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr
+                                class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400"
                             >
-                                <span
-                                    v-for="name in keyBehaviorNames(row.key_behavior_ids)"
-                                    :key="name"
-                                    class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600"
-                                    :title="t.idp.settings.keyBehavior"
+                                <th class="w-14 px-4 py-2.5 text-center font-semibold">
+                                    #
+                                </th>
+                                <th
+                                    class="w-64 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
+                                    @click="toggleCompetencySort('name')"
                                 >
-                                    <i class="fa-solid fa-list-check text-[9px]" />
-                                    {{ name }}
-                                </span>
-                            </div>
-                        </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
+                                    <span class="inline-flex items-center gap-1">
+                                        {{ t.idp.settings.competency }}
+                                        <i
+                                            class="fa-solid text-[10px]"
+                                            :class="competencySort.key === 'name'
+                                                ? (competencySort.dir === 'asc' ? 'fa-sort-up text-primary' : 'fa-sort-down text-primary')
+                                                : 'fa-sort text-slate-300'"
+                                        />
+                                    </span>
+                                </th>
+                                <th class="px-4 py-2.5 font-semibold">
+                                    {{ t.idp.settings.description }}
+                                </th>
+                                <th
+                                    class="w-48 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
+                                    @click="toggleCompetencySort('type_name')"
+                                >
+                                    <span class="inline-flex items-center gap-1">
+                                        {{ t.idp.settings.competencyType }}
+                                        <i
+                                            class="fa-solid text-[10px]"
+                                            :class="competencySort.key === 'type_name'
+                                                ? (competencySort.dir === 'asc' ? 'fa-sort-up text-primary' : 'fa-sort-down text-primary')
+                                                : 'fa-sort text-slate-300'"
+                                        />
+                                    </span>
+                                </th>
+                                <!-- The level column carries its key behaviors,
+                                     so its header spans both sub-columns. -->
+                                <th class="w-64 px-4 py-2.5 font-semibold" colspan="2">
+                                    {{ t.idp.settings.proficiencyLevel }}
+                                </th>
+                                <th class="w-28 px-4 py-2.5 text-right font-semibold">
+                                    {{ t.idp.settings.action }}
+                                </th>
+                            </tr>
+                        </thead>
 
-                    <template #cell-description="{ row }">
-                        <span
-                            v-if="competencyDescription(row as unknown as Competency)"
-                            class="whitespace-pre-wrap break-words text-slate-500"
-                        >
-                            {{ competencyDescription(row as unknown as Competency) }}
-                        </span>
-                        <span v-else class="text-xs italic text-slate-300">
-                            {{ t.idp.settings.noDescription }}
-                        </span>
-                    </template>
+                        <tbody>
+                            <template
+                                v-for="block in competencyBlocks"
+                                :key="block.id"
+                            >
+                                <tr
+                                    v-for="(line, i) in block.lines"
+                                    :key="i"
+                                    class="transition hover:bg-slate-50/70"
+                                    :class="i === block.lines.length - 1 ? 'border-b border-border/60' : ''"
+                                >
+                                    <!-- Competency-wide cells: painted once, spanning the block. -->
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="border-r border-border/40 px-4 py-3 text-center align-top text-slate-400"
+                                    >
+                                        {{ block.index }}
+                                    </td>
 
-                    <template #cell-actions="{ row }">
-                        <div class="flex items-center justify-end gap-1">
-                            <IconButton
-                                icon="fa-solid fa-pen"
-                                variant="edit"
-                                :title="t.idp.settings.editCompetency"
-                                @click="openMaster('competency_name', row as unknown as Competency)"
-                            />
-                            <IconButton
-                                icon="fa-solid fa-trash"
-                                variant="delete"
-                                :title="t.idp.settings.deleteCompetency"
-                                @click="deleteMaster('competency_name', row.id, row.name)"
-                            />
-                        </div>
-                    </template>
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                    >
+                                        <span class="font-semibold text-slate-800">
+                                            {{ block.name }}
+                                        </span>
+                                    </td>
 
-                    <template #empty>
-                        {{
-                            competencySearch || selectedTypeFilter !== null
-                                ? t.idp.settings.noMatch
-                                : t.idp.settings.none
-                        }}
-                    </template>
-                </ClientTable>
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                    >
+                                        <span
+                                            v-if="competencyDescription(block as unknown as Competency)"
+                                            class="whitespace-pre-wrap break-words text-slate-500"
+                                        >
+                                            {{ competencyDescription(block as unknown as Competency) }}
+                                        </span>
+                                        <span v-else class="text-xs italic text-slate-300">
+                                            {{ t.idp.settings.noDescription }}
+                                        </span>
+                                    </td>
+
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                    >
+                                        <span
+                                            v-if="block.type_name"
+                                            class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600"
+                                        >
+                                            <i class="fa-solid fa-tag text-[9px]" />
+                                            {{ block.type_name }}
+                                        </span>
+                                        <span v-else class="text-xs italic text-slate-300">
+                                            {{ t.idp.settings.untyped }}
+                                        </span>
+                                    </td>
+
+                                    <!-- Level cell: painted once per level group. -->
+                                    <td
+                                        v-if="line.levelRowspan > 0"
+                                        :rowspan="line.levelRowspan"
+                                        :colspan="line.levelColspan"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                        :class="i + line.levelRowspan < block.lines.length
+                                            ? 'border-b border-border/40'
+                                            : ''"
+                                    >
+                                        <span
+                                            v-if="line.levelName"
+                                            class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
+                                        >
+                                            <i class="fa-solid fa-signal text-[9px]" />
+                                            {{ line.levelName }}
+                                        </span>
+                                        <span v-else class="text-xs italic text-slate-300">
+                                            {{ t.idp.settings.noProficiencyLevel }}
+                                        </span>
+                                    </td>
+
+                                    <!-- Key behavior: one per line, unless the
+                                         level cell already covers this column. -->
+                                    <td
+                                        v-if="line.levelColspan === 1"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                        :class="i < block.lines.length - 1
+                                            ? 'border-b border-border/40'
+                                            : ''"
+                                    >
+                                        <span
+                                            v-if="line.behaviorName"
+                                            class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600"
+                                            :title="t.idp.settings.keyBehavior"
+                                        >
+                                            <i class="fa-solid fa-list-check text-[9px]" />
+                                            {{ line.behaviorName }}
+                                        </span>
+                                        <span v-else class="text-xs italic text-slate-300">
+                                            —
+                                        </span>
+                                    </td>
+
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="px-4 py-3 align-top"
+                                    >
+                                        <div class="flex items-center justify-end gap-1">
+                                            <IconButton
+                                                icon="fa-solid fa-pen"
+                                                variant="edit"
+                                                :title="t.idp.settings.editCompetency"
+                                                @click="openMaster('competency_name', block as unknown as Competency)"
+                                            />
+                                            <IconButton
+                                                icon="fa-solid fa-trash"
+                                                variant="delete"
+                                                :title="t.idp.settings.deleteCompetency"
+                                                @click="deleteMaster('competency_name', block.id, block.name)"
+                                            />
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+
+                            <tr v-if="competencyBlocks.length === 0">
+                                <td colspan="7" class="px-4 py-8 text-center text-slate-400">
+                                    {{
+                                        competencySearch || selectedTypeFilter !== null
+                                            ? t.idp.settings.noMatch
+                                            : t.idp.settings.none
+                                    }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pager: pages competencies, so a block is never split. -->
+                <div
+                    v-if="competencyTotalPages > 1 || sortedCompetencies.length > 10"
+                    class="border-t border-border px-4 py-2.5 [&>div]:!mt-0"
+                >
+                    <Pagination
+                        :page="competencyPage"
+                        :per-page="competencyPerPage"
+                        :total="sortedCompetencies.length"
+                        :from="competencyFrom"
+                        :to="competencyTo"
+                        @update:page="competencyPage = $event"
+                        @update:per-page="changeCompetencyPerPage"
+                    />
+                </div>
             </section>
         </div>
 
@@ -898,15 +1193,14 @@ const competencyColumns = computed<Column[]>(() => [
                     </div>
                 </div>
 
-                <!-- Competency -> Competency type -->
+                <!-- Competency -> Competency type (required: it scopes the
+                     proficiency levels below) -->
                 <div v-if="masterType === 'competency_name'">
                     <label
                         class="mb-1.5 block text-sm font-medium text-slate-700"
                     >
                         {{ t.idp.settings.competencyType }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
+                        <span class="text-red-500">*</span>
                     </label>
 
                     <SearchableSelect
@@ -917,11 +1211,19 @@ const competencyColumns = computed<Column[]>(() => [
                         "
                         :options="competencyTypeOptions"
                         :placeholder="t.idp.settings.competencyTypePickHint"
+                        :invalid="!!masterForm.errors.competency_type_id"
                         @update:model-value="
                             masterForm.competency_type_id =
                                 $event === '' ? null : Number($event)
                         "
                     />
+
+                    <p
+                        v-if="masterForm.errors.competency_type_id"
+                        class="mt-1 text-xs text-red-600"
+                    >
+                        {{ masterForm.errors.competency_type_id }}
+                    </p>
                 </div>
 
                 <!-- Competency -> Proficiency level & key behavior -->
@@ -930,8 +1232,19 @@ const competencyColumns = computed<Column[]>(() => [
                         {{ t.idp.settings.proficiencyLevel }}
                     </label>
 
+                    <!-- The type scopes the levels on offer, so it comes first. -->
+                    <p
+                        v-if="masterForm.competency_type_id == null"
+                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
+                    >
+                        {{ t.idp.settings.pickTypeFirst }}
+                    </p>
+
                     <!-- Mode selector -->
-                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <div
+                        v-else
+                        class="grid grid-cols-1 gap-2 sm:grid-cols-3"
+                    >
                         <label
                             v-for="opt in [
                                 { key: 'behavior', label: t.idp.settings.withKeyBehavior },
@@ -958,7 +1271,13 @@ const competencyColumns = computed<Column[]>(() => [
 
                     <!-- One card per proficiency level, each carrying its own
                          key behaviors; levels are added/removed a row at a time. -->
-                    <div v-if="proficiencyMode !== 'none'" class="space-y-2">
+                    <div
+                        v-if="
+                            masterForm.competency_type_id != null &&
+                                proficiencyMode !== 'none'
+                        "
+                        class="space-y-2"
+                    >
                         <p
                             v-if="proficiencyMode === 'behavior'"
                             class="text-xs text-slate-400"
@@ -997,6 +1316,7 @@ const competencyColumns = computed<Column[]>(() => [
                                     </label>
 
                                     <SearchableSelect
+                                        v-if="proficiencyLevelOptions.length > 0"
                                         :model-value="
                                             row.levelId == null
                                                 ? ''
@@ -1007,6 +1327,12 @@ const competencyColumns = computed<Column[]>(() => [
                                         :invalid="!!masterForm.errors.proficiency_level_ids"
                                         @update:model-value="setRowLevel(row, $event)"
                                     />
+                                    <p
+                                        v-else
+                                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
+                                    >
+                                        {{ t.idp.settings.noProficiencyLevelsForType }}
+                                    </p>
                                 </div>
 
                                 <div v-if="proficiencyMode === 'behavior'">

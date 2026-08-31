@@ -3,17 +3,27 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * A proficiency level (e.g. L1/L2/L3). Owns the key behaviors defined under it,
  * and is separately selected by competencies, development programs and master
- * implementations.
+ * implementations. Optionally filed under one competency type; a level with no
+ * type is global.
  */
 class ProficiencyLevel extends Model
 {
-    protected $fillable = ['name_en', 'name_id', 'description_en', 'description_id'];
+    protected $fillable = ['competency_type_id', 'name_en', 'name_id', 'description_en', 'description_id'];
+
+    /**
+     * The competency type this level is filed under, if any.
+     */
+    public function competencyType(): BelongsTo
+    {
+        return $this->belongsTo(CompetencyType::class);
+    }
 
     /**
      * The key behaviors defined under this level. This is ownership: a key

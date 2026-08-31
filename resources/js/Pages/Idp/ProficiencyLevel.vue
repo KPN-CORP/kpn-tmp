@@ -8,6 +8,7 @@ import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
+import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t, locale } = useLocale()
@@ -29,7 +30,18 @@ interface ProficiencyLevel {
     value_id: string | null
     description_en: string | null
     description_id: string | null
+    // The competency type this level is filed under; null = available to all.
+    competency_type_id: number | null
     key_behaviors: KeyBehavior[]
+}
+
+interface CompetencyType {
+    id: number
+    value: string
+    value_en: string | null
+    value_id: string | null
+    description_en: string | null
+    description_id: string | null
 }
 
 // Shared shape for the localized name/description helpers below.
@@ -43,6 +55,7 @@ type LocalizedItem = {
 
 const props = defineProps<{
     proficiencyLevels: ProficiencyLevel[]
+    competencyTypes: CompetencyType[]
 }>()
 
 /**
@@ -51,7 +64,7 @@ const props = defineProps<{
  * partial reload, so the expensive shared props (corporate employee lookup,
  * approval counts, notification feed) are not re-evaluated on each mutation.
  */
-const reloadOnly = ['proficiencyLevels', 'flash']
+const reloadOnly = ['proficiencyLevels', 'competencyTypes', 'flash']
 
 // Localized name, falling back to the canonical `value`.
 function levelName(item: LocalizedItem): string {
@@ -79,6 +92,8 @@ const editingId = ref<number | null>(null)
 
 const form = useForm({
     type: 'proficiency_level',
+    // Null files the level under no type, leaving it usable for every type.
+    competency_type_id: null as number | null,
     // Canonical `value` tracks the English name (value_en) server-side.
     value_en: '',
     value_id: '',
@@ -90,6 +105,7 @@ function openForm(item?: ProficiencyLevel) {
     editingId.value = item?.id ?? null
 
     form.clearErrors()
+    form.competency_type_id = item?.competency_type_id ?? null
     form.value_en = item?.value_en ?? item?.value ?? ''
     form.value_id = item?.value_id ?? ''
     form.description_en = item?.description_en ?? ''
@@ -220,7 +236,50 @@ function confirmDelete() {
 
 /**
  * --------------------------------------------------------------------------
- * Table — search (external) + ClientTable (sort + pagination)
+ * Competency types
+ * --------------------------------------------------------------------------
+ * A level may be filed under one type (or none, making it global). The list is
+ * read-only here — types are managed on the Competency settings page.
+ */
+
+const competencyTypeById = computed(() => {
+    const map = new Map<number, CompetencyType>()
+    for (const ct of props.competencyTypes) map.set(ct.id, ct)
+    return map
+})
+
+function competencyTypeName(id: number | null): string {
+    if (id == null) return ''
+    const ct = competencyTypeById.value.get(id)
+    return ct ? levelName(ct as unknown as LocalizedItem) : ''
+}
+
+// Form options, led by the empty choice that leaves the level untyped.
+const competencyTypeOptions = computed<Option[]>(() => [
+    { value: '', label: t.value.idp.settings.allTypes },
+    ...props.competencyTypes.map((ct) => ({
+        value: String(ct.id),
+        label: levelName(ct as unknown as LocalizedItem),
+    })),
+])
+
+// Levels with no type assigned (drives the "Untyped" filter option).
+const untypedLevelCount = computed(
+    () => props.proficiencyLevels.filter((l) => l.competency_type_id == null).length,
+)
+
+// null = all types, 0 = the untyped bucket, otherwise a type id.
+const typeFilter = ref<number | null>(null)
+
+// Bridge that numeric/null filter to the string-valued <select>.
+const typeFilterValue = computed<string>({
+    get: () => (typeFilter.value === null ? '' : String(typeFilter.value)),
+    set: (v) => (typeFilter.value = v === '' ? null : Number(v)),
+})
+
+/**
+ * --------------------------------------------------------------------------
+ * Table — search + type filter (external) + ClientTable (sort + pagination)
  * --------------------------------------------------------------------------
  */
 
@@ -229,22 +288,36 @@ const search = ref('')
 // Rows carry the derived localized name/description ClientTable sorts + renders.
 const filtered = computed(() => {
     const q = search.value.trim().toLowerCase()
-    const rows = props.proficiencyLevels.map((r) => ({
-        ...r,
-        name: levelName(r),
-        description: levelDescription(r),
-    }))
-    return q
-        ? rows.filter(
-              (r) =>
-                  r.name.toLowerCase().includes(q) ||
-                  r.value.toLowerCase().includes(q),
-          )
-        : rows
+    const filter = typeFilter.value
+
+    return props.proficiencyLevels
+        .filter((r) => {
+            // Competency-type filter (0 = untyped bucket).
+            if (filter !== null) {
+                if (filter === 0) {
+                    if (r.competency_type_id != null) return false
+                } else if (r.competency_type_id !== filter) {
+                    return false
+                }
+            }
+
+            if (!q) return true
+            return (
+                levelName(r).toLowerCase().includes(q) ||
+                r.value.toLowerCase().includes(q)
+            )
+        })
+        .map((r) => ({
+            ...r,
+            name: levelName(r),
+            description: levelDescription(r),
+            type_name: competencyTypeName(r.competency_type_id),
+        }))
 })
 
 const columns = computed<Column[]>(() => [
     { key: 'name', label: t.value.idp.settings.proficiencyLevel, sortable: true, thClass: 'w-72' },
+    { key: 'type_name', label: t.value.idp.settings.competencyType, sortable: true, thClass: 'w-48' },
     { key: 'description', label: t.value.idp.settings.description },
     { key: 'key_behaviors', label: t.value.idp.settings.keyBehaviors, align: 'center', thClass: 'w-52' },
     { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
@@ -294,6 +367,24 @@ const kbColumns = computed<Column[]>(() => [
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2">
+                        <!-- Competency-type filter ('' = all, '0' = untyped) -->
+                        <select
+                            v-model="typeFilterValue"
+                            class="rounded-md border border-border bg-white px-3 py-2 text-sm text-slate-600 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                            <option value="">{{ t.idp.settings.allTypes }}</option>
+                            <option
+                                v-for="ct in competencyTypes"
+                                :key="ct.id"
+                                :value="String(ct.id)"
+                            >
+                                {{ levelName(ct as unknown as LocalizedItem) }}
+                            </option>
+                            <option v-if="untypedLevelCount" value="0">
+                                {{ t.idp.settings.untyped }}
+                            </option>
+                        </select>
+
                         <div class="relative">
                             <i
                                 class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
@@ -326,6 +417,18 @@ const kbColumns = computed<Column[]>(() => [
                 >
                     <template #cell-name="{ row }">
                         <span class="font-semibold text-slate-800">{{ row.name }}</span>
+                    </template>
+
+                    <template #cell-type_name="{ row }">
+                        <span
+                            v-if="row.type_name"
+                            class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
+                        >
+                            {{ row.type_name }}
+                        </span>
+                        <span v-else class="text-xs italic text-slate-300">
+                            {{ t.idp.settings.untyped }}
+                        </span>
                     </template>
 
                     <template #cell-description="{ row }">
@@ -394,6 +497,38 @@ const kbColumns = computed<Column[]>(() => [
             @close="modal = false"
         >
             <form id="level-form" class="space-y-4" @submit.prevent="submitForm">
+                <!-- Competency type: which type this level is filed under -->
+                <div>
+                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                        {{ t.idp.settings.competencyType }}
+                        <span class="font-normal text-slate-400">
+                            ({{ t.idp.settings.optional }})
+                        </span>
+                    </label>
+
+                    <SearchableSelect
+                        :model-value="
+                            form.competency_type_id == null
+                                ? ''
+                                : String(form.competency_type_id)
+                        "
+                        :options="competencyTypeOptions"
+                        :placeholder="t.idp.settings.levelTypePickHint"
+                        :invalid="!!form.errors.competency_type_id"
+                        @update:model-value="
+                            form.competency_type_id =
+                                $event === '' ? null : Number($event)
+                        "
+                    />
+
+                    <p v-if="form.errors.competency_type_id" class="mt-1 text-xs text-red-500">
+                        {{ form.errors.competency_type_id }}
+                    </p>
+                    <p v-else class="mt-1 text-xs text-slate-400">
+                        {{ t.idp.settings.levelTypePickHint }}
+                    </p>
+                </div>
+
                 <!-- English section -->
                 <div class="rounded-lg border border-border bg-slate-50/60 p-4">
                     <div class="mb-3 flex items-center gap-2">

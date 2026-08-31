@@ -39,7 +39,8 @@ interface Implementation {
     competency_id: number | null
     // One or more proficiency levels pinned to this implementation.
     proficiency_level_ids: number[]
-    grade: string | null
+    // The grades this implementation covers; empty means every grade.
+    grades: string[]
     business_unit: string | null
     job_family: string | null
     function_name: string | null
@@ -164,7 +165,7 @@ const implForm = useForm({
     competency_id: null as number | null,
     // MultiSelect binds string[]; converted to ints server-side.
     proficiency_level_ids: [] as string[],
-    grade: '',
+    grades: [] as string[],
     business_unit: '',
     job_family: '',
     function_name: '',
@@ -235,7 +236,7 @@ function openImpl(item?: Implementation) {
     implForm.competency_type_id = item?.competency_type_id ?? null
     implForm.competency_id = item?.competency_id ?? null
     implForm.proficiency_level_ids = (item?.proficiency_level_ids ?? []).map(String)
-    implForm.grade = item?.grade ?? ''
+    implForm.grades = [...(item?.grades ?? [])]
     implForm.business_unit = item?.business_unit ?? ''
     implForm.job_family = item?.job_family ?? ''
     implForm.function_name = item?.function_name ?? ''
@@ -301,7 +302,7 @@ const implRows = computed(() => {
                 row.competency_name,
                 row.type_name,
                 ...row.proficiency_names,
-                row.grade ?? '',
+                ...(row.grades ?? []),
                 row.business_unit ?? '',
                 row.job_family ?? '',
                 row.function_name ?? '',
@@ -313,7 +314,7 @@ const implRows = computed(() => {
 const implColumns = computed<Column[]>(() => [
     { key: 'competency_name', label: t.value.idp.settings.competency, sortable: true, thClass: 'w-56' },
     { key: 'proficiency_names', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-48' },
-    { key: 'grade', label: t.value.idp.settings.grade, sortable: true, thClass: 'w-28' },
+    { key: 'grades', label: t.value.idp.settings.grade, thClass: 'w-40' },
     { key: 'business_unit', label: t.value.idp.settings.businessUnit, sortable: true, thClass: 'w-40' },
     { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
 ])
@@ -433,8 +434,16 @@ function confirmDelete() {
                         <span v-else class="text-xs italic text-slate-300">—</span>
                     </template>
 
-                    <template #cell-grade="{ row }">
-                        <span v-if="row.grade" class="text-slate-600">{{ row.grade }}</span>
+                    <template #cell-grades="{ row }">
+                        <div v-if="row.grades?.length" class="flex flex-wrap gap-1">
+                            <span
+                                v-for="(grade, i) in row.grades"
+                                :key="i"
+                                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
+                            >
+                                {{ grade }}
+                            </span>
+                        </div>
                         <span v-else class="text-xs italic text-slate-300">—</span>
                     </template>
 
@@ -530,6 +539,9 @@ function confirmDelete() {
                         :options="proficiencyOptions"
                         :placeholder="t.idp.settings.proficiencyLevelPickHint"
                         :invalid="!!implForm.errors.proficiency_level_ids"
+                        select-all
+                        :select-all-label="t.idp.settings.selectAllLevels"
+                        :clear-all-label="t.idp.settings.clearAllLevels"
                         @update:model-value="implForm.proficiency_level_ids = $event"
                     />
                     <p
@@ -547,17 +559,27 @@ function confirmDelete() {
                     </p>
                 </div>
 
-                <!-- Grade -->
+                <!-- Grades (multi-select; empty means every grade) -->
                 <div>
                     <label class="mb-1.5 block text-sm font-medium text-slate-700">
                         {{ t.idp.settings.grade }}
+                        <span class="font-normal text-slate-400">
+                            ({{ t.idp.settings.optional }})
+                        </span>
                     </label>
-                    <SearchableSelect
-                        :model-value="implForm.grade"
+                    <MultiSelect
+                        :model-value="implForm.grades"
                         :options="gradeOptions"
                         :placeholder="t.idp.settings.gradePickHint"
-                        @update:model-value="implForm.grade = $event"
+                        :invalid="!!implForm.errors.grades"
+                        select-all
+                        :select-all-label="t.idp.settings.selectAllGrades"
+                        :clear-all-label="t.idp.settings.clearAllGrades"
+                        @update:model-value="implForm.grades = $event"
                     />
+                    <p v-if="implForm.errors.grades" class="mt-1 text-xs text-red-600">
+                        {{ implForm.errors.grades }}
+                    </p>
                 </div>
 
                 <hr class="border-border/60">

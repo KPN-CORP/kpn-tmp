@@ -69,6 +69,7 @@ class IdpMasterService
         $blocked = match ($type) {
             MasterDataType::CompetencyType => $this->firstBlocker([
                 [Competency::where('competency_type_id', $master->id), 'it is assigned to a competency'],
+                [$master->proficiencyLevels(), 'it is assigned to a proficiency level'],
                 [DevelopmentProgram::where('competency_type_id', $master->id), 'it is assigned to a development program'],
                 [CompetencyImplementation::where('competency_type_id', $master->id), 'it is used in a master implementation'],
             ]),
@@ -132,7 +133,7 @@ class IdpMasterService
                 'proficiency_level_id' => $data['proficiency_level_id'],
             ],
 
-            MasterDataType::CompetencyName => [
+            MasterDataType::CompetencyName, MasterDataType::ProficiencyLevel => [
                 'competency_type_id' => $data['competency_type_id'] ?? null,
             ],
 

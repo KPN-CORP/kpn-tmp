@@ -136,7 +136,13 @@ class IdpSettingController extends Controller
         return Inertia::render('Idp/Competency', [
             'competencies' => $competencies,
             'competencyTypes' => $this->competencyTypesData(),
-            'proficiencyLevels' => $this->options(ProficiencyLevel::orderBy('name_en')->get()),
+            // Levels carry the type they are filed under so the competency form
+            // can scope its level options to the chosen competency type
+            // (a level with no type is global and fits every type).
+            'proficiencyLevels' => ProficiencyLevel::orderBy('name_en')->get()
+                ->map(fn (ProficiencyLevel $pl) => $this->option($pl) + [
+                    'competency_type_id' => $pl->competency_type_id,
+                ]),
             // Key behaviors carry their owning proficiency_level_id so the
             // competency form can scope the behavior dropdown to the chosen level.
             'keyBehaviors' => KeyBehavior::orderBy('name_en')->get()
@@ -148,13 +154,13 @@ class IdpSettingController extends Controller
 
     /**
      * Master Implementation: maps a single competency (with one or more
-     * proficiency levels) to a corporate org scope: grade plus a dynamic
+     * proficiency levels) to a corporate org scope: grades plus a dynamic
      * business-unit hierarchy (business unit -> job family / function ->
      * position).
      */
     public function masterImplementation(): Response
     {
-        $implementations = CompetencyImplementation::with('proficiencyLevels:id')
+        $implementations = CompetencyImplementation::with(['proficiencyLevels:id', 'grades'])
             ->orderByDesc('id')
             ->get()
             ->map(fn (CompetencyImplementation $i) => [
@@ -162,7 +168,7 @@ class IdpSettingController extends Controller
                 'competency_type_id' => $i->competency_type_id,
                 'competency_id' => $i->competency_id,
                 'proficiency_level_ids' => $i->proficiencyLevels->pluck('id')->all(),
-                'grade' => $i->grade,
+                'grades' => $i->grades->pluck('grade')->values(),
                 'business_unit' => $i->business_unit,
                 'job_family' => $i->job_family,
                 'function_name' => $i->function_name,
@@ -196,8 +202,8 @@ class IdpSettingController extends Controller
     }
 
     /**
-     * Proficiency level management (name + bilingual description) together with
-     * the key behaviors each level owns.
+     * Proficiency level management (name + competency type + bilingual
+     * description) together with the key behaviors each level owns.
      */
     public function proficiencyLevel(): Response
     {
@@ -207,6 +213,8 @@ class IdpSettingController extends Controller
             ->map(fn (ProficiencyLevel $level) => $this->option($level) + [
                 'description_en' => $level->description_en,
                 'description_id' => $level->description_id,
+                // The type this level is filed under; null = global.
+                'competency_type_id' => $level->competency_type_id,
                 'key_behaviors' => $level->keyBehaviors->map(fn (KeyBehavior $kb) => $this->option($kb) + [
                     'description_en' => $kb->description_en,
                     'description_id' => $kb->description_id,
@@ -216,7 +224,16 @@ class IdpSettingController extends Controller
 
         return Inertia::render('Idp/ProficiencyLevel', [
             'proficiencyLevels' => $proficiencyLevels,
+            'competencyTypes' => $this->competencyTypesData(),
         ]);
+    }
+
+    /**
+     * A submitted id as an int, or null when the form sent it empty.
+     */
+    private function intOrNull(mixed $value): ?int
+    {
+        return $value === null || $value === '' ? null : (int) $value;
     }
 
     /**
@@ -609,18 +626,24 @@ class IdpSettingController extends Controller
     private function validateMaster(Request $request, MasterDataType $type, ?Model $master = null): array
     {
         $isProgram = $type === MasterDataType::DevelopmentProgram;
+        $isCompetency = $type === MasterDataType::CompetencyName;
 
         $uniqueName = Rule::unique($type->table(), 'name_en')->ignore($master?->id);
 
         if ($type === MasterDataType::KeyBehavior) {
             // A behavior name only has to be unique inside its own level.
             $uniqueName->where('proficiency_level_id', $request->input('proficiency_level_id'));
+        } elseif ($type === MasterDataType::ProficiencyLevel) {
+            // Levels are named per competency type, so "Level 1" may exist under
+            // several types. The composite unique index cannot police untyped
+            // rows (MySQL keeps NULLs distinct), so this rule carries that case.
+            $uniqueName->where('competency_type_id', $this->intOrNull($request->input('competency_type_id')));
         } elseif ($isProgram) {
             // Programs are named per development model.
             $uniqueName->where('development_model_id', $request->input('development_model_id'));
         }
 
-        return $request->validate([
+        $data = $request->validate([
             'type' => [$master ? 'sometimes' : 'required', 'string', 'in:'.MasterDataType::validationList()],
             'value_en' => [
                 'required', 'string',
@@ -634,8 +657,10 @@ class IdpSettingController extends Controller
             'description_id' => ['nullable', 'string'],
             'development_model_id' => ['nullable', 'integer', 'exists:development_models,id'],
             'competency_type_id' => [
-                // A development program must be classified by a competency type.
-                $isProgram ? 'required' : 'nullable',
+                // Development programs and competencies are both classified by
+                // a competency type; the competency's type is what scopes the
+                // proficiency levels it may pin.
+                $isProgram || $isCompetency ? 'required' : 'nullable',
                 'integer', 'exists:competency_types,id',
             ],
             'proficiency_level_id' => [
@@ -661,6 +686,24 @@ class IdpSettingController extends Controller
             'grades' => ['nullable', 'array'],
             'grades.*' => ['string', 'max:255'],
         ]);
+
+        // A competency's proficiency levels have to come from its own type. A
+        // level with no type is global, so it fits under any of them.
+        if ($isCompetency && ! empty($data['proficiency_level_ids'])) {
+            $foreign = ProficiencyLevel::whereIn('id', $data['proficiency_level_ids'])
+                ->whereNotNull('competency_type_id')
+                ->where('competency_type_id', '!=', $data['competency_type_id'])
+                ->exists();
+
+            if ($foreign) {
+                $this->fail(
+                    'proficiency_level_ids',
+                    'The selected proficiency levels must belong to the chosen competency type.'
+                );
+            }
+        }
+
+        return $data;
     }
 
     // --- Master implementation (competency -> org scope) ---
@@ -671,6 +714,7 @@ class IdpSettingController extends Controller
 
         $implementation = CompetencyImplementation::create($data);
         $implementation->proficiencyLevels()->sync($data['proficiency_level_ids']);
+        $this->syncImplementationGrades($implementation, $data['grades']);
 
         return back()->with('success', 'Master implementation added successfully.');
     }
@@ -681,6 +725,7 @@ class IdpSettingController extends Controller
 
         $implementation->update($data);
         $implementation->proficiencyLevels()->sync($data['proficiency_level_ids']);
+        $this->syncImplementationGrades($implementation, $data['grades']);
 
         return back()->with('success', 'Master implementation updated successfully.');
     }
@@ -703,7 +748,9 @@ class IdpSettingController extends Controller
             // An implementation can pin one or more proficiency levels.
             'proficiency_level_ids' => ['nullable', 'array'],
             'proficiency_level_ids.*' => ['integer', 'exists:proficiency_levels,id'],
-            'grade' => ['nullable', 'string', 'max:255'],
+            // ...and scope to any number of grades (empty means every grade).
+            'grades' => ['nullable', 'array'],
+            'grades.*' => ['string', 'max:255'],
             'business_unit' => ['nullable', 'string', 'max:255'],
             'job_family' => ['nullable', 'string', 'max:255'],
             'function_name' => ['nullable', 'string', 'max:255'],
@@ -714,6 +761,13 @@ class IdpSettingController extends Controller
             array_map('intval', $data['proficiency_level_ids'] ?? [])
         ));
 
+        $data['grades'] = collect($data['grades'] ?? [])
+            ->map(fn ($grade) => trim((string) $grade))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
         // The chosen competency must belong to the chosen competency type.
         $competency = Competency::find($data['competency_id']);
 
@@ -721,11 +775,12 @@ class IdpSettingController extends Controller
             $this->fail('competency_id', 'The selected competency does not belong to the chosen competency type.');
         }
 
-        // Guard against a duplicate implementation for the same competency + scope.
+        // Guard against a duplicate implementation for the same competency +
+        // scope. Grades are a list on the row now, so they are not part of the
+        // key: one row per competency + org scope carries every grade it covers.
         $duplicate = CompetencyImplementation::query()
             ->when($implementation, fn ($q) => $q->whereKeyNot($implementation->id))
             ->where('competency_id', $data['competency_id'])
-            ->where('grade', $data['grade'] ?? null)
             ->where('business_unit', $data['business_unit'] ?? null)
             ->where('job_family', $data['job_family'] ?? null)
             ->where('function_name', $data['function_name'] ?? null)
@@ -737,6 +792,22 @@ class IdpSettingController extends Controller
         }
 
         return $data;
+    }
+
+    /**
+     * Replace an implementation's grade list.
+     *
+     * @param  list<string>  $grades
+     */
+    private function syncImplementationGrades(CompetencyImplementation $implementation, array $grades): void
+    {
+        $implementation->grades()->delete();
+
+        if ($grades !== []) {
+            $implementation->grades()->createMany(
+                array_map(fn (string $grade) => ['grade' => $grade], $grades)
+            );
+        }
     }
 
     private function fail(string $field, string $message): never
