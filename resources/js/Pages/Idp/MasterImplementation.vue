@@ -11,6 +11,11 @@ import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.
 import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
+import {
+    periodSuffix,
+    remainingWindow,
+    usableInWindow,
+} from '@/Composables/useEffectivePeriod'
 
 const { t, locale } = useLocale()
 
@@ -29,9 +34,15 @@ interface Competency extends Localized {
     competency_type_id: number | null
     // The proficiency levels available for this competency.
     proficiency_level_ids: number[]
+    // The window during which this competency can be mapped.
+    effective_start_date: string | null
+    effective_end_date: string | null
 }
 
-type ProficiencyLevel = Localized
+interface ProficiencyLevel extends Localized {
+    effective_start_date: string | null
+    effective_end_date: string | null
+}
 
 interface Implementation {
     id: number
@@ -114,14 +125,52 @@ const competencyTypeOptions = computed<Option[]>(() =>
     props.competencyTypes.map((c) => ({ value: String(c.id), label: masterName(c) })),
 )
 
-// Competencies filtered by the chosen competency type.
+/**
+ * An implementation has no effective period of its own — it applies from now
+ * on — so the masters it maps have to be usable from now on too. A competency
+ * whose window has closed can no longer be mapped, and the levels on offer are
+ * the ones still usable during the competency's remaining window. The server
+ * enforces the same rule on save.
+ */
+function periodLabel(item: Competency | ProficiencyLevel): string {
+    return (
+        masterName(item) +
+        periodSuffix(item, t.value.idp.settings.always, t.value.idp.settings.ongoing)
+    )
+}
+
+// Competencies filtered by the chosen competency type, minus the expired ones.
 const competencyOptions = computed<Option[]>(() => {
     const typeId = implForm.competency_type_id
     if (typeId == null) return []
-    return props.competencies
-        .filter((c) => c.competency_type_id === typeId)
-        .map((c) => ({ value: String(c.id), label: masterName(c) }))
+
+    const options = props.competencies
+        .filter((c) => c.competency_type_id === typeId && !remainingWindow(c).past)
+        .map((c) => ({ value: String(c.id), label: periodLabel(c) }))
+
+    // A competency saved earlier that has since expired keeps its place, so an
+    // edit to some other field doesn't blank the select and lose the mapping.
+    const current = selectedCompetency.value
+    if (current && remainingWindow(current).past) {
+        options.unshift({ value: String(current.id), label: periodLabel(current) })
+    }
+
+    return options
 })
+
+// The chosen competency's remaining window — the span its levels must serve.
+const competencyWindow = computed(() => {
+    const c = selectedCompetency.value
+
+    return remainingWindow({
+        effective_start_date: c?.effective_start_date ?? null,
+        effective_end_date: c?.effective_end_date ?? null,
+    })
+})
+
+const competencyExpired = computed(
+    () => !!selectedCompetency.value && competencyWindow.value.past,
+)
 
 const gradeOptions = computed<Option[]>(() => toStringOptions(props.grades))
 
@@ -179,15 +228,39 @@ const selectedCompetency = computed<Competency | null>(() =>
         : competencyById.value.get(implForm.competency_id) ?? null,
 )
 
-// Proficiency levels the chosen competency offers (only the name is shown).
+// The levels the chosen competency offers that can still serve its window.
 const proficiencyOptions = computed<Option[]>(() => {
     const c = selectedCompetency.value
     if (!c) return []
-    return c.proficiency_level_ids
+
+    const offered = c.proficiency_level_ids
         .map((id) => proficiencyLevelById.value.get(id))
         .filter((p): p is ProficiencyLevel => !!p)
-        .map((p) => ({ value: String(p.id), label: masterName(p) }))
+
+    const pinned = new Set(implForm.proficiency_level_ids)
+
+    return offered
+        // Levels already stored on this implementation stay listed even once
+        // they fall outside the window; dropping them would silently unpin
+        // them on the next save. They are flagged below instead.
+        .filter(
+            (p) =>
+                usableInWindow(p, competencyWindow.value) ||
+                pinned.has(String(p.id)),
+        )
+        .map((p) => ({ value: String(p.id), label: periodLabel(p) }))
 })
+
+// Pinned levels that no longer cover the competency's remaining window.
+const outOfWindowLevelNames = computed(() =>
+    implForm.proficiency_level_ids
+        .map((id) => proficiencyLevelById.value.get(Number(id)))
+        .filter(
+            (p): p is ProficiencyLevel =>
+                !!p && !usableInWindow(p, competencyWindow.value),
+        )
+        .map((p) => masterName(p)),
+)
 
 // Drop any pinned proficiency level the newly chosen competency doesn't offer.
 watch(selectedCompetency, (c) => {
@@ -525,6 +598,13 @@ function confirmDelete() {
                     <p v-if="implForm.errors.competency_id" class="mt-1 text-xs text-red-600">
                         {{ implForm.errors.competency_id }}
                     </p>
+
+                    <!-- A competency saved before its period ended. Kept so the
+                         mapping isn't lost, but it can't stay as it is. -->
+                    <p v-if="competencyExpired" class="mt-1 text-xs font-medium text-amber-600">
+                        <i class="fa-solid fa-triangle-exclamation mr-1" />
+                        {{ t.idp.settings.competencyExpiredForImplementation }}
+                    </p>
                 </div>
 
                 <!-- Proficiency levels (multi-select, scoped to the competency) -->
@@ -549,13 +629,26 @@ function confirmDelete() {
                         class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
                     >
                         {{
-                            selectedCompetency
-                                ? t.idp.settings.noProficiencyForCompetency
-                                : t.idp.settings.proficiencyFromCompetency
+                            !selectedCompetency
+                                ? t.idp.settings.proficiencyFromCompetency
+                                : selectedCompetency.proficiency_level_ids.length > 0
+                                    ? t.idp.settings.noProficiencyEffectiveForCompetency
+                                    : t.idp.settings.noProficiencyForCompetency
                         }}
                     </p>
                     <p v-if="implForm.errors.proficiency_level_ids" class="mt-1 text-xs text-red-600">
                         {{ implForm.errors.proficiency_level_ids }}
+                    </p>
+
+                    <!-- Levels pinned earlier that no longer cover the
+                         competency's remaining period. -->
+                    <p
+                        v-if="outOfWindowLevelNames.length > 0"
+                        class="mt-1 text-xs font-medium text-amber-600"
+                    >
+                        <i class="fa-solid fa-triangle-exclamation mr-1" />
+                        {{ t.idp.settings.levelsOutsideCompetencyPeriod }}
+                        {{ outOfWindowLevelNames.join(', ') }}
                     </p>
                 </div>
 

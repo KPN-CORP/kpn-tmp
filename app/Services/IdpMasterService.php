@@ -9,8 +9,10 @@ use App\Models\CompetencyType;
 use App\Models\DevelopmentProgram;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\KeyBehavior;
+use App\Models\Training;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\DB;
 
@@ -72,6 +74,7 @@ class IdpMasterService
                 [$master->proficiencyLevels(), 'it is assigned to a proficiency level'],
                 [DevelopmentProgram::where('competency_type_id', $master->id), 'it is assigned to a development program'],
                 [CompetencyImplementation::where('competency_type_id', $master->id), 'it is used in a master implementation'],
+                [$master->trainings(), 'it is assigned to a master training'],
             ]),
 
             MasterDataType::ProficiencyLevel => $this->firstBlocker([
@@ -79,13 +82,19 @@ class IdpMasterService
                 [$master->keyBehaviors(), 'it still has key behaviors'],
                 [DevelopmentProgram::where('proficiency_level_id', $master->id), 'it is assigned to a development program'],
                 [$master->implementations(), 'it is used in a master implementation'],
+                [$master->trainings(), 'it is assigned to a master training'],
             ]),
 
             MasterDataType::CompetencyName => $this->firstBlocker([
                 [$master->implementations(), 'it is used in a master implementation'],
+                [$master->trainings(), 'it is assigned to a master training'],
             ]),
 
-            MasterDataType::KeyBehavior, MasterDataType::Training, MasterDataType::DevelopmentProgram => null,
+            MasterDataType::Training => $this->firstBlocker([
+                [$master->developmentPrograms(), 'it names a development program'],
+            ]),
+
+            MasterDataType::KeyBehavior, MasterDataType::DevelopmentProgram => null,
 
             MasterDataType::ReviewTools => null,
         };
@@ -127,6 +136,13 @@ class IdpMasterService
             $attributes['description_id'] = $data['description_id'] ?? null;
         }
 
+        if ($type->hasEffectivePeriod()) {
+            // Either end may be left open: a blank start is effective from
+            // always, a blank end never expires.
+            $attributes['effective_start_date'] = $this->nullIfBlank($data['effective_start_date'] ?? null);
+            $attributes['effective_end_date'] = $this->nullIfBlank($data['effective_end_date'] ?? null);
+        }
+
         return $attributes + match ($type) {
             MasterDataType::KeyBehavior => [
                 // The level a behavior belongs to. Editing may move it.
@@ -139,8 +155,27 @@ class IdpMasterService
 
             MasterDataType::DevelopmentProgram => $this->programAttributes($data),
 
+            MasterDataType::Training => $this->trainingAttributes($data),
+
             default => [],
         };
+    }
+
+    /**
+     * What a master training is scoped to: the competency it builds, through
+     * its type. Everything else it carries is a list — the proficiency levels
+     * it targets, and the business units / work locations it is offered in —
+     * and those are synced in {@see syncLinks()}.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private function trainingAttributes(array $data): array
+    {
+        return [
+            'competency_type_id' => $data['competency_type_id'] ?? null,
+            'competency_id' => $data['competency_id'] ?? null,
+        ];
     }
 
     /**
@@ -155,6 +190,10 @@ class IdpMasterService
         return [
             'development_model_id' => $data['development_model_id'] ?? null,
             'competency_type_id' => $typeId,
+            // Where the name came from: a training, or null when it was typed.
+            // The name itself is already in `value_en` / `value_id`, copied off
+            // the training during validation.
+            'training_id' => $data['training_id'] ?? null,
             // An "Others" program free-types its competencies and level rather
             // than pointing at masters, so the two sets are mutually exclusive.
             'proficiency_level_id' => $isOthers ? null : ($data['proficiency_level_id'] ?? null),
@@ -193,6 +232,18 @@ class IdpMasterService
             return;
         }
 
+        if ($type === MasterDataType::Training) {
+            /** @var Training $master */
+            $master->proficiencyLevels()->sync($this->intList($data['proficiency_level_ids'] ?? []));
+
+            // The corporate scope is raw strings, so each list is replaced
+            // wholesale — the same way a program's grades are.
+            $this->replaceValues($master->businessUnits(), 'business_unit', $data['business_units'] ?? []);
+            $this->replaceValues($master->workLocations(), 'work_location', $data['work_locations'] ?? []);
+
+            return;
+        }
+
         if ($type === MasterDataType::DevelopmentProgram) {
             /** @var DevelopmentProgram $master */
             $isOthers = $this->isOthersType($data['competency_type_id'] ?? null);
@@ -211,6 +262,25 @@ class IdpMasterService
             if ($grades->isNotEmpty()) {
                 $master->grades()->createMany($grades->map(fn ($grade) => ['grade' => $grade])->all());
             }
+        }
+    }
+
+    /**
+     * Replace a child list of raw corporate strings with the submitted one,
+     * trimmed and de-duplicated.
+     */
+    private function replaceValues(HasMany $relation, string $column, mixed $values): void
+    {
+        $relation->delete();
+
+        $clean = collect((array) $values)
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($clean->isNotEmpty()) {
+            $relation->createMany($clean->map(fn (string $value) => [$column => $value])->all());
         }
     }
 

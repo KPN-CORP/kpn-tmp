@@ -15,12 +15,18 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * A program on the "Others" competency type free-types its competencies and
  * proficiency level (`custom_competency` / `custom_proficiency_level`) instead
  * of linking master rows.
+ *
+ * The name is either typed here or taken from the Master Training catalogue.
+ * `training_id` records which — it is null for a typed name — while `name_en` /
+ * `name_id` stay the single place the name is read from, copied off the
+ * training on save.
  */
 class DevelopmentProgram extends Model
 {
     protected $fillable = [
         'development_model_id',
         'competency_type_id',
+        'training_id',
         'proficiency_level_id',
         'name_en',
         'name_id',
@@ -41,6 +47,15 @@ class DevelopmentProgram extends Model
     public function proficiencyLevel(): BelongsTo
     {
         return $this->belongsTo(ProficiencyLevel::class);
+    }
+
+    /**
+     * The training this program's name was taken from, or null when it was
+     * typed by hand.
+     */
+    public function training(): BelongsTo
+    {
+        return $this->belongsTo(Training::class);
     }
 
     public function competencies(): BelongsToMany

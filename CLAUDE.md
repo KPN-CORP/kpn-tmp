@@ -430,6 +430,198 @@ entity. All 409 live rows migrated and verified; the rollback round-trips byte-i
   against MySQL. The one MySQL-specific statement (the `name_en(191)` prefix index) is guarded
   by a driver check.
 
+## Phase 5.4 — Effective period on the dated IDP masters ✅ DONE (code + runtime-verified)
+Competencies, proficiency levels and review tools now carry an optional effective window, so
+a master can be retired for *new* work without touching the IDP rows that already name it
+(deletion stays blocked while one does).
+
+- **Columns** `effective_start_date` / `effective_end_date` (nullable dates) on
+  `competencies`, `proficiency_levels`, `review_tools`
+  (`..._add_effective_dates_to_idp_master_tables`, reversible, round-trip verified).
+  Both ends are open-ended when null — null start = effective from always, null end = never
+  expires — so every pre-existing row keeps behaving exactly as before.
+- **`App\Models\Concerns\HasEffectivePeriod`** — the `effective($on = today)` query scope +
+  `isEffective()`; used by the three models (which also cast both columns to dates).
+  `MasterDataType::hasEffectivePeriod()` says which kinds carry one; `IdpMasterService` writes
+  them and `IdpSettingController::validateMaster` validates (`after_or_equal`).
+- **Competency -> proficiency level check**: a newly pinned level must still be usable while
+  the competency is in effect. The window tested is the competency's own period **clipped to
+  today** (a competency with no start is in effect now), and a level qualifies when its window
+  overlaps that span — `scopeEffectiveBetween($from, $to)`, of which `effective($on)` is the
+  single-day case. So with no dates on the competency the rule reads simply "expired levels
+  can't be picked". Levels the competency is **already** linked to are exempt, so a window that
+  has since passed never blocks an unrelated edit; the form keeps such a row, flags it amber,
+  and offers only qualifying levels for new picks (`IdpSettingController::
+  assertLevelsEffectiveForCompetency` + `usableInWindow`/`remainingWindow` in
+  `useEffectivePeriod.ts`, which mirror each other).
+- **Master Implementation** applies the same rule. It has no period of its own — it applies
+  from now on — so an expired **competency** cannot be mapped at all, and its levels are
+  scoped to the competency's remaining window, exactly as on the competency form. What an
+  implementation already stores is exempt, so editing a grade or position on an old row still
+  works (`assertImplementationEffective`). The shared pieces are `forwardWindow()` (a period
+  clipped to today, `past` when it has closed) and `assertLevelsUsable()`, mirrored on the
+  frontend by `remainingWindow()` / `usableInWindow()` / `periodSuffix()`.
+- **Where it bites**: `IdpService` narrows the IDP manage-page pickers with `->effective()`
+  (competency names + review tools), the same read-only treatment historical development
+  models already get — plans store the name verbatim, so existing items still display.
+  The settings screens deliberately list *everything* (that is where you manage them).
+- **Wire contract**: `IdpSettingController::option()` adds `effective_start_date` /
+  `effective_end_date` only for masters that have the columns; every other payload is
+  unchanged.
+- **Vue**: `Components/Domain/EffectivePeriodFields.vue` (the start/end pair in a form) +
+  `EffectivePeriodCell.vue` (window + Active/Scheduled/Expired badge) and
+  `Composables/useEffectivePeriod.ts`, wired into `Pages/Idp/{ProficiencyLevel,Competency,
+  ReviewTools}.vue`. `effectivePeriod` / `effectivePeriodHint` / `always` / `scheduledBadge` /
+  `expiredBadge` locale keys in `en`/`id`.
+
+## Phase 5.5 — Development program scoped by Master Implementation ✅ DONE (code + runtime-verified)
+The development-program form on `/idp-setting` no longer invents its own scope: it reads
+the Master Implementation map. Implementation is what says at which proficiency levels a
+competency is actually rolled out and to which grades, so a program can only target what
+has been implemented.
+
+- **One competency per program.** The multi-select is gone: the form picks a single
+  competency (`SearchableSelect`). The link stays the `competency_development_program`
+  pivot — a competency reaches many programs, and the Competency screen edits that side —
+  so `related_competencies` is still posted as a list, now capped at `max:1`. Three legacy
+  programs (ids 295, 314, 537) carry two competencies; the drawer opens on the first and
+  saving settles the link on it.
+- **Competencies** are filtered by the effective period (Phase 5.4): a competency whose
+  window has already closed is off the list, and every option is labelled with its window.
+  A competency that is merely *scheduled* stays selectable.
+- **Proficiency levels** come from `competency_implementations` for the picked competency —
+  not from the competency's own `proficiency_level_ids` as before — and are labelled
+  `PL1 (Grade Level 2C-2D)`. The grade suffix collapses runs that sit next to each other in
+  the corporate grade order into a range (`gradeRangeLabel`).
+- **Grades** are *only* the grades that implementation covers for the *chosen* level —
+  never the full corporate list. No level chosen, or nothing implementing it, means no
+  grade options at all (the field explains which). An implementation with no grades of its
+  own covers every grade, same convention as the implementation screen.
+- **Wire contract**: `IdpSettingController@index` gains an `implementations` prop
+  (`{competency_id, proficiency_level_ids, grades}` per row, via `implementationScopes()`).
+- **Server mirror**: `assertProgramSelectionsUsable()` rejects expired competencies, a level
+  no implementation maps for the chosen competencies, and grades outside that mapping.
+  Only what the form *adds* is checked — whatever the program already stores is exempt, so
+  editing an unrelated field never fails because a master has since expired or an
+  implementation has since narrowed. "Others"-type programs skip all of it (they free-type).
+  The Vue side keeps the loaded competencies/level/grades on offer for the same reason.
+- New locale keys `gradeLevel` / `noImplementedProficiency` / `proficiencyFromImplementation`
+  / `gradeFromImplementation` / `pickProficiencyFirst` / `noGradesForProficiency` in `en`/`id`.
+- ⚠️ **Operational note**: `competency_implementations` is empty in the current local DB, so
+  the level dropdown will be empty for every program until Master Implementation rows exist.
+  Programs saved before this change keep (and can re-save) the level they already store.
+
+## Phase 5.6 — Development program named from Master Training ✅ DONE (code + runtime-verified)
+A development program's name is now either typed (bilingual, as before) or taken from the
+Master Training catalogue. The drawer carries a two-way switch — **Program name** shows the
+EN/ID inputs, **Master training** hides them and shows a training picker.
+
+- **`development_programs.training_id`** (nullable FK → `trainings`, `nullOnDelete`;
+  `..._add_training_id_to_development_programs_table`, reversible, round-trip verified) is
+  provenance only. The name still lives on `name_en` / `name_id`, **copied from the training
+  during validation** — IDP rows name a program verbatim, uniqueness is per development
+  model, and every list reads those columns, so there is still exactly one place the name
+  is read from.
+- **`IdpSettingController::applyTrainingName()`** merges the training's names onto the
+  request *before* the rules run, so a training-sourced name is policed by the same
+  `required` / `max` / unique-per-model rules as a typed one. The copy happens on every
+  save, so re-saving a program picks up a training that has since been renamed (and
+  `cascadeRename` carries that on to the IDP rows). There is deliberately **no** automatic
+  cascade from a training rename to its programs — the mirror refreshes on the program's
+  next save.
+- **Delete guard**: a training that names a development program can no longer be deleted
+  (`IdpMasterService::deletionBlocker`), matching how every other referenced master behaves.
+- **Wire contract**: `index()` gains a `trainings` option list, and each program payload
+  carries `training_id`. The form posts `training_id` alongside `value_en` / `value_id`;
+  the server is the authority on the name whenever a training is set.
+- **Vue**: `nameSource` (`'program' | 'training'`) seeded from the program's `training_id`,
+  `showNameInputs`, and a `typedName` stash so flipping the switch never loses what was
+  written. New locale keys `nameSource` / `nameSourceProgram` / `nameSourceTraining` /
+  `nameFromTrainingHint` / `noTrainings` in `en`/`id`.
+- ⚠️ **Operational note**: `trainings` is empty in the current local DB, so the picker shows
+  its empty state until trainings are added on the Master Training page.
+
+## Phase 5.7 — Master Training scoped to a competency + org location ✅ DONE (code + runtime-verified)
+A master training was only a bilingual name + description. It now records **what it
+develops** and **who it is for**, so the catalogue can be filtered rather than read end to
+end. Five nullable columns on `trainings`
+(`..._add_scope_columns_to_trainings_table`, reversible): `competency_type_id`,
+`competency_id`, `proficiency_level_id` (all FKs, `restrictOnDelete`) plus the raw kpncorp
+strings `business_unit` and `work_location`. The proficiency level and the two corporate
+scope columns were then all **split off into their own tables** — see below; only
+`competency_type_id` and `competency_id` remain on `trainings`.
+
+- **Cascade + effective dates**, mirroring Master Implementation: competency type →
+  competency (of that type, expired ones off the list) → proficiency level. A training has
+  no period of its own — it applies from now on — so an **expired** master can't be picked;
+  one that is merely **scheduled** still can. What the training already stores is exempt, so
+  editing an unrelated field never fails because a master has since lapsed
+  (`IdpSettingController::assertTrainingSelectionsUsable` + `hasExpired`, mirrored in the Vue
+  by `remainingWindow().past`).
+- **Proficiency levels are many, not one.** `trainings.proficiency_level_id` became the
+  `proficiency_level_training` pivot (`..._create_proficiency_level_training_table`,
+  reversible — it copies the existing single values into the pivot on the way up and back
+  into the column on the way down, keeping the lowest level id since a column can only hold
+  one; round-tripped with data). Same shape as
+  `implementation_proficiency_level`. The form uses `MultiSelect` with **select all**, and
+  the wire field is `proficiency_level_ids` (a list) — `IdpMasterService::syncLinks()` syncs
+  it, the same way a competency's levels are synced. An empty list is allowed: the training
+  is simply not pinned to a level.
+- **Levels are scoped by the competency type** (a level filed under another type is off the
+  list; an untyped level is global and fits every type — the same rule the competency form
+  uses), and separately by their **own** effective dates. They are *not* narrowed through the
+  competency, unlike the competency and implementation forms: a training targets levels
+  directly. The two checks differ on exemption (`assertTrainingLevelsUsable`): the type check
+  applies to every submitted level with none, because a level's type is stable and a mismatch
+  means the pick has to be redone; the period check exempts levels the training already
+  stores, since a level lapsing must not make an unrelated edit impossible. The form keeps
+  such a level listed and flags it amber.
+- **Business units and work locations are many, not one.** The two columns became the child
+  tables `training_business_units` / `training_work_locations`
+  (`..._create_training_scope_tables`, reversible — values copied in on the way up and back
+  on the way down, keeping the first alphabetically; round-tripped with data). They hold raw
+  kpncorp strings, the same shape `development_program_grades` / `implementation_grades`
+  already have for grades, with models `TrainingBusinessUnit` / `TrainingWorkLocation` and a
+  `replaceValues()` wholesale replace in `IdpMasterService::syncLinks()`. Wire fields
+  `business_units` / `work_locations`.
+- **Work location** is `kpncorp.locations.area`, grouped by `locations.company_name` (the
+  same grouping the employee master calls `group_company`), so the picker cascades from the
+  chosen business units — the **union** of their sites, since a training offered in several
+  units may run at a site of any of them. `IdpSettingController::workLocationData()` reads it
+  defensively — an unreachable kpncorp leaves the screen working with empty options. The
+  business-unit list is itself the **union** of `locations.company_name` and
+  `employees.group_company`, so a unit present in only one source still appears (its location
+  list is then simply empty). The two do not fully agree in the live data — `Plantations` vs
+  `KPN Plantations` — hence the union rather than one source.
+- **Server mirror**: the competency must belong to the chosen type, no dated master may be
+  expired, `business_units` is `required_with:work_locations`, and every location must belong
+  to one of the chosen units — skipped when none of them have known locations, so a gap in
+  `locations` never blocks a save. Locations the training already stores are exempt, so
+  dropping a unit doesn't make the row uneditable (the form drops the orphaned locations
+  instead).
+- **Delete guards**: a competency type / competency / proficiency level assigned to a
+  training can no longer be deleted (`IdpMasterService::deletionBlocker`), same as every other
+  referenced master.
+- **Wire contract**: `masterTraining()` gains `competencyTypes` / `competencies` /
+  `proficiencyLevels` / `businessUnits` / `workLocationsByBu`, and each training payload
+  carries the five new fields. The form posts them through the **unchanged** shared
+  `/idp-setting/masters` endpoints with `type=training`.
+- **Vue**: `Pages/Idp/MasterTraining.vue` — a "Scope" block (type / competency / level, with
+  effective windows in the option labels and an amber flag on stored-but-expired picks) and
+  an "Organization Scope" block (business units → work locations); the table gained
+  Competency (with its type beneath, sortable) plus Proficiency Level, Business Unit and Work
+  Location chip columns, all searchable. Every list field is a `MultiSelect` with **select
+  all** / **clear all**. New locale keys `workLocation` / `workLocationPickHint` /
+  `noEffectiveProficiencyLevels` / `competencyExpiredForTraining` /
+  `proficiencyExpiredForTraining` / `businessUnitsPickHint` / `workLocationsPickHint` /
+  `selectAll|clearAll` × `BusinessUnits|WorkLocations` / `noneForBusinessUnits` in `en`/`id`
+  (the level's empty state reuses the existing `pickTypeFirst` /
+  `noProficiencyLevelsForType`, and the level select-all reuses `selectAllLevels` /
+  `clearAllLevels`).
+- ⚠️ **Operational note**: the scope is optional except the competency type + competency,
+  which are **required** (matching Master Implementation). `trainings` was empty when this
+  landed, so nothing needed backfilling.
+
 ## Entity map (facecard → kpn-tmp)
 App-owned: CompetencyAssessment, DevelopmentModel, Competency, CompetencyType,
 ProficiencyLevel, KeyBehavior, DevelopmentProgram, ReviewTool, Training,

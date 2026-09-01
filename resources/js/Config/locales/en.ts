@@ -341,6 +341,12 @@ export default {
             noCompetenciesForType: 'This competency type has no competencies yet.',
             proficiencyFromCompetency: "The competency's proficiency level and its key behaviors.",
             noProficiencyForCompetency: 'The selected competency has no proficiency level set.',
+            noProficiencyEffectiveForCompetency:
+                "None of this competency's proficiency levels are still effective for its period.",
+            competencyExpiredForImplementation:
+                'This competency’s effective period has ended, so it can no longer be mapped. Pick another competency, or extend its effective dates.',
+            levelsOutsideCompetencyPeriod:
+                'Outside the competency’s effective period:',
             keyBehaviorsOfLevel: 'Key behaviors',
             jobFamily: 'Job Family',
             jobFamilyPickHint: 'Select a job family',
@@ -370,6 +376,29 @@ export default {
             editTraining: 'Edit training',
             deleteTraining: 'Delete training',
             noTrainingsMatch: 'No trainings match your search.',
+            noTrainings: 'No trainings in the catalogue yet. Add one on the Master Training page.',
+            // Master training scope: what the training builds, and who it is for.
+            workLocation: 'Work Location',
+            workLocationPickHint: 'Select a work location',
+            businessUnitsPickHint: 'Select business units',
+            workLocationsPickHint: 'Select work locations',
+            selectAllBusinessUnits: 'Select all business units',
+            clearAllBusinessUnits: 'Clear all business units',
+            selectAllWorkLocations: 'Select all work locations',
+            clearAllWorkLocations: 'Clear all work locations',
+            noneForBusinessUnits: 'No work locations for the selected business units.',
+            noEffectiveProficiencyLevels:
+                "No proficiency level of this competency type is still effective. Extend a level's effective dates, or add a new one.",
+            competencyExpiredForTraining:
+                'This competency’s effective period has ended, so it can no longer be assigned. Pick another competency, or extend its effective dates.',
+            proficiencyExpiredForTraining: 'Their effective period has ended:',
+            // Development program → the name is either typed or taken from the
+            // Master Training catalogue.
+            nameSource: 'Name from',
+            nameSourceProgram: 'Program name',
+            nameSourceTraining: 'Master training',
+            nameFromTrainingHint:
+                "The program is named after the training, in both languages. Re-saving picks up the training's current name.",
             proficiencyLevels: 'Proficiency Levels',
             proficiencyLevel: 'Proficiency Level',
             proficiencyLevelsHint: 'e.g. Beginner, Intermediate, Advanced, Expert.',
@@ -391,6 +420,12 @@ export default {
             keyBehaviorPickHint: 'Select a key behavior',
             pickLevelFirst: 'Select a proficiency level first.',
             noProficiencyLevelsForType: 'This competency type has no proficiency levels yet.',
+            noProficiencyLevelsForPeriod:
+                "No proficiency level of this competency type is effective for the effective period set below. Adjust that period, or extend a level's own effective dates.",
+            levelPeriodScopeHint:
+                "Only proficiency levels still effective during this competency's period can be selected.",
+            levelOutsidePeriod:
+                'This proficiency level falls outside the effective period set below. Pick another level, or adjust that period.',
             noKeyBehaviorsForLevel: 'This proficiency level has no key behaviors yet.',
             levelRowsHint: 'Add one row per proficiency level, then pick the key behaviors that belong to it.',
             addLevelRow: 'Add proficiency level',
@@ -408,6 +443,14 @@ export default {
             startDate: 'Start date',
             endDate: 'End date',
             ongoing: 'Ongoing',
+            // Effective period on the dated masters (competency, proficiency
+            // level, review tool).
+            effectivePeriod: 'Effective period',
+            effectivePeriodHint:
+                'Leave the start date empty to apply it immediately, and the end date empty for no expiry. Only masters effective today are offered when adding a development plan.',
+            always: 'Always',
+            scheduledBadge: 'Scheduled',
+            expiredBadge: 'Expired',
             setCurrent: 'Set as the active package',
             setCurrentHint: 'By default the active package is the one whose period covers today. Pin this package to select it manually — allowed only while its period includes today.',
             setCurrentUnavailable: 'Only a package whose period includes today can be pinned as active — adjust the dates to cover today.',
@@ -491,6 +534,19 @@ export default {
             customCompetencyHint: 'Free text — the competency type is “Others”.',
             customProficiencyPlaceholder: 'Type the proficiency level…',
             pickCompetencyFirst: 'Select a competency first to choose a proficiency level.',
+            // Development program → the proficiency level and grades come from
+            // the Master Implementation of the competencies the program develops.
+            gradeLevel: 'Grade Level',
+            noImplementedProficiency:
+                'The selected competency has no master implementation yet, so there is no proficiency level to target.',
+            proficiencyFromImplementation:
+                'Levels the selected competency is implemented at, with the grades that mapping covers.',
+            gradeFromImplementation:
+                'Grades covered by the master implementation of the selected proficiency level.',
+            pickProficiencyFirst:
+                'Select a proficiency level first — the grades come from its master implementation.',
+            noGradesForProficiency:
+                'The master implementation of the selected proficiency level covers no grade.',
             businessUnit: 'Business Unit',
             businessUnitPickHint: 'Select a business unit',
             grade: 'Grade',

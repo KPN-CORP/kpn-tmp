@@ -60,11 +60,16 @@ class IdpService
         $programs = DevelopmentProgram::orderBy('name_en')
             ->get(['id', 'name_en', 'name_id', 'development_model_id']);
 
+        // Only masters effective today are offered for new plans. Plans store
+        // the name verbatim, so items already picked from a since-expired
+        // competency / review tool keep displaying — same read-only treatment
+        // the historical development models get above.
         $competencies = Competency::with('developmentPrograms:id,name_en,name_id,development_model_id')
+            ->effective()
             ->orderBy('name_en')
             ->get(['id', 'name_en', 'name_id']);
 
-        $reviewTools = ReviewTool::orderBy('name_en')->get(['id', 'name_en', 'name_id']);
+        $reviewTools = ReviewTool::effective()->orderBy('name_en')->get(['id', 'name_en', 'name_id']);
 
         // Shape a master row into a localizable option. `value` is the canonical
         // name that IDP rows store and match on; value_en/value_id drive the

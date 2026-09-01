@@ -11,6 +11,10 @@ import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
+import {
+    periodSuffix,
+    remainingWindow,
+} from '@/Composables/useEffectivePeriod'
 
 const { t, locale } = useLocale()
 
@@ -49,6 +53,8 @@ interface Competency {
     proficiency_level_ids: number[]
     related_program: number[]
     linked_programs: string[]
+    effective_start_date: string | null
+    effective_end_date: string | null
 }
 
 interface Program {
@@ -59,6 +65,8 @@ interface Program {
     development_model_id: number | null
     model_name: string | null
     competency_type_id: number | null
+    // The training the name was taken from, or null when it was typed.
+    training_id: number | null
     proficiency_level_id: number | null
     custom_competency: string | null
     custom_proficiency_level: string | null
@@ -79,6 +87,25 @@ interface ProficiencyLevel {
     value_id: string | null
 }
 
+/** A training in the Master Training catalogue, as a name option. */
+interface Training {
+    id: number
+    value: string
+    value_en: string | null
+    value_id: string | null
+}
+
+/**
+ * One master-implementation mapping, flattened: the proficiency levels a
+ * competency is implemented at and the grades that mapping covers. An empty
+ * `grades` list means it covers every grade.
+ */
+interface Implementation {
+    competency_id: number | null
+    proficiency_level_ids: number[]
+    grades: string[]
+}
+
 const props = defineProps<{
     developmentModels: Model[]
     packages: Package[]
@@ -87,6 +114,8 @@ const props = defineProps<{
     developmentPrograms: Program[]
     competencyTypes: CompetencyType[]
     proficiencyLevels: ProficiencyLevel[]
+    implementations: Implementation[]
+    trainings: Training[]
     grades: string[]
 }>()
 
@@ -155,18 +184,48 @@ const masterForm = useForm({
     value_en: '',
     value_id: '',
     development_model_id: null as number | null,
+    // Program → the training its name was taken from, or null when typed. The
+    // name itself still travels in value_en / value_id; the server copies it off
+    // the training on save so the two can never disagree.
+    training_id: null as number | null,
     // Program → competency type (scopes the competency picker below).
     competency_type_id: null as number | null,
-    // Program → competencies. Linking happens from the program side.
+    // Program → the one competency it develops. Still posted as a list: the
+    // link is a pivot (a competency reaches many programs), and the Competency
+    // screen edits the other side of it.
     related_competencies: [] as number[],
-    // Program → proficiency level (options derive from the picked competencies).
+    // Program → proficiency level (options come from the master
+    // implementations of the picked competencies).
     proficiency_level_id: null as number | null,
     // "Others"-type program → free-typed competencies + proficiency level.
     custom_competency: '' as string,
     custom_proficiency_level: '' as string,
-    // Program → corporate scope (any number of grades).
+    // Program → corporate scope: the grades the implementation covers for the
+    // chosen proficiency level (any number of them).
     grades: [] as string[],
 })
+
+/**
+ * Where a development program's name comes from: typed into the bilingual
+ * fields, or taken from the Master Training catalogue.
+ */
+type NameSource = 'program' | 'training'
+
+const nameSource = ref<NameSource>('program')
+
+// The typed name, held while a training is driving the name, so switching back
+// restores what was written instead of the training's text.
+const typedName = ref({ en: '', id: '' })
+
+/**
+ * What the program held when the drawer opened. The pickers narrow to what is
+ * still effective / still implemented, which would otherwise quietly drop a
+ * selection made back when the masters looked different — so whatever was
+ * loaded stays on offer, and the server exempts it from the same checks.
+ */
+const loadedCompetencyIds = ref<number[]>([])
+const loadedProficiencyLevelId = ref<number | null>(null)
+const loadedGrades = ref<string[]>([])
 
 // Localized name for a competency / program, falling back to the canonical value.
 function masterName(item: {
@@ -198,6 +257,17 @@ function openMaster(type: MasterType, item?: Program) {
     masterForm.development_model_id =
         (item as Program)?.development_model_id ?? null
 
+    // A program that stored a training took its name from there; everything
+    // else typed it.
+    masterForm.training_id =
+        type === 'development_program' ? (item as Program)?.training_id ?? null : null
+    nameSource.value =
+        masterForm.training_id != null ? 'training' : 'program'
+    typedName.value =
+        nameSource.value === 'training'
+            ? { en: '', id: '' }
+            : { en: masterForm.value_en, id: masterForm.value_id }
+
     // Resolve the package the model dropdown should be scoped to: from the
     // program's current model when editing, else default to the active package.
     if (type === 'development_program') {
@@ -212,7 +282,9 @@ function openMaster(type: MasterType, item?: Program) {
         masterPackageId.value = null
     }
 
-    // Preselect the competencies this program is currently linked to.
+    // Preselect the competency this program is currently linked to. A handful
+    // of legacy programs carry two; the form develops one, so it opens on the
+    // first and saving settles the link on it.
     masterForm.related_competencies =
         type === 'development_program' && item
             ? props.competencies
@@ -220,6 +292,7 @@ function openMaster(type: MasterType, item?: Program) {
                       c.related_program.includes((item as Program).id),
                   )
                   .map((c) => c.id)
+                  .slice(0, 1)
             : []
 
     // Program scope fields (competency type / proficiency level / grades).
@@ -234,6 +307,10 @@ function openMaster(type: MasterType, item?: Program) {
         type === 'development_program' ? program?.custom_proficiency_level ?? '' : ''
     masterForm.grades =
         type === 'development_program' ? [...(program?.grades ?? [])] : []
+
+    loadedCompetencyIds.value = [...masterForm.related_competencies]
+    loadedProficiencyLevelId.value = masterForm.proficiency_level_id
+    loadedGrades.value = [...masterForm.grades]
 
     // Seed the cache with the loaded type's selection so that leaving it and
     // coming back restores exactly what was stored.
@@ -340,23 +417,117 @@ function onProgramPackageChange(value: string) {
     }
 }
 
-// Competencies offered to the program, narrowed to the chosen competency type
-// (all competencies when no type is picked). MultiSelect binds string values.
-const competencyOptions = computed<Option[]>(() =>
-    props.competencies
+// A master's name with its effective window appended, so the reason a
+// competency is or isn't on offer is visible right where it is picked.
+function periodLabel(item: Competency): string {
+    return (
+        masterName(item) +
+        periodSuffix(item, t.value.idp.settings.always, t.value.idp.settings.ongoing)
+    )
+}
+
+// Competencies offered to the program: those of the chosen competency type (all
+// of them when no type is picked) whose effective period has not already
+// closed — an expired competency can no longer be developed by new work.
+//
+// A competency the program was loaded with keeps its place even once expired,
+// so editing some other field never silently unlinks it.
+const competencyOptions = computed<Option[]>(() => {
+    const loaded = new Set(loadedCompetencyIds.value)
+
+    return props.competencies
         .filter(
             (c) =>
-                masterForm.competency_type_id == null ||
-                c.competency_type_id === masterForm.competency_type_id,
+                (masterForm.competency_type_id == null ||
+                    c.competency_type_id === masterForm.competency_type_id) &&
+                (!remainingWindow(c).past || loaded.has(c.id)),
         )
-        .map((c) => ({ value: String(c.id), label: masterName(c) })),
+        .map((c) => ({ value: String(c.id), label: periodLabel(c) }))
+})
+
+// A program develops exactly one competency; the pivot behind it still takes a
+// list, so the single select reads and writes the first (only) entry.
+const selectedCompetencyValue = computed<string>({
+    get: () => {
+        const [id] = masterForm.related_competencies
+        return id == null ? '' : String(id)
+    },
+    set: (value) => {
+        masterForm.related_competencies = value === '' ? [] : [Number(value)]
+    },
+})
+
+/**
+ * --------------------------------------------------------------------------
+ * Program name: typed, or taken from Master Training
+ * --------------------------------------------------------------------------
+ */
+
+const nameSourceOptions = computed<{ value: NameSource; label: string }[]>(() => [
+    { value: 'program', label: t.value.idp.settings.nameSourceProgram },
+    { value: 'training', label: t.value.idp.settings.nameSourceTraining },
+])
+
+const trainingOptions = computed<Option[]>(() =>
+    props.trainings.map((training) => ({
+        value: String(training.id),
+        label: masterName(training),
+    })),
 )
 
-// Bridge the numeric related_competencies to MultiSelect's string[] model.
-const relatedCompetencyValues = computed<string[]>({
-    get: () => masterForm.related_competencies.map(String),
-    set: (vals) => (masterForm.related_competencies = vals.map(Number)),
+const selectedTrainingValue = computed<string>({
+    get: () =>
+        masterForm.training_id == null ? '' : String(masterForm.training_id),
+    set: (value) => {
+        masterForm.training_id = value === '' ? null : Number(value)
+    },
 })
+
+// The bilingual name fields are hidden while a training supplies the name;
+// every other master always types it.
+const showNameInputs = computed(
+    () =>
+        masterType.value !== 'development_program' ||
+        nameSource.value === 'program',
+)
+
+// Mirror the chosen training's name into the form, so the drawer shows exactly
+// what will be stored. The server copies it again on save — that is what the
+// saved name actually relies on.
+function applyTrainingName() {
+    const training = props.trainings.find(
+        (tr) => tr.id === masterForm.training_id,
+    )
+
+    masterForm.value_en = training?.value_en ?? training?.value ?? ''
+    masterForm.value_id = training?.value_id ?? ''
+}
+
+// Switching the source stashes the typed name and restores it on the way back,
+// so flipping between the two never loses what was written.
+watch(nameSource, (source) => {
+    if (applyingOpen.value) return
+
+    if (source === 'training') {
+        typedName.value = { en: masterForm.value_en, id: masterForm.value_id }
+        applyTrainingName()
+
+        return
+    }
+
+    masterForm.training_id = null
+    masterForm.value_en = typedName.value.en
+    masterForm.value_id = typedName.value.id
+})
+
+watch(
+    () => masterForm.training_id,
+    () => {
+        if (!applyingOpen.value && nameSource.value === 'training') {
+            applyTrainingName()
+        }
+    },
+)
 
 // Competency types as SearchableSelect options for the program form.
 const competencyTypeOptions = computed<Option[]>(() =>
@@ -384,33 +555,121 @@ const isOthersType = computed<boolean>(() => {
     return v === 'others' || v === 'other' || v === 'lainnya'
 })
 
-// Grade options (corporate scope) for the program form.
-const gradeOptions = computed<Option[]>(() =>
-    props.grades.map((g) => ({ value: g, label: g })),
-)
-
 const proficiencyLevelById = computed(() => {
     const m = new Map<number, ProficiencyLevel>()
     for (const pl of props.proficiencyLevels) m.set(pl.id, pl)
     return m
 })
 
-// Proficiency levels available to the program: the distinct levels chosen on
-// the competencies it currently develops. Empty until a competency is picked.
-const proficiencyLevelOptions = computed<Option[]>(() => {
+/**
+ * --------------------------------------------------------------------------
+ * Program scope, derived from the master implementations
+ * --------------------------------------------------------------------------
+ * Master Implementation is what says at which proficiency levels a competency
+ * is actually rolled out, and to which grades. A program therefore offers only
+ * the levels its competencies are implemented at, and only the grades that
+ * mapping covers. The server enforces the same rule on save.
+ */
+
+// The implementation rows covering the competencies this program develops.
+const implementationScopes = computed<Implementation[]>(() => {
     const selected = new Set(masterForm.related_competencies)
+
+    return props.implementations.filter(
+        (i) => i.competency_id != null && selected.has(i.competency_id),
+    )
+})
+
+// The grades those implementations cover for one proficiency level, in
+// corporate grade order. A mapping that lists no grades of its own covers every
+// grade. Empty when no implementation maps the level at all.
+function gradesForLevel(levelId: number): string[] {
+    const scopes = implementationScopes.value.filter((i) =>
+        i.proficiency_level_ids.includes(levelId),
+    )
+
+    if (scopes.length === 0) return []
+    if (scopes.some((i) => i.grades.length === 0)) return [...props.grades]
+
+    const covered = new Set(scopes.flatMap((i) => i.grades))
+
+    return [
+        ...props.grades.filter((g) => covered.has(g)),
+        // Grades the corporate list doesn't know about (an unreachable
+        // kpncorp, or a value that has since gone) still belong to the mapping.
+        ...[...covered].filter((g) => !props.grades.includes(g)).sort(),
+    ]
+}
+
+// Grades as compact ranges — `2-3` rather than `2, 3` — by collapsing runs that
+// sit next to each other in the corporate grade order. Anything outside that
+// order is listed as-is.
+function gradeRangeLabel(grades: string[]): string {
+    const order = new Map(props.grades.map((g, i) => [g, i]))
+    const parts: string[] = []
+    let run: string[] = []
+
+    const flush = () => {
+        if (run.length === 0) return
+        parts.push(run.length > 1 ? `${run[0]}-${run[run.length - 1]}` : run[0])
+        run = []
+    }
+
+    for (const grade of grades.filter((g) => order.has(g))) {
+        const prev = run[run.length - 1]
+        if (prev !== undefined && order.get(grade)! !== order.get(prev)! + 1) {
+            flush()
+        }
+        run.push(grade)
+    }
+    flush()
+
+    return [...parts, ...grades.filter((g) => !order.has(g))].join(', ')
+}
+
+// Proficiency levels available to the program: the levels its competencies are
+// implemented at, each labelled with the grades that mapping covers —
+// "PL1 (Grade Level 2-3)". Empty until a competency with an implementation is
+// picked. The level the program was loaded with stays listed even if its
+// implementation has since gone, so an edit never silently drops it.
+const proficiencyLevelOptions = computed<Option[]>(() => {
     const levelIds = new Set<number>()
 
-    for (const c of props.competencies) {
-        if (selected.has(c.id)) {
-            for (const levelId of c.proficiency_level_ids) levelIds.add(levelId)
-        }
+    for (const scope of implementationScopes.value) {
+        for (const id of scope.proficiency_level_ids) levelIds.add(id)
+    }
+
+    if (loadedProficiencyLevelId.value != null) {
+        levelIds.add(loadedProficiencyLevelId.value)
     }
 
     return [...levelIds]
         .map((id) => proficiencyLevelById.value.get(id))
         .filter((pl): pl is ProficiencyLevel => pl != null)
-        .map((pl) => ({ value: String(pl.id), label: masterName(pl) }))
+        .map((pl) => {
+            const grades = gradeRangeLabel(gradesForLevel(pl.id))
+
+            return {
+                value: String(pl.id),
+                label: grades
+                    ? `${masterName(pl)} (${t.value.idp.settings.gradeLevel} ${grades})`
+                    : masterName(pl),
+            }
+        })
+})
+
+// Grades offered to the program: exactly what the implementation map covers for
+// the chosen proficiency level — nothing at all until a level is chosen, and
+// nothing when no implementation covers it. Grades the program was loaded with
+// stay listed so an edit never silently drops them.
+const gradeOptions = computed<Option[]>(() => {
+    const levelId = masterForm.proficiency_level_id
+    const list = levelId == null ? [] : gradesForLevel(levelId)
+
+    return [
+        ...list,
+        ...loadedGrades.value.filter((g) => !list.includes(g)),
+    ].map((g) => ({ value: g, label: g }))
 })
 
 // Localized proficiency-level name for the program table (or '').
@@ -487,8 +746,8 @@ watch(
     },
 )
 
-// If the picked competencies no longer offer the chosen proficiency level,
-// clear it so the form never submits an out-of-range level.
+// If the picked competencies are no longer implemented at the chosen
+// proficiency level, clear it so the form never submits an out-of-range level.
 watch(proficiencyLevelOptions, (opts) => {
     if (
         masterForm.proficiency_level_id != null &&
@@ -496,6 +755,13 @@ watch(proficiencyLevelOptions, (opts) => {
     ) {
         masterForm.proficiency_level_id = null
     }
+})
+
+// Changing the proficiency level re-scopes the grades to that level's
+// implementation; drop any selection it no longer covers.
+watch(gradeOptions, (opts) => {
+    const offered = new Set(opts.map((o) => o.value))
+    masterForm.grades = masterForm.grades.filter((g) => offered.has(g))
 })
 
 /**
@@ -815,7 +1081,7 @@ const programColumns = computed<Column[]>(() => [
                     </p> -->
                 </div>
 
-                <!-- 2. Development program -> Competencies (after a type is chosen) -->
+                <!-- 2. Development program -> Competency (after a type is chosen) -->
                 <div
                     v-if="
                         masterType === 'development_program' &&
@@ -825,27 +1091,30 @@ const programColumns = computed<Column[]>(() => [
                     <label
                         class="mb-1.5 flex items-center gap-2 text-sm font-medium text-slate-700"
                     >
-                        {{ t.idp.settings.competencies }}
-                        <span
-                            v-if="!isOthersType && masterForm.related_competencies.length"
-                            class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary"
-                        >
-                            {{ masterForm.related_competencies.length }}
-                        </span>
+                        {{ t.idp.settings.competency }}
                     </label>
 
-                    <!-- Real competency type → pick from the competency masters -->
+                    <!-- Real competency type → pick one of the competency masters -->
                     <template v-if="!isOthersType">
-                        <MultiSelect
-                            v-model="relatedCompetencyValues"
+                        <SearchableSelect
+                            v-if="competencyOptions.length"
+                            v-model="selectedCompetencyValue"
                             :options="competencyOptions"
                             :placeholder="t.idp.settings.searchCompetency"
-                            selected-below
                         />
+                        <p
+                            v-else
+                            class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
+                        >
+                            {{ t.idp.settings.noCompetenciesForType }}
+                        </p>
 
-                        <!-- <p class="mt-1.5 text-xs text-slate-400">
-                            {{ t.idp.settings.competencyHint }}
-                        </p> -->
+                        <p
+                            v-if="masterForm.errors.related_competencies"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.related_competencies }}
+                        </p>
                     </template>
 
                     <!-- "Others" type → free-type the competencies -->
@@ -898,7 +1167,24 @@ const programColumns = computed<Column[]>(() => [
                             v-else
                             class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
                         >
-                            {{ t.idp.settings.pickCompetencyFirst }}
+                            {{
+                                masterForm.related_competencies.length
+                                    ? t.idp.settings.noImplementedProficiency
+                                    : t.idp.settings.pickCompetencyFirst
+                            }}
+                        </p>
+
+                        <p
+                            v-if="masterForm.errors.proficiency_level_id"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.proficiency_level_id }}
+                        </p>
+                        <p
+                            v-else-if="proficiencyLevelOptions.length"
+                            class="mt-1.5 text-xs text-slate-400"
+                        >
+                            {{ t.idp.settings.proficiencyFromImplementation }}
                         </p>
                     </template>
 
@@ -961,10 +1247,82 @@ const programColumns = computed<Column[]>(() => [
                     />
                 </div>
 
-                <!-- 5. Bilingual name (English + Bahasa), grouped by language.
-                     Applies to program and review tool. -->
+                <!-- 5. Development program -> where the name comes from -->
+                <div v-if="masterType === 'development_program'">
+                    <label
+                        class="mb-1.5 block text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.nameSource }}
+                    </label>
+
+                    <div
+                        class="inline-flex rounded-md border border-border bg-white p-0.5"
+                    >
+                        <button
+                            v-for="option in nameSourceOptions"
+                            :key="option.value"
+                            type="button"
+                            class="rounded px-3 py-1.5 text-sm font-medium transition"
+                            :class="
+                                nameSource === option.value
+                                    ? 'bg-primary text-white'
+                                    : 'text-slate-600 hover:bg-slate-50'
+                            "
+                            @click="nameSource = option.value"
+                        >
+                            {{ option.label }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 5a. Name taken from the Master Training catalogue -->
+                <div
+                    v-if="
+                        masterType === 'development_program' &&
+                        nameSource === 'training'
+                    "
+                >
+                    <label
+                        class="mb-1.5 block text-sm font-medium text-slate-700"
+                    >
+                        {{ t.idp.settings.training }}
+                    </label>
+
+                    <SearchableSelect
+                        v-if="trainingOptions.length"
+                        v-model="selectedTrainingValue"
+                        :options="trainingOptions"
+                        :placeholder="t.idp.settings.searchTraining"
+                        :invalid="
+                            !!masterForm.errors.training_id ||
+                            !!masterForm.errors.value_en
+                        "
+                    />
+                    <p
+                        v-else
+                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
+                    >
+                        {{ t.idp.settings.noTrainings }}
+                    </p>
+
+                    <p
+                        v-if="masterForm.errors.training_id || masterForm.errors.value_en"
+                        class="mt-1 text-xs text-red-600"
+                    >
+                        {{ masterForm.errors.training_id || masterForm.errors.value_en }}
+                    </p>
+                    <p v-else class="mt-1.5 text-xs text-slate-400">
+                        {{ t.idp.settings.nameFromTrainingHint }}
+                    </p>
+                </div>
+
+                <!-- 5b. Bilingual name (English + Bahasa), grouped by language.
+                     Applies to review tools, and to a program naming itself. -->
                 <!-- English section -->
-                <div class="rounded-lg border border-border bg-slate-50/60 p-4">
+                <div
+                    v-if="showNameInputs"
+                    class="rounded-lg border border-border bg-slate-50/60 p-4"
+                >
                         <div class="mb-3 flex items-center gap-2">
                             <span
                                 class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
@@ -1003,7 +1361,10 @@ const programColumns = computed<Column[]>(() => [
                     </div>
 
                     <!-- Bahasa Indonesia section -->
-                    <div class="rounded-lg border border-border bg-slate-50/60 p-4">
+                    <div
+                        v-if="showNameInputs"
+                        class="rounded-lg border border-border bg-slate-50/60 p-4"
+                    >
                         <div class="mb-3 flex items-center gap-2">
                             <span
                                 class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
@@ -1053,6 +1414,7 @@ const programColumns = computed<Column[]>(() => [
                     </label>
 
                     <MultiSelect
+                        v-if="gradeOptions.length"
                         v-model="masterForm.grades"
                         :options="gradeOptions"
                         :placeholder="t.idp.settings.gradePickHint"
@@ -1060,6 +1422,29 @@ const programColumns = computed<Column[]>(() => [
                         :select-all-label="t.idp.settings.selectAllGrades"
                         :clear-all-label="t.idp.settings.clearAllGrades"
                     />
+                    <p
+                        v-else
+                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
+                    >
+                        {{
+                            masterForm.proficiency_level_id == null
+                                ? t.idp.settings.pickProficiencyFirst
+                                : t.idp.settings.noGradesForProficiency
+                        }}
+                    </p>
+
+                    <p
+                        v-if="masterForm.errors.grades"
+                        class="mt-1 text-xs text-red-600"
+                    >
+                        {{ masterForm.errors.grades }}
+                    </p>
+                    <p
+                        v-else-if="gradeOptions.length"
+                        class="mt-1.5 text-xs text-slate-400"
+                    >
+                        {{ t.idp.settings.gradeFromImplementation }}
+                    </p>
                 </div>
             </form>
 

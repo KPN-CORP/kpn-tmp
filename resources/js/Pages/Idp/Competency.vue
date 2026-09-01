@@ -12,6 +12,13 @@ import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
 import { useLocale } from '@/Composables/useLocale'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
+import EffectivePeriodFields from '@/Components/Domain/EffectivePeriodFields.vue'
+import EffectivePeriodCell from '@/Components/Domain/EffectivePeriodCell.vue'
+import {
+    periodSuffix,
+    remainingWindow,
+    usableInWindow,
+} from '@/Composables/useEffectivePeriod'
 
 const { t, locale } = useLocale()
 
@@ -23,6 +30,9 @@ interface Competency {
     description_en: string | null
     description_id: string | null
     competency_type_id: number | null
+    // Optional window during which this competency is offered on new IDP items.
+    effective_start_date: string | null
+    effective_end_date: string | null
     // A competency may pin several proficiency levels + key behaviors.
     proficiency_level_ids: number[]
     key_behavior_ids: number[]
@@ -45,6 +55,9 @@ interface ProficiencyLevel {
     value_id: string | null
     // The type this level is filed under; null = global (fits any type).
     competency_type_id: number | null
+    // The window during which this level may be pinned to a competency.
+    effective_start_date: string | null
+    effective_end_date: string | null
 }
 
 interface KeyBehavior {
@@ -113,6 +126,10 @@ const masterForm = useForm({
     competency_type_id: null as number | null,
     proficiency_level_ids: [] as number[],
     key_behavior_ids: [] as number[],
+    // Competency only (a competency type has no period). Both ends optional:
+    // blank start = effective now, blank end = no expiry.
+    effective_start_date: '',
+    effective_end_date: '',
 })
 
 /**
@@ -138,6 +155,10 @@ function openMaster(type: MasterType, item?: Competency | CompetencyType) {
     masterForm.description_id = item?.description_id ?? ''
     masterForm.competency_type_id =
         (item as Competency)?.competency_type_id ?? null
+    masterForm.effective_start_date =
+        (item as Competency)?.effective_start_date ?? ''
+    masterForm.effective_end_date =
+        (item as Competency)?.effective_end_date ?? ''
     masterForm.proficiency_level_ids = [
         ...((item as Competency)?.proficiency_level_ids ?? []),
     ]
@@ -290,9 +311,24 @@ function levelOptionsFor(row: LevelRow): Option[] {
             .map((r) => r.levelId as number),
     )
 
-    return proficiencyLevelOptions.value.filter(
+    const options = proficiencyLevelOptions.value.filter(
         (o) => !taken.has(Number(o.value)),
     )
+
+    // A level this row already holds that has since fallen outside the window
+    // is not in the offered list, so add it back — otherwise the select would
+    // render blank and the pick would be lost on the next save.
+    if (levelOutsideWindow(row.levelId)) {
+        const level = proficiencyLevelById.value.get(row.levelId as number)
+        if (level) {
+            options.unshift({
+                value: String(level.id),
+                label: levelOptionLabel(level),
+            })
+        }
+    }
+
+    return options
 }
 
 // Key behaviors belonging to this row's level — scoped, so no level prefix.
@@ -306,7 +342,7 @@ function keyBehaviorOptionsFor(row: LevelRow): Option[] {
 
 // Once every selectable level has a row there is nothing left to add.
 const canAddLevelRow = computed(
-    () => levelRows.value.length < availableProficiencyLevels.value.length,
+    () => levelRows.value.length < selectableProficiencyLevels.value.length,
 )
 
 function submitMaster() {
@@ -426,11 +462,56 @@ const availableProficiencyLevels = computed<ProficiencyLevel[]>(() => {
     )
 })
 
+/**
+ * The part of this competency's own effective period that still lies ahead —
+ * the span a newly pinned proficiency level has to remain usable in.
+ */
+const competencyWindow = computed(() =>
+    remainingWindow({
+        effective_start_date: masterForm.effective_start_date || null,
+        effective_end_date: masterForm.effective_end_date || null,
+    }),
+)
+
+/**
+ * Of the type-scoped levels, the ones still usable during that window. A level
+ * that expired before the competency's window opens (or only starts after it
+ * closes) can never apply to it, so it is not offered — the server enforces
+ * the same rule on save.
+ */
+const selectableProficiencyLevels = computed<ProficiencyLevel[]>(() =>
+    availableProficiencyLevels.value.filter((pl) =>
+        usableInWindow(pl, competencyWindow.value),
+    ),
+)
+
+/**
+ * Whether a level already pinned to this competency has since fallen outside
+ * the window. Such a level keeps its row (silently dropping it would lose data
+ * on an unrelated edit) and is flagged instead.
+ */
+function levelOutsideWindow(id: number | null): boolean {
+    if (id == null) return false
+
+    const level = proficiencyLevelById.value.get(id)
+
+    return !!level && !usableInWindow(level, competencyWindow.value)
+}
+
+// The level's own window, appended to its dropdown label so the reason a level
+// is or isn't on offer is visible where the choice is made.
+function levelOptionLabel(pl: ProficiencyLevel): string {
+    return (
+        masterName(pl) +
+        periodSuffix(pl, t.value.idp.settings.always, t.value.idp.settings.ongoing)
+    )
+}
+
 // Proficiency levels as dropdown options for the competency form.
 const proficiencyLevelOptions = computed<Option[]>(() =>
-    availableProficiencyLevels.value.map((pl) => ({
+    selectableProficiencyLevels.value.map((pl) => ({
         value: String(pl.id),
-        label: masterName(pl),
+        label: levelOptionLabel(pl),
     })),
 )
 
@@ -895,6 +976,9 @@ function changeCompetencyPerPage(size: number) {
                                         />
                                     </span>
                                 </th>
+                                <th class="w-64 px-4 py-2.5 font-semibold">
+                                    {{ t.idp.settings.effectivePeriod }}
+                                </th>
                                 <!-- The level column carries its key behaviors,
                                      so its header spans both sub-columns. -->
                                 <th class="w-64 px-4 py-2.5 font-semibold" colspan="2">
@@ -969,6 +1053,14 @@ function changeCompetencyPerPage(size: number) {
                                         </span>
                                     </td>
 
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                    >
+                                        <EffectivePeriodCell :item="(block as unknown as Competency)" />
+                                    </td>
+
                                     <!-- Level cell: painted once per level group. -->
                                     <td
                                         v-if="line.levelRowspan > 0"
@@ -1037,7 +1129,7 @@ function changeCompetencyPerPage(size: number) {
                             </template>
 
                             <tr v-if="competencyBlocks.length === 0">
-                                <td colspan="7" class="px-4 py-8 text-center text-slate-400">
+                                <td colspan="8" class="px-4 py-8 text-center text-slate-400">
                                     {{
                                         competencySearch || selectedTypeFilter !== null
                                             ? t.idp.settings.noMatch
@@ -1285,6 +1377,10 @@ function changeCompetencyPerPage(size: number) {
                             {{ t.idp.settings.levelRowsHint }}
                         </p>
 
+                        <p class="text-xs text-slate-400">
+                            {{ t.idp.settings.levelPeriodScopeHint }}
+                        </p>
+
                         <div
                             v-for="(row, i) in levelRows"
                             :key="row.uid"
@@ -1316,7 +1412,7 @@ function changeCompetencyPerPage(size: number) {
                                     </label>
 
                                     <SearchableSelect
-                                        v-if="proficiencyLevelOptions.length > 0"
+                                        v-if="levelOptionsFor(row).length > 0"
                                         :model-value="
                                             row.levelId == null
                                                 ? ''
@@ -1324,14 +1420,32 @@ function changeCompetencyPerPage(size: number) {
                                         "
                                         :options="levelOptionsFor(row)"
                                         :placeholder="t.idp.settings.proficiencyLevelPickHint"
-                                        :invalid="!!masterForm.errors.proficiency_level_ids"
+                                        :invalid="
+                                            !!masterForm.errors.proficiency_level_ids ||
+                                                levelOutsideWindow(row.levelId)
+                                        "
                                         @update:model-value="setRowLevel(row, $event)"
                                     />
                                     <p
                                         v-else
                                         class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
                                     >
-                                        {{ t.idp.settings.noProficiencyLevelsForType }}
+                                        {{
+                                            availableProficiencyLevels.length > 0
+                                                ? t.idp.settings.noProficiencyLevelsForPeriod
+                                                : t.idp.settings.noProficiencyLevelsForType
+                                        }}
+                                    </p>
+
+                                    <!-- A level pinned earlier that no longer
+                                         covers the competency's period. Kept so
+                                         the pick isn't lost, but flagged. -->
+                                    <p
+                                        v-if="levelOutsideWindow(row.levelId)"
+                                        class="mt-1 text-xs font-medium text-amber-600"
+                                    >
+                                        <i class="fa-solid fa-triangle-exclamation mr-1" />
+                                        {{ t.idp.settings.levelOutsidePeriod }}
                                     </p>
                                 </div>
 
@@ -1388,6 +1502,17 @@ function changeCompetencyPerPage(size: number) {
                         </p>
                     </div>
                 </div>
+
+                <!-- Competency -> Effective period (a competency type has none).
+                     Last, but it scopes the level picker above: changing it
+                     re-checks every level already chosen. -->
+                <EffectivePeriodFields
+                    v-if="masterType === 'competency_name'"
+                    v-model:start="masterForm.effective_start_date"
+                    v-model:end="masterForm.effective_end_date"
+                    :start-error="masterForm.errors.effective_start_date"
+                    :end-error="masterForm.errors.effective_end_date"
+                />
             </form>
 
             <template #footer>

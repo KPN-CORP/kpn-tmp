@@ -343,6 +343,12 @@ const id: LocaleMessages = {
             noCompetenciesForType: 'Tipe kompetensi ini belum memiliki kompetensi.',
             proficiencyFromCompetency: 'Level kemahiran kompetensi dan key behavior-nya.',
             noProficiencyForCompetency: 'Kompetensi yang dipilih belum memiliki level kemahiran.',
+            noProficiencyEffectiveForCompetency:
+                'Tidak ada tingkat kemahiran kompetensi ini yang masih berlaku untuk periodenya.',
+            competencyExpiredForImplementation:
+                'Periode berlaku kompetensi ini sudah berakhir, sehingga tidak dapat dipetakan lagi. Pilih kompetensi lain, atau perpanjang tanggal berlakunya.',
+            levelsOutsideCompetencyPeriod:
+                'Di luar periode berlaku kompetensi:',
             keyBehaviorsOfLevel: 'Key Behavior',
             jobFamily: 'Job Family',
             jobFamilyPickHint: 'Pilih job family',
@@ -372,6 +378,29 @@ const id: LocaleMessages = {
             editTraining: 'Ubah pelatihan',
             deleteTraining: 'Hapus pelatihan',
             noTrainingsMatch: 'Tidak ada pelatihan yang cocok.',
+            noTrainings: 'Belum ada pelatihan di katalog. Tambahkan di halaman Master Training.',
+            // Cakupan master training: kompetensi yang dibangun dan sasarannya.
+            workLocation: 'Lokasi Kerja',
+            workLocationPickHint: 'Pilih lokasi kerja',
+            businessUnitsPickHint: 'Pilih unit bisnis',
+            workLocationsPickHint: 'Pilih lokasi kerja',
+            selectAllBusinessUnits: 'Pilih semua unit bisnis',
+            clearAllBusinessUnits: 'Hapus semua unit bisnis',
+            selectAllWorkLocations: 'Pilih semua lokasi kerja',
+            clearAllWorkLocations: 'Hapus semua lokasi kerja',
+            noneForBusinessUnits: 'Tidak ada lokasi kerja untuk unit bisnis yang dipilih.',
+            noEffectiveProficiencyLevels:
+                'Tidak ada proficiency level pada tipe kompetensi ini yang masih berlaku. Perpanjang tanggal berlakunya, atau tambahkan yang baru.',
+            competencyExpiredForTraining:
+                'Periode berlaku kompetensi ini sudah berakhir sehingga tidak dapat dipilih lagi. Pilih kompetensi lain, atau perpanjang tanggal berlakunya.',
+            proficiencyExpiredForTraining: 'Periode berlakunya sudah berakhir:',
+            // Program pengembangan → nama diketik sendiri atau diambil dari
+            // katalog Master Training.
+            nameSource: 'Nama dari',
+            nameSourceProgram: 'Nama program',
+            nameSourceTraining: 'Master training',
+            nameFromTrainingHint:
+                'Program dinamai sesuai pelatihan, dalam kedua bahasa. Menyimpan ulang akan mengambil nama pelatihan yang berlaku saat itu.',
             proficiencyLevels: 'Tingkat Kemahiran',
             proficiencyLevel: 'Tingkat Kemahiran',
             proficiencyLevelsHint: 'mis. Pemula, Menengah, Mahir, Ahli.',
@@ -393,6 +422,12 @@ const id: LocaleMessages = {
             keyBehaviorPickHint: 'Pilih perilaku kunci',
             pickLevelFirst: 'Pilih tingkat kemahiran terlebih dahulu.',
             noProficiencyLevelsForType: 'Tipe kompetensi ini belum memiliki tingkat kemahiran.',
+            noProficiencyLevelsForPeriod:
+                'Tidak ada tingkat kemahiran pada tipe kompetensi ini yang berlaku untuk periode berlaku di bawah. Ubah periode tersebut, atau perpanjang tanggal berlaku tingkat kemahiran tersebut.',
+            levelPeriodScopeHint:
+                'Hanya tingkat kemahiran yang masih berlaku selama periode kompetensi ini yang dapat dipilih.',
+            levelOutsidePeriod:
+                'Tingkat kemahiran ini berada di luar periode berlaku di bawah. Pilih tingkat lain, atau ubah periode tersebut.',
             noKeyBehaviorsForLevel: 'Tingkat kemahiran ini belum memiliki perilaku kunci.',
             levelRowsHint: 'Tambahkan satu baris per tingkat kemahiran, lalu pilih perilaku kunci yang termasuk di dalamnya.',
             addLevelRow: 'Tambah tingkat kemahiran',
@@ -410,6 +445,14 @@ const id: LocaleMessages = {
             startDate: 'Tanggal mulai',
             endDate: 'Tanggal selesai',
             ongoing: 'Berjalan',
+            // Periode berlaku pada master bertanggal (kompetensi, tingkat
+            // kemahiran, alat tinjauan).
+            effectivePeriod: 'Periode berlaku',
+            effectivePeriodHint:
+                'Kosongkan tanggal mulai agar langsung berlaku, dan kosongkan tanggal selesai agar tidak kedaluwarsa. Hanya master yang berlaku hari ini yang muncul saat menambah rencana pengembangan.',
+            always: 'Selalu',
+            scheduledBadge: 'Terjadwal',
+            expiredBadge: 'Kedaluwarsa',
             setCurrent: 'Jadikan paket aktif',
             setCurrentHint: 'Secara default paket aktif adalah yang periodenya mencakup hari ini. Sematkan paket ini untuk memilih manual — hanya boleh selama periodenya mencakup hari ini.',
             setCurrentUnavailable: 'Hanya paket yang periodenya mencakup hari ini yang bisa disematkan sebagai aktif — sesuaikan tanggalnya agar mencakup hari ini.',
@@ -493,6 +536,19 @@ const id: LocaleMessages = {
             customCompetencyHint: 'Teks bebas — tipe kompetensi adalah “Lainnya”.',
             customProficiencyPlaceholder: 'Ketik tingkat kemahiran…',
             pickCompetencyFirst: 'Pilih kompetensi terlebih dahulu untuk memilih tingkat kemahiran.',
+            // Program pengembangan → tingkat kemahiran dan grade berasal dari
+            // Master Implementation kompetensi yang dikembangkan program ini.
+            gradeLevel: 'Grade Level',
+            noImplementedProficiency:
+                'Kompetensi yang dipilih belum memiliki master implementation, sehingga belum ada tingkat kemahiran yang bisa dituju.',
+            proficiencyFromImplementation:
+                'Tingkat kemahiran tempat kompetensi terpilih diimplementasikan, beserta grade yang dicakupnya.',
+            gradeFromImplementation:
+                'Grade yang dicakup master implementation untuk tingkat kemahiran yang dipilih.',
+            pickProficiencyFirst:
+                'Pilih tingkat kemahiran terlebih dahulu — grade berasal dari master implementation-nya.',
+            noGradesForProficiency:
+                'Master implementation untuk tingkat kemahiran yang dipilih tidak mencakup grade apa pun.',
             businessUnit: 'Unit Bisnis',
             businessUnitPickHint: 'Pilih unit bisnis',
             grade: 'Grade',

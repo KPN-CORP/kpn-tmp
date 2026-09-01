@@ -39,6 +39,14 @@ class CompetencyType extends Model
     }
 
     /**
+     * Master trainings scoped to this type.
+     */
+    public function trainings(): HasMany
+    {
+        return $this->hasMany(Training::class);
+    }
+
+    /**
      * The catch-all "Others" type. A development program on this type free-types
      * its competencies and proficiency level instead of picking them from the
      * masters.

@@ -8,6 +8,8 @@ import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
+import EffectivePeriodFields from '@/Components/Domain/EffectivePeriodFields.vue'
+import EffectivePeriodCell from '@/Components/Domain/EffectivePeriodCell.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t, locale } = useLocale()
@@ -17,6 +19,9 @@ interface ReviewTool {
     value: string
     value_en: string | null
     value_id: string | null
+    // Optional window during which this tool is offered on new IDP items.
+    effective_start_date: string | null
+    effective_end_date: string | null
 }
 
 const props = defineProps<{
@@ -58,6 +63,13 @@ const filteredTools = computed(() => {
 
 const columns = computed<Column[]>(() => [
     { key: 'name', label: t.value.idp.settings.reviewTool, sortable: true },
+    {
+        key: 'period',
+        label: t.value.idp.settings.effectivePeriod,
+        sortable: true,
+        sortKey: 'effective_start_date',
+        thClass: 'w-72',
+    },
     { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
 ])
 
@@ -75,6 +87,9 @@ const form = useForm({
     // Canonical `value` tracks the English name (value_en) server-side.
     value_en: '',
     value_id: '',
+    // Both ends optional: blank start = effective now, blank end = no expiry.
+    effective_start_date: '',
+    effective_end_date: '',
 })
 
 function openModal(tool?: ReviewTool) {
@@ -82,6 +97,8 @@ function openModal(tool?: ReviewTool) {
     form.clearErrors()
     form.value_en = tool?.value_en ?? tool?.value ?? ''
     form.value_id = tool?.value_id ?? ''
+    form.effective_start_date = tool?.effective_start_date ?? ''
+    form.effective_end_date = tool?.effective_end_date ?? ''
     modal.value = true
 }
 
@@ -196,6 +213,10 @@ function confirmDelete() {
                             <span class="font-medium text-slate-700">{{ row.name }}</span>
                         </template>
 
+                        <template #cell-period="{ row }">
+                            <EffectivePeriodCell :item="(row as unknown as ReviewTool)" />
+                        </template>
+
                         <template #cell-actions="{ row }">
                             <div class="flex items-center justify-end gap-1">
                                 <IconButton
@@ -277,6 +298,14 @@ function confirmDelete() {
                         {{ form.errors.value_id }}
                     </p>
                 </div>
+
+                <!-- Effective period -->
+                <EffectivePeriodFields
+                    v-model:start="form.effective_start_date"
+                    v-model:end="form.effective_end_date"
+                    :start-error="form.errors.effective_start_date"
+                    :end-error="form.errors.effective_end_date"
+                />
             </form>
 
             <template #footer>

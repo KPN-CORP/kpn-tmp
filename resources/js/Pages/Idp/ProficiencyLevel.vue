@@ -9,6 +9,8 @@ import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
+import EffectivePeriodFields from '@/Components/Domain/EffectivePeriodFields.vue'
+import EffectivePeriodCell from '@/Components/Domain/EffectivePeriodCell.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t, locale } = useLocale()
@@ -32,6 +34,9 @@ interface ProficiencyLevel {
     description_id: string | null
     // The competency type this level is filed under; null = available to all.
     competency_type_id: number | null
+    // Optional window during which this level is in effect.
+    effective_start_date: string | null
+    effective_end_date: string | null
     key_behaviors: KeyBehavior[]
 }
 
@@ -99,6 +104,9 @@ const form = useForm({
     value_id: '',
     description_en: '',
     description_id: '',
+    // Both ends optional: blank start = effective now, blank end = no expiry.
+    effective_start_date: '',
+    effective_end_date: '',
 })
 
 function openForm(item?: ProficiencyLevel) {
@@ -110,6 +118,8 @@ function openForm(item?: ProficiencyLevel) {
     form.value_id = item?.value_id ?? ''
     form.description_en = item?.description_en ?? ''
     form.description_id = item?.description_id ?? ''
+    form.effective_start_date = item?.effective_start_date ?? ''
+    form.effective_end_date = item?.effective_end_date ?? ''
 
     modal.value = true
 }
@@ -318,6 +328,13 @@ const filtered = computed(() => {
 const columns = computed<Column[]>(() => [
     { key: 'name', label: t.value.idp.settings.proficiencyLevel, sortable: true, thClass: 'w-72' },
     { key: 'type_name', label: t.value.idp.settings.competencyType, sortable: true, thClass: 'w-48' },
+    {
+        key: 'period',
+        label: t.value.idp.settings.effectivePeriod,
+        sortable: true,
+        sortKey: 'effective_start_date',
+        thClass: 'w-64',
+    },
     { key: 'description', label: t.value.idp.settings.description },
     { key: 'key_behaviors', label: t.value.idp.settings.keyBehaviors, align: 'center', thClass: 'w-52' },
     { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
@@ -429,6 +446,10 @@ const kbColumns = computed<Column[]>(() => [
                         <span v-else class="text-xs italic text-slate-300">
                             {{ t.idp.settings.untyped }}
                         </span>
+                    </template>
+
+                    <template #cell-period="{ row }">
+                        <EffectivePeriodCell :item="(row as unknown as ProficiencyLevel)" />
                     </template>
 
                     <template #cell-description="{ row }">
@@ -626,6 +647,14 @@ const kbColumns = computed<Column[]>(() => [
                         </div>
                     </div>
                 </div>
+
+                <!-- Effective period -->
+                <EffectivePeriodFields
+                    v-model:start="form.effective_start_date"
+                    v-model:end="form.effective_end_date"
+                    :start-error="form.errors.effective_start_date"
+                    :end-error="form.errors.effective_end_date"
+                />
             </form>
 
             <template #footer>

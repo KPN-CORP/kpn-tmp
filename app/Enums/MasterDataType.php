@@ -77,6 +77,23 @@ enum MasterDataType: string
     }
 
     /**
+     * Whether rows of this kind carry an optional effective period
+     * (`effective_start_date` / `effective_end_date`).
+     */
+    public function hasEffectivePeriod(): bool
+    {
+        return match ($this) {
+            self::CompetencyName,
+            self::ProficiencyLevel,
+            self::ReviewTools => true,
+            self::CompetencyType,
+            self::KeyBehavior,
+            self::DevelopmentProgram,
+            self::Training => false,
+        };
+    }
+
+    /**
      * The `individual_development_plans` column that stores this master's name
      * verbatim, or null when IDP rows never reference this kind. Renaming a
      * master cascades to that column; a master still referenced there can't be
