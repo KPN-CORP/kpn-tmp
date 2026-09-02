@@ -343,12 +343,11 @@ const id: LocaleMessages = {
             noCompetenciesForType: 'Tipe kompetensi ini belum memiliki kompetensi.',
             proficiencyFromCompetency: 'Level kemahiran kompetensi dan key behavior-nya.',
             noProficiencyForCompetency: 'Kompetensi yang dipilih belum memiliki level kemahiran.',
-            noProficiencyEffectiveForCompetency:
-                'Tidak ada tingkat kemahiran kompetensi ini yang masih berlaku untuk periodenya.',
-            competencyExpiredForImplementation:
-                'Periode berlaku kompetensi ini sudah berakhir, sehingga tidak dapat dipetakan lagi. Pilih kompetensi lain, atau perpanjang tanggal berlakunya.',
-            levelsOutsideCompetencyPeriod:
-                'Di luar periode berlaku kompetensi:',
+            noActiveProficiencyForCompetency:
+                'Tidak ada tingkat kemahiran kompetensi ini yang aktif.',
+            competencyInactiveForImplementation:
+                'Kompetensi ini kini nonaktif, sehingga tidak dapat dipetakan lagi. Pilih kompetensi lain, atau aktifkan kembali kompetensi ini.',
+            inactiveLevelsPinned: 'Kini nonaktif:',
             keyBehaviorsOfLevel: 'Key Behavior',
             jobFamily: 'Job Family',
             jobFamilyPickHint: 'Pilih job family',
@@ -389,11 +388,11 @@ const id: LocaleMessages = {
             selectAllWorkLocations: 'Pilih semua lokasi kerja',
             clearAllWorkLocations: 'Hapus semua lokasi kerja',
             noneForBusinessUnits: 'Tidak ada lokasi kerja untuk unit bisnis yang dipilih.',
-            noEffectiveProficiencyLevels:
-                'Tidak ada proficiency level pada tipe kompetensi ini yang masih berlaku. Perpanjang tanggal berlakunya, atau tambahkan yang baru.',
-            competencyExpiredForTraining:
-                'Periode berlaku kompetensi ini sudah berakhir sehingga tidak dapat dipilih lagi. Pilih kompetensi lain, atau perpanjang tanggal berlakunya.',
-            proficiencyExpiredForTraining: 'Periode berlakunya sudah berakhir:',
+            noActiveProficiencyLevelsForType:
+                'Semua proficiency level pada tipe kompetensi ini nonaktif. Aktifkan salah satu, atau tambahkan yang baru.',
+            competencyInactiveForTraining:
+                'Kompetensi ini kini nonaktif sehingga tidak dapat dipilih lagi. Pilih kompetensi lain, atau aktifkan kembali kompetensi ini.',
+            proficiencyInactiveForTraining: 'Kini nonaktif:',
             // Program pengembangan → nama diketik sendiri atau diambil dari
             // katalog Master Training.
             nameSource: 'Nama dari',
@@ -422,12 +421,11 @@ const id: LocaleMessages = {
             keyBehaviorPickHint: 'Pilih perilaku kunci',
             pickLevelFirst: 'Pilih tingkat kemahiran terlebih dahulu.',
             noProficiencyLevelsForType: 'Tipe kompetensi ini belum memiliki tingkat kemahiran.',
-            noProficiencyLevelsForPeriod:
-                'Tidak ada tingkat kemahiran pada tipe kompetensi ini yang berlaku untuk periode berlaku di bawah. Ubah periode tersebut, atau perpanjang tanggal berlaku tingkat kemahiran tersebut.',
-            levelPeriodScopeHint:
-                'Hanya tingkat kemahiran yang masih berlaku selama periode kompetensi ini yang dapat dipilih.',
-            levelOutsidePeriod:
-                'Tingkat kemahiran ini berada di luar periode berlaku di bawah. Pilih tingkat lain, atau ubah periode tersebut.',
+            noActiveProficiencyLevels:
+                'Semua tingkat kemahiran pada tipe kompetensi ini nonaktif. Aktifkan salah satu di halaman Tingkat Kemahiran terlebih dahulu.',
+            levelActiveScopeHint: 'Hanya tingkat kemahiran aktif yang dapat dipilih.',
+            levelInactive:
+                'Tingkat kemahiran ini kini nonaktif. Pilihan lama dipertahankan — pilih tingkat lain untuk menggantinya.',
             noKeyBehaviorsForLevel: 'Tingkat kemahiran ini belum memiliki perilaku kunci.',
             levelRowsHint: 'Tambahkan satu baris per tingkat kemahiran, lalu pilih perilaku kunci yang termasuk di dalamnya.',
             addLevelRow: 'Tambah tingkat kemahiran',
@@ -445,14 +443,21 @@ const id: LocaleMessages = {
             startDate: 'Tanggal mulai',
             endDate: 'Tanggal selesai',
             ongoing: 'Berjalan',
-            // Periode berlaku pada master bertanggal (kompetensi, tingkat
-            // kemahiran, alat tinjauan).
-            effectivePeriod: 'Periode berlaku',
-            effectivePeriodHint:
-                'Kosongkan tanggal mulai agar langsung berlaku, dan kosongkan tanggal selesai agar tidak kedaluwarsa. Hanya master yang berlaku hari ini yang muncul saat menambah rencana pengembangan.',
-            always: 'Selalu',
-            scheduledBadge: 'Terjadwal',
-            expiredBadge: 'Kedaluwarsa',
+            // Aktif/nonaktif pada master yang memilikinya (kompetensi,
+            // tingkat kemahiran, alat tinjauan).
+            status: 'Status',
+            activeLabel: 'Aktif',
+            activeHint:
+                'Master yang nonaktif tidak muncul saat menambah rencana pengembangan. Tidak ada yang dihapus — semua yang sudah memakainya tetap berjalan.',
+            inactiveBadge: 'Nonaktif',
+            activate: 'Aktifkan',
+            deactivate: 'Nonaktifkan',
+            statusHistory: 'Riwayat aktivasi',
+            noStatusHistory: 'Belum ada perubahan aktivasi.',
+            changedBy: 'Diubah oleh',
+            activatedBadge: 'Diaktifkan',
+            deactivatedBadge: 'Dinonaktifkan',
+            loading: 'Memuat…',
             setCurrent: 'Jadikan paket aktif',
             setCurrentHint: 'Secara default paket aktif adalah yang periodenya mencakup hari ini. Sematkan paket ini untuk memilih manual — hanya boleh selama periodenya mencakup hari ini.',
             setCurrentUnavailable: 'Hanya paket yang periodenya mencakup hari ini yang bisa disematkan sebagai aktif — sesuaikan tanggalnya agar mencakup hari ini.',

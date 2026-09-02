@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -26,6 +27,8 @@ use Illuminate\Support\Facades\DB;
  */
 class IdpMasterService
 {
+    public function __construct(private readonly MasterStatusAudit $audit) {}
+
     /**
      * @param  array<string, mixed>  $data
      */
@@ -36,6 +39,12 @@ class IdpMasterService
             $master = $type->modelClass()::create($this->attributes($type, $data));
 
             $this->syncLinks($type, $master, $data);
+
+            // A master created switched off is a transition worth recording;
+            // one created active is just the default and needs no entry.
+            if ($type->hasActiveState() && ! $master->is_active) {
+                $this->audit->record($type->value, $master->id, $master->name_en, false, Auth::user());
+            }
 
             return $master;
         });
@@ -50,6 +59,7 @@ class IdpMasterService
     {
         return DB::transaction(function () use ($type, $master, $data, $presentKeys) {
             $previousName = $master->name_en;
+            $wasActive = (bool) $master->is_active;
 
             $master->fill($this->attributes($type, $data))->save();
 
@@ -57,8 +67,46 @@ class IdpMasterService
 
             $this->cascadeRename($type, $previousName, $master->name_en);
 
+            // Only the transition is logged, so re-saving an unchanged form
+            // never adds an entry.
+            if ($type->hasActiveState() && $wasActive !== (bool) $master->is_active) {
+                $this->audit->record(
+                    $type->value,
+                    $master->id,
+                    $master->name_en,
+                    (bool) $master->is_active,
+                    Auth::user(),
+                );
+            }
+
             return $master;
         });
+    }
+
+    /**
+     * Flip a master's active flag from the list screen, recording who did it.
+     * A no-op when the flag is already in the requested state, so a double
+     * click never writes a second audit entry.
+     */
+    public function setActive(MasterDataType $type, Model $master, bool $active): void
+    {
+        if ((bool) $master->is_active === $active) {
+            return;
+        }
+
+        $master->forceFill(['is_active' => $active])->save();
+
+        $this->audit->record($type->value, $master->id, $master->name_en, $active, Auth::user());
+    }
+
+    /**
+     * This master's activate / deactivate history, newest first.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function statusHistory(MasterDataType $type, int $id): array
+    {
+        return $this->audit->for($type->value, $id);
     }
 
     /**
@@ -136,11 +184,10 @@ class IdpMasterService
             $attributes['description_id'] = $data['description_id'] ?? null;
         }
 
-        if ($type->hasEffectivePeriod()) {
-            // Either end may be left open: a blank start is effective from
-            // always, a blank end never expires.
-            $attributes['effective_start_date'] = $this->nullIfBlank($data['effective_start_date'] ?? null);
-            $attributes['effective_end_date'] = $this->nullIfBlank($data['effective_end_date'] ?? null);
+        if ($type->hasActiveState()) {
+            // Absent means active: a form that never shows the switch (and any
+            // older caller) keeps creating usable masters.
+            $attributes['is_active'] = (bool) ($data['is_active'] ?? true);
         }
 
         return $attributes + match ($type) {

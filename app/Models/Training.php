@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasActiveState;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -12,9 +13,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * scoped to the competency it builds (through its competency type) at any
  * number of proficiency levels, and to the corporate business units / work
  * locations it is offered in. Every part of the scope is optional.
+ *
+ * A training can be switched off without being deleted; who flipped it is
+ * recorded outside the database.
  */
 class Training extends Model
 {
+    use HasActiveState;
+
     protected $fillable = [
         'competency_type_id',
         'competency_id',
@@ -22,6 +28,19 @@ class Training extends Model
         'name_id',
         'description_en',
         'description_id',
+        'is_active',
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
+    ];
+
+    /**
+     * A new training is usable straight away. Declared here as well as on the
+     * column so a model created without the field still carries the value.
+     */
+    protected $attributes = [
+        'is_active' => true,
     ];
 
     /**

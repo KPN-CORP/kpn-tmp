@@ -19,11 +19,15 @@ use App\Models\KeyBehavior;
 use App\Models\ProficiencyLevel;
 use App\Models\Training;
 use App\Services\IdpMasterService;
+use App\Services\MasterStatusAudit;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -32,7 +36,10 @@ use Inertia\Response;
 
 class IdpSettingController extends Controller
 {
-    public function __construct(private readonly IdpMasterService $masters) {}
+    public function __construct(
+        private readonly IdpMasterService $masters,
+        private readonly MasterStatusAudit $audit,
+    ) {}
 
     public function index(): Response
     {
@@ -69,7 +76,9 @@ class IdpSettingController extends Controller
             // grades that mapping covers.
             'implementations' => $this->implementationScopes(),
             // A program's name is either typed or taken from Master Training,
-            // so the form needs the catalogue to pick from.
+            // so the form needs the catalogue to pick from. The flag rides on
+            // `option()`; the form keeps an inactive training listed only while
+            // a program already points at it.
             'trainings' => $this->options(Training::orderBy('name_en')->get()),
             // Corporate scope option list for the program form (grades), read
             // defensively so an unreachable kpncorp never breaks the screen.
@@ -262,16 +271,17 @@ class IdpSettingController extends Controller
      */
     public function masterImplementation(): Response
     {
-        $implementations = CompetencyImplementation::with(['proficiencyLevels:id', 'grades'])
+        $implementations = CompetencyImplementation::with(['proficiencyLevels:id', 'grades', 'businessUnits'])
             ->orderByDesc('id')
             ->get()
             ->map(fn (CompetencyImplementation $i) => [
                 'id' => $i->id,
+                'is_active' => $i->is_active,
                 'competency_type_id' => $i->competency_type_id,
                 'competency_id' => $i->competency_id,
                 'proficiency_level_ids' => $i->proficiencyLevels->pluck('id')->all(),
                 'grades' => $i->grades->pluck('grade')->values(),
-                'business_unit' => $i->business_unit,
+                'business_units' => $i->businessUnits->pluck('business_unit')->values(),
                 'job_family' => $i->job_family,
                 'function_name' => $i->function_name,
                 'position' => $i->position,
@@ -381,12 +391,11 @@ class IdpSettingController extends Controller
             'value_id' => $row->name_id,
         ];
 
-        // Masters with an effective period carry it on every payload, so each
-        // screen can show the window and flag rows that are expired or not yet
-        // in effect. Null on either end means "unbounded".
-        if (array_key_exists('effective_start_date', $row->getAttributes())) {
-            $option['effective_start_date'] = $row->effective_start_date?->toDateString();
-            $option['effective_end_date'] = $row->effective_end_date?->toDateString();
+        // Masters that can be switched off carry the flag on every payload, so
+        // each screen can badge the row and keep inactive ones out of its
+        // pickers.
+        if (array_key_exists('is_active', $row->getAttributes())) {
+            $option['is_active'] = (bool) $row->is_active;
         }
 
         return $option;
@@ -768,6 +777,39 @@ class IdpSettingController extends Controller
         return back()->with('success', 'Master data updated successfully.');
     }
 
+    /**
+     * Activate / deactivate one master from its list screen. Deactivating keeps
+     * the row and everything referencing it — it only takes the master out of
+     * the pickers for new work.
+     */
+    public function toggleMasterActive(Request $request, MasterDataType $type, int $id): RedirectResponse
+    {
+        if (! $type->hasActiveState()) {
+            return back()->with('error', 'This master data type cannot be activated or deactivated.');
+        }
+
+        $master = $type->query()->findOrFail($id);
+        $active = $request->boolean('is_active');
+
+        $this->masters->setActive($type, $master, $active);
+
+        return back()->with(
+            'success',
+            $active ? 'Master data activated successfully.' : 'Master data deactivated successfully.'
+        );
+    }
+
+    /**
+     * The activate / deactivate trail for one master, newest first. Read from
+     * the audit log on disk, not from the database.
+     */
+    public function masterStatusHistory(MasterDataType $type, int $id): JsonResponse
+    {
+        return response()->json([
+            'history' => $this->masters->statusHistory($type, $id),
+        ]);
+    }
+
     public function destroyMaster(MasterDataType $type, int $id): RedirectResponse
     {
         $master = $type->query()->findOrFail($id);
@@ -824,10 +866,9 @@ class IdpSettingController extends Controller
             'value_id' => ['nullable', 'string', 'max:'.($isProgram ? 1000 : 255)],
             'description_en' => ['nullable', 'string'],
             'description_id' => ['nullable', 'string'],
-            // Optional effective period (competencies / proficiency levels /
-            // review tools). Either end may be left open.
-            'effective_start_date' => ['nullable', 'date'],
-            'effective_end_date' => ['nullable', 'date', 'after_or_equal:effective_start_date'],
+            // Active/inactive (competencies / proficiency levels / review
+            // tools). Absent means active.
+            'is_active' => ['nullable', 'boolean'],
             'development_model_id' => ['nullable', 'integer', 'exists:development_models,id'],
             // Set when a program takes its name from the Master Training
             // catalogue; null when the name is typed.
@@ -894,7 +935,7 @@ class IdpSettingController extends Controller
                 );
             }
 
-            $this->assertLevelsEffectiveForCompetency($data, $master);
+            $this->assertLevelsActiveForCompetency($data, $master);
         }
 
         // A program reaches its masters through the implementation map, so its
@@ -949,10 +990,10 @@ class IdpSettingController extends Controller
 
             $unchanged = (int) $master?->competency_id === $competency->id;
 
-            if (! $unchanged && $this->hasExpired($competency)) {
+            if (! $unchanged && ! $competency->is_active) {
                 $this->fail(
                     'competency_id',
-                    "Cannot use '{$competency->name_en}': its effective period has ended."
+                    "Cannot use '{$competency->name_en}': it is inactive."
                 );
             }
         }
@@ -1001,21 +1042,7 @@ class IdpSettingController extends Controller
             );
         }
 
-        $added = array_values(array_diff($levelIds, $exempt));
-
-        $expired = ProficiencyLevel::whereIn('id', $added)
-            ->orderBy('name_en')
-            ->get()
-            ->filter(fn (ProficiencyLevel $level) => $this->hasExpired($level))
-            ->pluck('name_en');
-
-        if ($expired->isNotEmpty()) {
-            $this->fail(
-                'proficiency_level_ids',
-                'The effective period of these proficiency levels has ended: '
-                    .$expired->implode(', ').'.'
-            );
-        }
+        $this->assertLevelsActive($levelIds, $exempt);
     }
 
     /**
@@ -1128,7 +1155,7 @@ class IdpSettingController extends Controller
             $data['related_competencies'] ?? []
         )));
 
-        $this->assertCompetenciesUnexpired(
+        $this->assertCompetenciesActive(
             $competencyIds,
             $program?->competencies()->pluck('competencies.id')->all() ?? [],
         );
@@ -1172,7 +1199,7 @@ class IdpSettingController extends Controller
      * @param  array<int, int>  $competencyIds
      * @param  array<int, int>  $exempt
      */
-    private function assertCompetenciesUnexpired(array $competencyIds, array $exempt): void
+    private function assertCompetenciesActive(array $competencyIds, array $exempt): void
     {
         $added = array_values(array_diff($competencyIds, $exempt));
 
@@ -1180,17 +1207,16 @@ class IdpSettingController extends Controller
             return;
         }
 
-        $expired = Competency::whereIn('id', $added)
-            ->whereNotNull('effective_end_date')
-            ->whereDate('effective_end_date', '<', today())
+        $inactive = Competency::whereIn('id', $added)
+            ->inactive()
             ->orderBy('name_en')
             ->pluck('name_en');
 
-        if ($expired->isNotEmpty()) {
+        if ($inactive->isNotEmpty()) {
             $this->fail(
                 'related_competencies',
-                ($expired->count() === 1 ? 'This competency is' : 'These competencies are')
-                    .' no longer effective: '.$expired->implode(', ').'.'
+                ($inactive->count() === 1 ? 'This competency is' : 'These competencies are')
+                    .' inactive: '.$inactive->implode(', ').'.'
             );
         }
     }
@@ -1229,107 +1255,51 @@ class IdpSettingController extends Controller
     }
 
     /**
-     * A newly pinned proficiency level has to still be usable while the
-     * competency is in effect: a level that expired before the competency's
-     * remaining window opens, or that only starts after it closes, can never
-     * apply to it.
+     * A competency may only pin proficiency levels that are still switched on.
      *
-     * Levels the competency is *already* linked to are exempt — a window that
-     * has since passed must not block an unrelated edit, exactly as an expired
-     * master stays resolvable on the IDP rows that already name it.
+     * Levels the competency is *already* linked to are exempt: once a level is
+     * deactivated, an unrelated edit to the competency must not become
+     * impossible — the same reason a deactivated master stays resolvable on the
+     * IDP rows that already name it.
      *
      * @param  array<string, mixed>  $data
      */
-    private function assertLevelsEffectiveForCompetency(array $data, ?Model $master): void
+    private function assertLevelsActiveForCompetency(array $data, ?Model $master): void
     {
-        $this->assertLevelsUsable(
+        $this->assertLevelsActive(
             $data['proficiency_level_ids'],
             $master instanceof Competency
                 ? $master->proficiencyLevels()->pluck('proficiency_levels.id')->all()
                 : [],
-            $this->forwardWindow(
-                $this->nullIfBlank($data['effective_start_date'] ?? null),
-                $this->nullIfBlank($data['effective_end_date'] ?? null),
-            ),
-            "this competency's period",
         );
     }
 
     /**
-     * Whether a dated master's effective period has already closed, so it can
-     * no longer be picked for new work. A master that has not started yet is
-     * not expired — it is merely scheduled, and stays selectable.
-     */
-    private function hasExpired(Model $master): bool
-    {
-        return $this->forwardWindow(
-            $master->effective_start_date?->toDateString(),
-            $master->effective_end_date?->toDateString(),
-        )['past'];
-    }
-
-    /**
-     * The span a master attached to an effective period has to remain usable
-     * in: that period clipped to today, since only what is still ahead of us
-     * can constrain a new pick. A blank start means the owner is in effect now,
-     * so today is the earliest date its attachments have to cover.
-     *
-     * `past` marks a window that has already closed — nothing is left to
-     * enforce, so the caller skips the check entirely.
-     *
-     * @return array{from: string, to: ?string, past: bool}
-     */
-    private function forwardWindow(?string $start, ?string $end): array
-    {
-        $today = today()->toDateString();
-        // ISO dates compare correctly as strings.
-        $from = max($start ?? $today, $today);
-
-        return ['from' => $from, 'to' => $end, 'past' => $end !== null && $end < $from];
-    }
-
-    /**
-     * Reject proficiency levels that cannot serve the given window, naming
-     * them. Ids in `$exempt` are already stored on the row being edited and are
-     * left alone.
+     * Reject inactive proficiency levels, naming them. Ids in `$exempt` are
+     * already stored on the row being edited and are left alone.
      *
      * @param  array<int, int>  $levelIds
      * @param  array<int, int>  $exempt
-     * @param  array{from: string, to: ?string, past: bool}  $window
-     * @param  string  $subject  what the window belongs to, for the message
      */
-    private function assertLevelsUsable(array $levelIds, array $exempt, array $window, string $subject): void
+    private function assertLevelsActive(array $levelIds, array $exempt): void
     {
         $added = array_values(array_diff($levelIds, $exempt));
 
-        if ($added === [] || $window['past']) {
+        if ($added === []) {
             return;
         }
 
-        $usable = ProficiencyLevel::whereIn('id', $added)
-            ->effectiveBetween($window['from'], $window['to'])
-            ->pluck('id')
-            ->all();
-
-        $rejected = ProficiencyLevel::whereIn('id', array_diff($added, $usable))
+        $rejected = ProficiencyLevel::whereIn('id', $added)
+            ->inactive()
             ->orderBy('name_en')
             ->pluck('name_en');
 
         if ($rejected->isNotEmpty()) {
             $this->fail(
                 'proficiency_level_ids',
-                "These proficiency levels are not effective for {$subject}: ".$rejected->implode(', ').'.'
+                'These proficiency levels are inactive: '.$rejected->implode(', ').'.'
             );
         }
-    }
-
-    /**
-     * A submitted value as a non-empty string, or null when the form sent it
-     * blank.
-     */
-    private function nullIfBlank(mixed $value): ?string
-    {
-        return $value === null || $value === '' ? null : (string) $value;
     }
 
     // --- Master implementation (competency -> org scope) ---
@@ -1339,8 +1309,13 @@ class IdpSettingController extends Controller
         $data = $this->validateImplementation($request);
 
         $implementation = CompetencyImplementation::create($data);
-        $implementation->proficiencyLevels()->sync($data['proficiency_level_ids']);
-        $this->syncImplementationGrades($implementation, $data['grades']);
+        $this->syncImplementationScope($implementation, $data);
+
+        // A mapping created switched off is a transition worth recording; one
+        // created active is just the default.
+        if (! $implementation->is_active) {
+            $this->recordImplementationStatus($implementation, false);
+        }
 
         return back()->with('success', 'Master implementation added successfully.');
     }
@@ -1349,11 +1324,52 @@ class IdpSettingController extends Controller
     {
         $data = $this->validateImplementation($request, $implementation);
 
+        $wasActive = (bool) $implementation->is_active;
+
         $implementation->update($data);
-        $implementation->proficiencyLevels()->sync($data['proficiency_level_ids']);
-        $this->syncImplementationGrades($implementation, $data['grades']);
+        $this->syncImplementationScope($implementation, $data);
+
+        // Only the transition is logged, so re-saving an unchanged form never
+        // adds an entry.
+        if ($wasActive !== (bool) $implementation->is_active) {
+            $this->recordImplementationStatus($implementation, (bool) $implementation->is_active);
+        }
 
         return back()->with('success', 'Master implementation updated successfully.');
+    }
+
+    /**
+     * Activate / deactivate one mapping from the list screen. Deactivating
+     * keeps the row — it only stops the mapping applying from now on.
+     */
+    public function toggleImplementationActive(
+        Request $request,
+        CompetencyImplementation $implementation,
+    ): RedirectResponse {
+        $active = $request->boolean('is_active');
+
+        if ((bool) $implementation->is_active !== $active) {
+            $implementation->forceFill(['is_active' => $active])->save();
+            $this->recordImplementationStatus($implementation, $active);
+        }
+
+        return back()->with(
+            'success',
+            $active
+                ? 'Master implementation activated successfully.'
+                : 'Master implementation deactivated successfully.'
+        );
+    }
+
+    /**
+     * The activate / deactivate trail for one mapping, newest first. Read from
+     * the audit log on disk, not from the database.
+     */
+    public function implementationStatusHistory(CompetencyImplementation $implementation): JsonResponse
+    {
+        return response()->json([
+            'history' => $this->audit->for(MasterStatusAudit::IMPLEMENTATION, $implementation->id),
+        ]);
     }
 
     public function destroyImplementation(CompetencyImplementation $implementation): RedirectResponse
@@ -1361,6 +1377,53 @@ class IdpSettingController extends Controller
         $implementation->delete();
 
         return back()->with('success', 'Master implementation deleted successfully.');
+    }
+
+    /**
+     * Replace the list-valued parts of a mapping's scope: its proficiency
+     * levels, grades and business units.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function syncImplementationScope(CompetencyImplementation $implementation, array $data): void
+    {
+        $implementation->proficiencyLevels()->sync($data['proficiency_level_ids']);
+
+        $this->replaceScopeValues($implementation->grades(), 'grade', $data['grades']);
+        $this->replaceScopeValues(
+            $implementation->businessUnits(),
+            'business_unit',
+            $data['business_units'],
+        );
+    }
+
+    /**
+     * Replace a child list of raw corporate strings with the submitted one.
+     *
+     * @param  list<string>  $values
+     */
+    private function replaceScopeValues(HasMany $relation, string $column, array $values): void
+    {
+        $relation->delete();
+
+        if ($values !== []) {
+            $relation->createMany(array_map(fn (string $value) => [$column => $value], $values));
+        }
+    }
+
+    /**
+     * Log a mapping's activation change. A mapping has no name of its own, so
+     * the competency it maps is what the history shows.
+     */
+    private function recordImplementationStatus(CompetencyImplementation $implementation, bool $active): void
+    {
+        $this->audit->record(
+            MasterStatusAudit::IMPLEMENTATION,
+            $implementation->id,
+            $implementation->competency?->name_en ?? "#{$implementation->id}",
+            $active,
+            Auth::user(),
+        );
     }
 
     /**
@@ -1377,7 +1440,11 @@ class IdpSettingController extends Controller
             // ...and scope to any number of grades (empty means every grade).
             'grades' => ['nullable', 'array'],
             'grades.*' => ['string', 'max:255'],
-            'business_unit' => ['nullable', 'string', 'max:255'],
+            // A mapping covers any number of business units; empty means it is
+            // not narrowed to one.
+            'business_units' => ['nullable', 'array'],
+            'business_units.*' => ['string', 'max:255'],
+            'is_active' => ['nullable', 'boolean'],
             'job_family' => ['nullable', 'string', 'max:255'],
             'function_name' => ['nullable', 'string', 'max:255'],
             'position' => ['nullable', 'string', 'max:255'],
@@ -1387,12 +1454,10 @@ class IdpSettingController extends Controller
             array_map('intval', $data['proficiency_level_ids'] ?? [])
         ));
 
-        $data['grades'] = collect($data['grades'] ?? [])
-            ->map(fn ($grade) => trim((string) $grade))
-            ->filter()
-            ->unique()
-            ->values()
-            ->all();
+        $data['grades'] = $this->stringList($data['grades'] ?? []);
+        $data['business_units'] = $this->stringList($data['business_units'] ?? []);
+        // Absent means active, so an older caller keeps creating live mappings.
+        $data['is_active'] = (bool) ($data['is_active'] ?? true);
 
         // The chosen competency must belong to the chosen competency type.
         $competency = Competency::find($data['competency_id']);
@@ -1402,43 +1467,50 @@ class IdpSettingController extends Controller
         }
 
         // Guard against a duplicate implementation for the same competency +
-        // scope. Grades are a list on the row now, so they are not part of the
-        // key: one row per competency + org scope carries every grade it covers.
+        // scope. Grades are a list on the row, so they are not part of the key:
+        // one row per competency + org scope carries every grade it covers.
+        // Business units are a list too, and two rows that differ only by which
+        // units they cover are genuinely different mappings — so the sets are
+        // compared, rather than the row being keyed on a single unit.
+        $wanted = $data['business_units'];
+        sort($wanted);
+
         $duplicate = CompetencyImplementation::query()
             ->when($implementation, fn ($q) => $q->whereKeyNot($implementation->id))
             ->where('competency_id', $data['competency_id'])
-            ->where('business_unit', $data['business_unit'] ?? null)
             ->where('job_family', $data['job_family'] ?? null)
             ->where('function_name', $data['function_name'] ?? null)
             ->where('position', $data['position'] ?? null)
-            ->exists();
+            ->with('businessUnits')
+            ->get()
+            ->contains(function (CompetencyImplementation $existing) use ($wanted) {
+                $units = $existing->businessUnits->pluck('business_unit')->all();
+                sort($units);
+
+                return $units === $wanted;
+            });
 
         if ($duplicate) {
             $this->fail('competency_id', 'A master implementation with the same competency and scope already exists.');
         }
 
-        $this->assertImplementationEffective($data, $competency, $implementation);
+        $this->assertImplementationActive($data, $competency, $implementation);
 
         return $data;
     }
 
     /**
-     * An implementation has no effective period of its own: it simply applies
-     * from now on. So the masters it maps have to be usable from now on too —
-     * an expired competency, or a level that cannot serve the competency's
-     * remaining window, would produce a mapping that never applies to anyone.
+     * An implementation may only map masters that are switched on: an inactive
+     * competency, or an inactive proficiency level, would produce a mapping
+     * that applies to nobody.
      *
-     * The window is the competency's own period clipped to today, the same span
-     * the competency form scopes its level picker to, so the two screens agree
-     * on which levels belong to a competency.
-     *
-     * What the implementation already stores is exempt: once a competency or
-     * level lapses, editing an unrelated field (a grade, a position) must not
-     * become impossible.
+     * What the implementation already stores is exempt, so once a competency or
+     * level is deactivated, editing an unrelated field (a grade, a position) on
+     * an existing row still works.
      *
      * @param  array<string, mixed>  $data
      */
-    private function assertImplementationEffective(
+    private function assertImplementationActive(
         array $data,
         ?Competency $competency,
         ?CompetencyImplementation $implementation,
@@ -1447,44 +1519,19 @@ class IdpSettingController extends Controller
             return;
         }
 
-        $window = $this->forwardWindow(
-            $competency->effective_start_date?->toDateString(),
-            $competency->effective_end_date?->toDateString(),
-        );
-
-        // A competency whose window has closed can no longer be mapped, unless
-        // this implementation was already pointing at it.
         $unchanged = (int) $implementation?->competency_id === (int) $competency->id;
 
-        if ($window['past'] && ! $unchanged) {
+        if (! $competency->is_active && ! $unchanged) {
             $this->fail(
                 'competency_id',
-                "Cannot use '{$competency->name_en}': its effective period has ended."
+                "Cannot use '{$competency->name_en}': it is inactive."
             );
         }
 
-        $this->assertLevelsUsable(
+        $this->assertLevelsActive(
             $data['proficiency_level_ids'],
             $implementation?->proficiencyLevels()->pluck('proficiency_levels.id')->all() ?? [],
-            $window,
-            "the competency's period",
         );
-    }
-
-    /**
-     * Replace an implementation's grade list.
-     *
-     * @param  list<string>  $grades
-     */
-    private function syncImplementationGrades(CompetencyImplementation $implementation, array $grades): void
-    {
-        $implementation->grades()->delete();
-
-        if ($grades !== []) {
-            $implementation->grades()->createMany(
-                array_map(fn (string $grade) => ['grade' => $grade], $grades)
-            );
-        }
     }
 
     private function fail(string $field, string $message): never

@@ -77,19 +77,18 @@ enum MasterDataType: string
     }
 
     /**
-     * Whether rows of this kind carry an optional effective period
-     * (`effective_start_date` / `effective_end_date`).
+     * Whether rows of this kind carry an `is_active` flag.
      */
-    public function hasEffectivePeriod(): bool
+    public function hasActiveState(): bool
     {
         return match ($this) {
             self::CompetencyName,
             self::ProficiencyLevel,
-            self::ReviewTools => true,
+            self::ReviewTools,
+            self::Training => true,
             self::CompetencyType,
             self::KeyBehavior,
-            self::DevelopmentProgram,
-            self::Training => false,
+            self::DevelopmentProgram => false,
         };
     }
 

@@ -132,10 +132,18 @@ Route::middleware('auth')->group(function () use ($stub) {
         // within a kind: {type} selects the table, {id} the row.
         Route::put('/idp-setting/masters/{type}/{id}', [IdpSettingController::class, 'updateMaster'])->name('idp.setting.masters.update');
         Route::delete('/idp-setting/masters/{type}/{id}', [IdpSettingController::class, 'destroyMaster'])->name('idp.setting.masters.destroy');
+        // Activate / deactivate, plus the audit trail of who did so — which is
+        // read back from the log on disk, not from the database.
+        Route::put('/idp-setting/masters/{type}/{id}/active', [IdpSettingController::class, 'toggleMasterActive'])->name('idp.setting.masters.active');
+        Route::get('/idp-setting/masters/{type}/{id}/status-history', [IdpSettingController::class, 'masterStatusHistory'])->name('idp.setting.masters.statusHistory');
 
         Route::post('/idp-setting/implementations', [IdpSettingController::class, 'storeImplementation'])->name('idp.setting.implementations.store');
         Route::put('/idp-setting/implementations/{implementation}', [IdpSettingController::class, 'updateImplementation'])->name('idp.setting.implementations.update');
         Route::delete('/idp-setting/implementations/{implementation}', [IdpSettingController::class, 'destroyImplementation'])->name('idp.setting.implementations.destroy');
+        // Activate / deactivate a mapping, plus its audit trail — read back
+        // from the log on disk, the same way the masters' trail is.
+        Route::put('/idp-setting/implementations/{implementation}/active', [IdpSettingController::class, 'toggleImplementationActive'])->name('idp.setting.implementations.active');
+        Route::get('/idp-setting/implementations/{implementation}/status-history', [IdpSettingController::class, 'implementationStatusHistory'])->name('idp.setting.implementations.statusHistory');
     });
 
     Route::middleware('permission:view_admin_setting')->group(function () {

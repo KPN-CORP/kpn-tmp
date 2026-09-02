@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { Head, router, useForm } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
@@ -10,12 +10,11 @@ import IconButton from '@/Components/UI/IconButton.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
+import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
+import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
+import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import { useLocale } from '@/Composables/useLocale'
-import {
-    periodSuffix,
-    remainingWindow,
-    usableInWindow,
-} from '@/Composables/useEffectivePeriod'
+
 
 const { t, locale } = useLocale()
 
@@ -34,14 +33,12 @@ interface Competency extends Localized {
     competency_type_id: number | null
     // The proficiency levels available for this competency.
     proficiency_level_ids: number[]
-    // The window during which this competency can be mapped.
-    effective_start_date: string | null
-    effective_end_date: string | null
+    // Only an active competency can be mapped.
+    is_active: boolean
 }
 
 interface ProficiencyLevel extends Localized {
-    effective_start_date: string | null
-    effective_end_date: string | null
+    is_active: boolean
 }
 
 interface Implementation {
@@ -52,7 +49,11 @@ interface Implementation {
     proficiency_level_ids: number[]
     // The grades this implementation covers; empty means every grade.
     grades: string[]
-    business_unit: string | null
+    // A mapping covers any number of business units; empty means it is not
+    // narrowed to one.
+    business_units: string[]
+    // An inactive mapping keeps its row but no longer applies.
+    is_active: boolean
     job_family: string | null
     function_name: string | null
     position: string | null
@@ -126,50 +127,33 @@ const competencyTypeOptions = computed<Option[]>(() =>
 )
 
 /**
- * An implementation has no effective period of its own — it applies from now
- * on — so the masters it maps have to be usable from now on too. A competency
- * whose window has closed can no longer be mapped, and the levels on offer are
- * the ones still usable during the competency's remaining window. The server
- * enforces the same rule on save.
+ * An implementation maps masters that must be usable now, so only active ones
+ * are offered: a deactivated competency or proficiency level would produce a
+ * mapping that applies to nobody. The server enforces the same rule on save.
  */
-function periodLabel(item: Competency | ProficiencyLevel): string {
-    return (
-        masterName(item) +
-        periodSuffix(item, t.value.idp.settings.always, t.value.idp.settings.ongoing)
-    )
-}
 
-// Competencies filtered by the chosen competency type, minus the expired ones.
+// Competencies filtered by the chosen competency type, minus the inactive ones.
 const competencyOptions = computed<Option[]>(() => {
     const typeId = implForm.competency_type_id
     if (typeId == null) return []
 
     const options = props.competencies
-        .filter((c) => c.competency_type_id === typeId && !remainingWindow(c).past)
-        .map((c) => ({ value: String(c.id), label: periodLabel(c) }))
+        .filter((c) => c.competency_type_id === typeId && c.is_active)
+        .map((c) => ({ value: String(c.id), label: masterName(c) }))
 
-    // A competency saved earlier that has since expired keeps its place, so an
-    // edit to some other field doesn't blank the select and lose the mapping.
+    // A competency saved earlier that has since been switched off keeps its
+    // place, so an edit to some other field doesn't blank the select and lose
+    // the mapping.
     const current = selectedCompetency.value
-    if (current && remainingWindow(current).past) {
-        options.unshift({ value: String(current.id), label: periodLabel(current) })
+    if (current && !current.is_active) {
+        options.unshift({ value: String(current.id), label: masterName(current) })
     }
 
     return options
 })
 
-// The chosen competency's remaining window — the span its levels must serve.
-const competencyWindow = computed(() => {
-    const c = selectedCompetency.value
-
-    return remainingWindow({
-        effective_start_date: c?.effective_start_date ?? null,
-        effective_end_date: c?.effective_end_date ?? null,
-    })
-})
-
-const competencyExpired = computed(
-    () => !!selectedCompetency.value && competencyWindow.value.past,
+const competencyInactive = computed(
+    () => !!selectedCompetency.value && !selectedCompetency.value.is_active,
 )
 
 const gradeOptions = computed<Option[]>(() => toStringOptions(props.grades))
@@ -178,26 +162,37 @@ const gradeOptions = computed<Option[]>(() => toStringOptions(props.grades))
 
 const businessUnitOptions = computed<Option[]>(() => toStringOptions(props.businessUnits))
 
-// Job families of the chosen business unit.
-const jobFamilyOptions = computed<Option[]>(() => {
-    const bu = implForm.business_unit
-    if (!bu) return []
-    return toStringOptions(props.jobFamiliesByBu[bu] ?? [])
-})
+/**
+ * The children of the hierarchy are the **union** across the selected business
+ * units — a mapping that covers several units may reach a job family, function
+ * or position belonging to any of them. Same convention Master Training uses
+ * for the work locations of several units.
+ *
+ * These three are not rendered today (the org-scope section only offers the
+ * business units), but the columns are still stored and submitted, so they stay
+ * in step with the selection.
+ */
+function unionFor(map: Record<string, string[]>): Option[] {
+    const values = new Set<string>()
+    for (const bu of implForm.business_units) {
+        for (const value of map[bu] ?? []) values.add(value)
+    }
+    return toStringOptions([...values].sort())
+}
 
-// Functions (departments) of the chosen business unit.
-const functionOptions = computed<Option[]>(() => {
-    const bu = implForm.business_unit
-    if (!bu) return []
-    return toStringOptions(props.functionsByBu[bu] ?? [])
-})
+const jobFamilyOptions = computed<Option[]>(() => unionFor(props.jobFamiliesByBu))
 
-// Positions (designations) of the chosen business unit + function.
+const functionOptions = computed<Option[]>(() => unionFor(props.functionsByBu))
+
 const positionOptions = computed<Option[]>(() => {
-    const bu = implForm.business_unit
     const fn = implForm.function_name
-    if (!bu || !fn) return []
-    return toStringOptions(props.positionsByBuFunction[bu]?.[fn] ?? [])
+    if (!fn) return []
+
+    const values = new Set<string>()
+    for (const bu of implForm.business_units) {
+        for (const value of props.positionsByBuFunction[bu]?.[fn] ?? []) values.add(value)
+    }
+    return toStringOptions([...values].sort())
 })
 
 /**
@@ -215,7 +210,9 @@ const implForm = useForm({
     // MultiSelect binds string[]; converted to ints server-side.
     proficiency_level_ids: [] as string[],
     grades: [] as string[],
-    business_unit: '',
+    business_units: [] as string[],
+    // A new mapping applies straight away.
+    is_active: true,
     job_family: '',
     function_name: '',
     position: '',
@@ -228,37 +225,28 @@ const selectedCompetency = computed<Competency | null>(() =>
         : competencyById.value.get(implForm.competency_id) ?? null,
 )
 
-// The levels the chosen competency offers that can still serve its window.
+// The active levels the chosen competency offers.
 const proficiencyOptions = computed<Option[]>(() => {
     const c = selectedCompetency.value
     if (!c) return []
 
-    const offered = c.proficiency_level_ids
-        .map((id) => proficiencyLevelById.value.get(id))
-        .filter((p): p is ProficiencyLevel => !!p)
-
     const pinned = new Set(implForm.proficiency_level_ids)
 
-    return offered
+    return c.proficiency_level_ids
+        .map((id) => proficiencyLevelById.value.get(id))
+        .filter((p): p is ProficiencyLevel => !!p)
         // Levels already stored on this implementation stay listed even once
-        // they fall outside the window; dropping them would silently unpin
-        // them on the next save. They are flagged below instead.
-        .filter(
-            (p) =>
-                usableInWindow(p, competencyWindow.value) ||
-                pinned.has(String(p.id)),
-        )
-        .map((p) => ({ value: String(p.id), label: periodLabel(p) }))
+        // switched off; dropping them would silently unpin them on the next
+        // save. They are flagged below instead.
+        .filter((p) => p.is_active || pinned.has(String(p.id)))
+        .map((p) => ({ value: String(p.id), label: masterName(p) }))
 })
 
-// Pinned levels that no longer cover the competency's remaining window.
-const outOfWindowLevelNames = computed(() =>
+// Pinned levels that have since been switched off.
+const inactivePinnedLevelNames = computed(() =>
     implForm.proficiency_level_ids
         .map((id) => proficiencyLevelById.value.get(Number(id)))
-        .filter(
-            (p): p is ProficiencyLevel =>
-                !!p && !usableInWindow(p, competencyWindow.value),
-        )
+        .filter((p): p is ProficiencyLevel => !!p && !p.is_active)
         .map((p) => masterName(p)),
 )
 
@@ -281,10 +269,16 @@ watch(
     },
 )
 
-// Changing the business unit invalidates every child in the hierarchy.
+// Changing the business units invalidates every child in the hierarchy — but
+// not while a row is being loaded into the form, which would wipe the very
+// values being restored (watchers flush after the assignments in openImpl).
+const loadingForm = ref(false)
+
 watch(
-    () => implForm.business_unit,
+    () => implForm.business_units,
     () => {
+        if (loadingForm.value) return
+
         implForm.job_family = ''
         implForm.function_name = ''
         implForm.position = ''
@@ -303,19 +297,24 @@ function openImpl(item?: Implementation) {
     editingImplId.value = item?.id ?? null
     implForm.clearErrors()
 
-    // Assign the parents before the children so the cascade watchers don't wipe
-    // the child values we're restoring on edit. Vue flushes watchers after this
-    // synchronous block, so the final child assignments below win.
+    // Suppress the cascade watchers for the duration of the load, so restoring
+    // a row never clears its own children.
+    loadingForm.value = true
+
     implForm.competency_type_id = item?.competency_type_id ?? null
     implForm.competency_id = item?.competency_id ?? null
     implForm.proficiency_level_ids = (item?.proficiency_level_ids ?? []).map(String)
     implForm.grades = [...(item?.grades ?? [])]
-    implForm.business_unit = item?.business_unit ?? ''
+    implForm.business_units = [...(item?.business_units ?? [])]
+    implForm.is_active = item?.is_active ?? true
     implForm.job_family = item?.job_family ?? ''
     implForm.function_name = item?.function_name ?? ''
     implForm.position = item?.position ?? ''
 
     implModal.value = true
+
+    // Release once the watchers for these assignments have flushed.
+    nextTick(() => (loadingForm.value = false))
 }
 
 function submitImpl() {
@@ -376,7 +375,7 @@ const implRows = computed(() => {
                 row.type_name,
                 ...row.proficiency_names,
                 ...(row.grades ?? []),
-                row.business_unit ?? '',
+                ...(row.business_units ?? []),
                 row.job_family ?? '',
                 row.function_name ?? '',
                 row.position ?? '',
@@ -388,9 +387,53 @@ const implColumns = computed<Column[]>(() => [
     { key: 'competency_name', label: t.value.idp.settings.competency, sortable: true, thClass: 'w-56' },
     { key: 'proficiency_names', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-48' },
     { key: 'grades', label: t.value.idp.settings.grade, thClass: 'w-40' },
-    { key: 'business_unit', label: t.value.idp.settings.businessUnit, sortable: true, thClass: 'w-40' },
+    { key: 'business_units', label: t.value.idp.settings.businessUnit, thClass: 'w-48' },
+    {
+        key: 'status',
+        label: t.value.idp.settings.status,
+        sortable: true,
+        sortKey: 'is_active',
+        thClass: 'w-52',
+    },
     { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
 ])
+
+/**
+ * --------------------------------------------------------------------------
+ * Activate / deactivate a mapping + its audit trail
+ * --------------------------------------------------------------------------
+ * Deactivating keeps the mapping and its scope; it only stops the mapping
+ * applying from now on. Who flipped it is recorded in the audit log on disk,
+ * which the history drawer reads back.
+ */
+
+const togglingId = ref<number | null>(null)
+
+function toggleActive(row: Implementation) {
+    router.put(
+        `/idp-setting/implementations/${row.id}/active`,
+        { is_active: !row.is_active },
+        {
+            preserveScroll: true,
+            preserveState: true,
+            only: reloadOnly,
+            onStart: () => (togglingId.value = row.id),
+            onFinish: () => (togglingId.value = null),
+        },
+    )
+}
+
+const historyImpl = ref<Implementation | null>(null)
+
+function openHistory(row: Implementation) {
+    historyImpl.value = row
+}
+
+// A mapping has no name of its own, so the competency it maps labels it.
+function implLabel(row: Implementation | null): string {
+    if (!row || row.competency_id == null) return ''
+    return masterName(competencyById.value.get(row.competency_id))
+}
 
 /**
  * --------------------------------------------------------------------------
@@ -520,8 +563,25 @@ function confirmDelete() {
                         <span v-else class="text-xs italic text-slate-300">—</span>
                     </template>
 
-                    <template #cell-business_unit="{ row }">
-                        <span v-if="row.business_unit" class="text-slate-600">{{ row.business_unit }}</span>
+                    <template #cell-status="{ row }">
+                        <ActiveStateCell
+                            :active="row.is_active"
+                            :busy="togglingId === row.id"
+                            @toggle="toggleActive(row as unknown as Implementation)"
+                            @history="openHistory(row as unknown as Implementation)"
+                        />
+                    </template>
+
+                    <template #cell-business_units="{ row }">
+                        <div v-if="row.business_units?.length" class="flex flex-wrap gap-1">
+                            <span
+                                v-for="bu in row.business_units"
+                                :key="bu"
+                                class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600"
+                            >
+                                {{ bu }}
+                            </span>
+                        </div>
                         <span v-else class="text-xs italic text-slate-300">—</span>
                     </template>
 
@@ -599,11 +659,11 @@ function confirmDelete() {
                         {{ implForm.errors.competency_id }}
                     </p>
 
-                    <!-- A competency saved before its period ended. Kept so the
-                         mapping isn't lost, but it can't stay as it is. -->
-                    <p v-if="competencyExpired" class="mt-1 text-xs font-medium text-amber-600">
+                    <!-- A competency saved before it was switched off. Kept so
+                         the mapping isn't lost, but it can't stay as it is. -->
+                    <p v-if="competencyInactive" class="mt-1 text-xs font-medium text-amber-600">
                         <i class="fa-solid fa-triangle-exclamation mr-1" />
-                        {{ t.idp.settings.competencyExpiredForImplementation }}
+                        {{ t.idp.settings.competencyInactiveForImplementation }}
                     </p>
                 </div>
 
@@ -632,7 +692,7 @@ function confirmDelete() {
                             !selectedCompetency
                                 ? t.idp.settings.proficiencyFromCompetency
                                 : selectedCompetency.proficiency_level_ids.length > 0
-                                    ? t.idp.settings.noProficiencyEffectiveForCompetency
+                                    ? t.idp.settings.noActiveProficiencyForCompetency
                                     : t.idp.settings.noProficiencyForCompetency
                         }}
                     </p>
@@ -640,15 +700,15 @@ function confirmDelete() {
                         {{ implForm.errors.proficiency_level_ids }}
                     </p>
 
-                    <!-- Levels pinned earlier that no longer cover the
-                         competency's remaining period. -->
+                    <!-- Levels pinned earlier that have since been switched
+                         off. -->
                     <p
-                        v-if="outOfWindowLevelNames.length > 0"
+                        v-if="inactivePinnedLevelNames.length > 0"
                         class="mt-1 text-xs font-medium text-amber-600"
                     >
                         <i class="fa-solid fa-triangle-exclamation mr-1" />
-                        {{ t.idp.settings.levelsOutsideCompetencyPeriod }}
-                        {{ outOfWindowLevelNames.join(', ') }}
+                        {{ t.idp.settings.inactiveLevelsPinned }}
+                        {{ inactivePinnedLevelNames.join(', ') }}
                     </p>
                 </div>
 
@@ -681,18 +741,31 @@ function confirmDelete() {
                     {{ t.idp.settings.orgScope }}
                 </p>
 
-                <!-- Business unit -->
+                <!-- Business units (any number; empty = not narrowed) -->
                 <div>
                     <label class="mb-1.5 block text-sm font-medium text-slate-700">
                         {{ t.idp.settings.businessUnit }}
                     </label>
-                    <SearchableSelect
-                        :model-value="implForm.business_unit"
+                    <MultiSelect
+                        :model-value="implForm.business_units"
                         :options="businessUnitOptions"
-                        :placeholder="t.idp.settings.businessUnitPickHint"
-                        @update:model-value="implForm.business_unit = $event"
+                        :placeholder="t.idp.settings.businessUnitsPickHint"
+                        :invalid="!!implForm.errors.business_units"
+                        select-all
+                        :select-all-label="t.idp.settings.selectAllBusinessUnits"
+                        :clear-all-label="t.idp.settings.clearAllBusinessUnits"
+                        @update:model-value="implForm.business_units = $event"
                     />
+                    <p v-if="implForm.errors.business_units" class="mt-1 text-xs text-red-600">
+                        {{ implForm.errors.business_units }}
+                    </p>
                 </div>
+
+                <!-- Active / inactive -->
+                <ActiveStateField
+                    v-model="implForm.is_active"
+                    :error="implForm.errors.is_active"
+                />
             </form>
 
             <template #footer>
@@ -718,6 +791,21 @@ function confirmDelete() {
         <!-- ================================================================
              DELETE CONFIRMATION
         ================================================================= -->
+        <!-- ================================================================
+             ACTIVATION HISTORY
+        ================================================================= -->
+
+        <MasterStatusHistory
+            :show="historyImpl !== null"
+            :url="
+                historyImpl
+                    ? `/idp-setting/implementations/${historyImpl.id}/status-history`
+                    : null
+            "
+            :name="implLabel(historyImpl)"
+            @close="historyImpl = null"
+        />
+
 
         <ConfirmDialog
             :show="pendingDelete !== null"

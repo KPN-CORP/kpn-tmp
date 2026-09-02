@@ -341,12 +341,11 @@ export default {
             noCompetenciesForType: 'This competency type has no competencies yet.',
             proficiencyFromCompetency: "The competency's proficiency level and its key behaviors.",
             noProficiencyForCompetency: 'The selected competency has no proficiency level set.',
-            noProficiencyEffectiveForCompetency:
-                "None of this competency's proficiency levels are still effective for its period.",
-            competencyExpiredForImplementation:
-                'This competency’s effective period has ended, so it can no longer be mapped. Pick another competency, or extend its effective dates.',
-            levelsOutsideCompetencyPeriod:
-                'Outside the competency’s effective period:',
+            noActiveProficiencyForCompetency:
+                "None of this competency's proficiency levels are active.",
+            competencyInactiveForImplementation:
+                'This competency is now inactive, so it can no longer be mapped. Pick another competency, or reactivate this one.',
+            inactiveLevelsPinned: 'Now inactive:',
             keyBehaviorsOfLevel: 'Key behaviors',
             jobFamily: 'Job Family',
             jobFamilyPickHint: 'Select a job family',
@@ -387,11 +386,11 @@ export default {
             selectAllWorkLocations: 'Select all work locations',
             clearAllWorkLocations: 'Clear all work locations',
             noneForBusinessUnits: 'No work locations for the selected business units.',
-            noEffectiveProficiencyLevels:
-                "No proficiency level of this competency type is still effective. Extend a level's effective dates, or add a new one.",
-            competencyExpiredForTraining:
-                'This competency’s effective period has ended, so it can no longer be assigned. Pick another competency, or extend its effective dates.',
-            proficiencyExpiredForTraining: 'Their effective period has ended:',
+            noActiveProficiencyLevelsForType:
+                'Every proficiency level of this competency type is inactive. Activate one, or add a new one.',
+            competencyInactiveForTraining:
+                'This competency is now inactive, so it can no longer be assigned. Pick another competency, or reactivate this one.',
+            proficiencyInactiveForTraining: 'Now inactive:',
             // Development program → the name is either typed or taken from the
             // Master Training catalogue.
             nameSource: 'Name from',
@@ -420,12 +419,11 @@ export default {
             keyBehaviorPickHint: 'Select a key behavior',
             pickLevelFirst: 'Select a proficiency level first.',
             noProficiencyLevelsForType: 'This competency type has no proficiency levels yet.',
-            noProficiencyLevelsForPeriod:
-                "No proficiency level of this competency type is effective for the effective period set below. Adjust that period, or extend a level's own effective dates.",
-            levelPeriodScopeHint:
-                "Only proficiency levels still effective during this competency's period can be selected.",
-            levelOutsidePeriod:
-                'This proficiency level falls outside the effective period set below. Pick another level, or adjust that period.',
+            noActiveProficiencyLevels:
+                'Every proficiency level of this competency type is inactive. Activate one on the Proficiency Level page first.',
+            levelActiveScopeHint: 'Only active proficiency levels can be selected.',
+            levelInactive:
+                'This proficiency level is now inactive. It was kept as it is — pick another level to replace it.',
             noKeyBehaviorsForLevel: 'This proficiency level has no key behaviors yet.',
             levelRowsHint: 'Add one row per proficiency level, then pick the key behaviors that belong to it.',
             addLevelRow: 'Add proficiency level',
@@ -443,14 +441,21 @@ export default {
             startDate: 'Start date',
             endDate: 'End date',
             ongoing: 'Ongoing',
-            // Effective period on the dated masters (competency, proficiency
-            // level, review tool).
-            effectivePeriod: 'Effective period',
-            effectivePeriodHint:
-                'Leave the start date empty to apply it immediately, and the end date empty for no expiry. Only masters effective today are offered when adding a development plan.',
-            always: 'Always',
-            scheduledBadge: 'Scheduled',
-            expiredBadge: 'Expired',
+            // Active/inactive on the masters that carry it (competency,
+            // proficiency level, review tool).
+            status: 'Status',
+            activeLabel: 'Active',
+            activeHint:
+                'An inactive master is not offered when adding a development plan. Nothing is deleted — everything already referencing it keeps working.',
+            inactiveBadge: 'Inactive',
+            activate: 'Activate',
+            deactivate: 'Deactivate',
+            statusHistory: 'Activation history',
+            noStatusHistory: 'No activation change yet.',
+            changedBy: 'Changed by',
+            activatedBadge: 'Activated',
+            deactivatedBadge: 'Deactivated',
+            loading: 'Loading…',
             setCurrent: 'Set as the active package',
             setCurrentHint: 'By default the active package is the one whose period covers today. Pin this package to select it manually — allowed only while its period includes today.',
             setCurrentUnavailable: 'Only a package whose period includes today can be pinned as active — adjust the dates to cover today.',

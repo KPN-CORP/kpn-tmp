@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasActiveState;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -9,19 +10,36 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * "Master Implementation" maps one competency (at one or more proficiency
- * levels) onto a corporate org scope: grades plus the business unit -> job
+ * levels) onto a corporate org scope: grades and business units, plus the job
  * family / function -> position hierarchy. The scope values are raw kpncorp
  * strings, intentionally not foreign keys across the connection.
+ *
+ * A mapping can be switched off without being deleted, the same way the IDP
+ * masters can; who flipped it is recorded outside the database.
  */
 class CompetencyImplementation extends Model
 {
+    use HasActiveState;
+
     protected $fillable = [
         'competency_type_id',
         'competency_id',
-        'business_unit',
+        'is_active',
         'job_family',
         'function_name',
         'position',
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
+    ];
+
+    /**
+     * A new mapping applies straight away. Declared here as well as on the
+     * column so a model created without the field still carries the value.
+     */
+    protected $attributes = [
+        'is_active' => true,
     ];
 
     public function competencyType(): BelongsTo
@@ -41,6 +59,15 @@ class CompetencyImplementation extends Model
     public function grades(): HasMany
     {
         return $this->hasMany(ImplementationGrade::class, 'implementation_id');
+    }
+
+    /**
+     * The business units this implementation covers. An empty list means it is
+     * not narrowed to any unit.
+     */
+    public function businessUnits(): HasMany
+    {
+        return $this->hasMany(ImplementationBusinessUnit::class, 'implementation_id');
     }
 
     public function proficiencyLevels(): BelongsToMany

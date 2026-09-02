@@ -9,8 +9,9 @@ import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
-import EffectivePeriodFields from '@/Components/Domain/EffectivePeriodFields.vue'
-import EffectivePeriodCell from '@/Components/Domain/EffectivePeriodCell.vue'
+import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
+import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
+import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 const { t, locale } = useLocale()
@@ -34,9 +35,8 @@ interface ProficiencyLevel {
     description_id: string | null
     // The competency type this level is filed under; null = available to all.
     competency_type_id: number | null
-    // Optional window during which this level is in effect.
-    effective_start_date: string | null
-    effective_end_date: string | null
+    // Inactive levels stay listed here but cannot be pinned to a competency.
+    is_active: boolean
     key_behaviors: KeyBehavior[]
 }
 
@@ -104,9 +104,8 @@ const form = useForm({
     value_id: '',
     description_en: '',
     description_id: '',
-    // Both ends optional: blank start = effective now, blank end = no expiry.
-    effective_start_date: '',
-    effective_end_date: '',
+    // New levels are usable straight away.
+    is_active: true,
 })
 
 function openForm(item?: ProficiencyLevel) {
@@ -118,8 +117,7 @@ function openForm(item?: ProficiencyLevel) {
     form.value_id = item?.value_id ?? ''
     form.description_en = item?.description_en ?? ''
     form.description_id = item?.description_id ?? ''
-    form.effective_start_date = item?.effective_start_date ?? ''
-    form.effective_end_date = item?.effective_end_date ?? ''
+    form.is_active = item?.is_active ?? true
 
     modal.value = true
 }
@@ -220,6 +218,37 @@ function deleteKeyBehavior(item: KeyBehavior) {
         url: `/idp-setting/masters/key_behavior/${item.id}`,
         name: levelName(item),
     }
+}
+
+/**
+ * --------------------------------------------------------------------------
+ * Activate / deactivate + its audit trail
+ * --------------------------------------------------------------------------
+ * Deactivating keeps the level and its key behaviors; it only stops the level
+ * being pinned to a competency or an implementation from now on. Who flipped
+ * it is recorded in the audit log on disk, read back by the history drawer.
+ */
+
+const togglingId = ref<number | null>(null)
+
+function toggleActive(item: ProficiencyLevel) {
+    router.put(
+        `/idp-setting/masters/proficiency_level/${item.id}/active`,
+        { is_active: !item.is_active },
+        {
+            preserveScroll: true,
+            preserveState: true,
+            only: reloadOnly,
+            onStart: () => (togglingId.value = item.id),
+            onFinish: () => (togglingId.value = null),
+        },
+    )
+}
+
+const historyLevel = ref<ProficiencyLevel | null>(null)
+
+function openHistory(item: ProficiencyLevel) {
+    historyLevel.value = item
 }
 
 /**
@@ -329,11 +358,11 @@ const columns = computed<Column[]>(() => [
     { key: 'name', label: t.value.idp.settings.proficiencyLevel, sortable: true, thClass: 'w-72' },
     { key: 'type_name', label: t.value.idp.settings.competencyType, sortable: true, thClass: 'w-48' },
     {
-        key: 'period',
-        label: t.value.idp.settings.effectivePeriod,
+        key: 'status',
+        label: t.value.idp.settings.status,
         sortable: true,
-        sortKey: 'effective_start_date',
-        thClass: 'w-64',
+        sortKey: 'is_active',
+        thClass: 'w-52',
     },
     { key: 'description', label: t.value.idp.settings.description },
     { key: 'key_behaviors', label: t.value.idp.settings.keyBehaviors, align: 'center', thClass: 'w-52' },
@@ -448,8 +477,13 @@ const kbColumns = computed<Column[]>(() => [
                         </span>
                     </template>
 
-                    <template #cell-period="{ row }">
-                        <EffectivePeriodCell :item="(row as unknown as ProficiencyLevel)" />
+                    <template #cell-status="{ row }">
+                        <ActiveStateCell
+                            :active="row.is_active"
+                            :busy="togglingId === row.id"
+                            @toggle="toggleActive(row as unknown as ProficiencyLevel)"
+                            @history="openHistory(row as unknown as ProficiencyLevel)"
+                        />
                     </template>
 
                     <template #cell-description="{ row }">
@@ -648,12 +682,10 @@ const kbColumns = computed<Column[]>(() => [
                     </div>
                 </div>
 
-                <!-- Effective period -->
-                <EffectivePeriodFields
-                    v-model:start="form.effective_start_date"
-                    v-model:end="form.effective_end_date"
-                    :start-error="form.errors.effective_start_date"
-                    :end-error="form.errors.effective_end_date"
+                <!-- Active / inactive -->
+                <ActiveStateField
+                    v-model="form.is_active"
+                    :error="form.errors.is_active"
                 />
             </form>
 
@@ -853,6 +885,21 @@ const kbColumns = computed<Column[]>(() => [
                 </button>
             </template>
         </Drawer>
+
+        <!-- ================================================================
+             ACTIVATION HISTORY
+        ================================================================= -->
+
+        <MasterStatusHistory
+            :show="historyLevel !== null"
+            :url="
+                historyLevel
+                    ? `/idp-setting/masters/proficiency_level/${historyLevel.id}/status-history`
+                    : null
+            "
+            :name="historyLevel ? levelName(historyLevel) : ''"
+            @close="historyLevel = null"
+        />
 
         <!-- ================================================================
              DELETE CONFIRMATION

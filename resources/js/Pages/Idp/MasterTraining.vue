@@ -6,12 +6,14 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
+import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
+import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
-import { periodSuffix, remainingWindow } from '@/Composables/useEffectivePeriod'
 
 const { t, locale } = useLocale()
 
@@ -28,20 +30,21 @@ interface CompetencyType extends Localized {
 
 interface Competency extends Localized {
     competency_type_id: number | null
-    effective_start_date: string | null
-    effective_end_date: string | null
+    is_active: boolean
 }
 
 interface ProficiencyLevel extends Localized {
     // The type this level is filed under; null = global, fits every type.
     competency_type_id: number | null
-    effective_start_date: string | null
-    effective_end_date: string | null
+    is_active: boolean
 }
 
 interface Training extends Localized {
     description_en: string | null
     description_id: string | null
+    // An inactive training stays listed here but is not offered as the name
+    // source for a new development program.
+    is_active: boolean
     competency_type_id: number | null
     competency_id: number | null
     // A training targets any number of proficiency levels, and is offered in
@@ -113,7 +116,7 @@ const proficiencyLevelById = computed(() => {
  * --------------------------------------------------------------------------
  *
  * A training has no effective period of its own — it applies from now on — so
- * the masters it points at have to be usable from now on too. An expired
+ * the masters it points at have to be usable from now on too. An inactive
  * competency or proficiency level is off the list; one that is merely
  * scheduled stays on it. The server enforces the same rule on save.
  */
@@ -121,16 +124,9 @@ const proficiencyLevelById = computed(() => {
 const toStringOptions = (list: string[]): Option[] =>
     (list ?? []).map((v) => ({ value: v, label: v }))
 
-// Name + effective window, so the reason a master is or isn't on offer shows
-// right where the choice is made.
-function periodLabel(item: Competency | ProficiencyLevel): string {
-    return (
-        masterName(item) +
-        periodSuffix(item, t.value.idp.settings.always, t.value.idp.settings.ongoing)
-    )
-}
-
-const expired = (item: Competency | ProficiencyLevel) => remainingWindow(item).past
+// Only active masters may be picked; a deactivated one would make the training
+// point at something no longer in use.
+const inactive = (item: Competency | ProficiencyLevel) => !item.is_active
 
 const competencyTypeOptions = computed<Option[]>(() =>
     props.competencyTypes.map((c) => ({ value: String(c.id), label: masterName(c) })),
@@ -142,14 +138,14 @@ const competencyOptions = computed<Option[]>(() => {
     if (typeId == null) return []
 
     const options = props.competencies
-        .filter((c) => c.competency_type_id === typeId && !expired(c))
-        .map((c) => ({ value: String(c.id), label: periodLabel(c) }))
+        .filter((c) => c.competency_type_id === typeId && !inactive(c))
+        .map((c) => ({ value: String(c.id), label: masterName(c) }))
 
-    // A competency saved earlier that has since expired keeps its place, so an
+    // A competency saved earlier that is now inactive keeps its place, so an
     // edit to some other field doesn't blank the select and lose the link.
     const current = selectedCompetency.value
-    if (current && expired(current)) {
-        options.unshift({ value: String(current.id), label: periodLabel(current) })
+    if (current && inactive(current)) {
+        options.unshift({ value: String(current.id), label: masterName(current) })
     }
 
     return options
@@ -179,8 +175,8 @@ const proficiencyOptions = computed<Option[]>(() => {
             // Levels already pinned to this training stay listed even once they
             // expire; dropping them would silently unpin them on the next save.
             // They are flagged below instead.
-            .filter((p) => !expired(p) || pinned.has(String(p.id)))
-            .map((p) => ({ value: String(p.id), label: periodLabel(p) }))
+            .filter((p) => !inactive(p) || pinned.has(String(p.id)))
+            .map((p) => ({ value: String(p.id), label: masterName(p) }))
     )
 })
 
@@ -227,6 +223,8 @@ const form = useForm({
     proficiency_level_ids: [] as string[],
     business_units: [] as string[],
     work_locations: [] as string[],
+    // A new training is usable straight away.
+    is_active: true,
 })
 
 const selectedCompetency = computed<Competency | null>(() =>
@@ -239,13 +237,13 @@ const selectedLevels = computed<ProficiencyLevel[]>(() =>
         .filter((p): p is ProficiencyLevel => !!p),
 )
 
-const competencyExpired = computed(
-    () => !!selectedCompetency.value && expired(selectedCompetency.value),
+const competencyInactive = computed(
+    () => !!selectedCompetency.value && inactive(selectedCompetency.value),
 )
 
 // Pinned levels whose effective period has since ended.
-const expiredLevelNames = computed(() =>
-    selectedLevels.value.filter((p) => expired(p)).map((p) => masterName(p)),
+const inactiveLevelNames = computed(() =>
+    selectedLevels.value.filter((p) => inactive(p)).map((p) => masterName(p)),
 )
 
 // Changing the competency type drops the competency and any proficiency level
@@ -289,8 +287,41 @@ function openModal(item?: Training) {
     form.proficiency_level_ids = (item?.proficiency_level_ids ?? []).map(String)
     form.business_units = [...(item?.business_units ?? [])]
     form.work_locations = [...(item?.work_locations ?? [])]
+    form.is_active = item?.is_active ?? true
 
     modal.value = true
+}
+
+/**
+ * --------------------------------------------------------------------------
+ * Activate / deactivate + its audit trail
+ * --------------------------------------------------------------------------
+ * Deactivating keeps the training and everything referencing it — a program
+ * named from one holds a copy of that name — it only stops the training being
+ * offered as a name source for new programs. Who flipped it is recorded in the
+ * audit log on disk, which the history drawer reads back.
+ */
+
+const togglingId = ref<number | null>(null)
+
+function toggleActive(training: Training) {
+    router.put(
+        `/idp-setting/masters/training/${training.id}/active`,
+        { is_active: !training.is_active },
+        {
+            preserveScroll: true,
+            preserveState: true,
+            only: reloadOnly,
+            onStart: () => (togglingId.value = training.id),
+            onFinish: () => (togglingId.value = null),
+        },
+    )
+}
+
+const historyTraining = ref<Training | null>(null)
+
+function openHistory(training: Training) {
+    historyTraining.value = training
 }
 
 function submit() {
@@ -368,6 +399,13 @@ const columns = computed<Column[]>(() => [
     { key: 'business_units', label: t.value.idp.settings.businessUnit, thClass: 'w-44' },
     { key: 'work_locations', label: t.value.idp.settings.workLocation, thClass: 'w-48' },
     { key: 'description', label: t.value.idp.settings.description },
+    {
+        key: 'status',
+        label: t.value.idp.settings.status,
+        sortable: true,
+        sortKey: 'is_active',
+        thClass: 'w-52',
+    },
     { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
 ])
 
@@ -524,6 +562,15 @@ function confirmDelete() {
                         <span v-else class="text-xs italic text-slate-300">
                             {{ t.idp.settings.noDescription }}
                         </span>
+                    </template>
+
+                    <template #cell-status="{ row }">
+                        <ActiveStateCell
+                            :active="row.is_active"
+                            :busy="togglingId === row.id"
+                            @toggle="toggleActive(row as unknown as Training)"
+                            @history="openHistory(row as unknown as Training)"
+                        />
                     </template>
 
                     <template #cell-actions="{ row }">
@@ -696,9 +743,9 @@ function confirmDelete() {
 
                     <!-- A competency saved before its period ended. Kept so the
                          link isn't lost, but it can't stay as it is. -->
-                    <p v-if="competencyExpired" class="mt-1 text-xs font-medium text-amber-600">
+                    <p v-if="competencyInactive" class="mt-1 text-xs font-medium text-amber-600">
                         <i class="fa-solid fa-triangle-exclamation mr-1" />
-                        {{ t.idp.settings.competencyExpiredForTraining }}
+                        {{ t.idp.settings.competencyInactiveForTraining }}
                     </p>
                 </div>
 
@@ -730,7 +777,7 @@ function confirmDelete() {
                                 ? t.idp.settings.pickTypeFirst
                                 : typedProficiencyLevels.length === 0
                                     ? t.idp.settings.noProficiencyLevelsForType
-                                    : t.idp.settings.noEffectiveProficiencyLevels
+                                    : t.idp.settings.noActiveProficiencyLevelsForType
                         }}
                     </p>
                     <p v-if="form.errors.proficiency_level_ids" class="mt-1 text-xs text-red-600">
@@ -739,12 +786,12 @@ function confirmDelete() {
 
                     <!-- Levels pinned earlier whose period has since ended. -->
                     <p
-                        v-if="expiredLevelNames.length > 0"
+                        v-if="inactiveLevelNames.length > 0"
                         class="mt-1 text-xs font-medium text-amber-600"
                     >
                         <i class="fa-solid fa-triangle-exclamation mr-1" />
-                        {{ t.idp.settings.proficiencyExpiredForTraining }}
-                        {{ expiredLevelNames.join(', ') }}
+                        {{ t.idp.settings.proficiencyInactiveForTraining }}
+                        {{ inactiveLevelNames.join(', ') }}
                     </p>
                 </div>
 
@@ -810,6 +857,12 @@ function confirmDelete() {
                         {{ form.errors.work_locations }}
                     </p>
                 </div>
+
+                <!-- Active / inactive -->
+                <ActiveStateField
+                    v-model="form.is_active"
+                    :error="form.errors.is_active"
+                />
             </form>
 
             <template #footer>
@@ -835,6 +888,21 @@ function confirmDelete() {
         <!-- ================================================================
              DELETE CONFIRMATION
         ================================================================= -->
+        <!-- ================================================================
+             ACTIVATION HISTORY
+        ================================================================= -->
+
+        <MasterStatusHistory
+            :show="historyTraining !== null"
+            :url="
+                historyTraining
+                    ? `/idp-setting/masters/training/${historyTraining.id}/status-history`
+                    : null
+            "
+            :name="historyTraining ? masterName(historyTraining) : ''"
+            @close="historyTraining = null"
+        />
+
 
         <ConfirmDialog
             :show="pendingDelete !== null"

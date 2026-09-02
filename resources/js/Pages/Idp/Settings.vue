@@ -11,10 +11,6 @@ import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
-import {
-    periodSuffix,
-    remainingWindow,
-} from '@/Composables/useEffectivePeriod'
 
 const { t, locale } = useLocale()
 
@@ -53,8 +49,7 @@ interface Competency {
     proficiency_level_ids: number[]
     related_program: number[]
     linked_programs: string[]
-    effective_start_date: string | null
-    effective_end_date: string | null
+    is_active: boolean
 }
 
 interface Program {
@@ -93,6 +88,8 @@ interface Training {
     value: string
     value_en: string | null
     value_id: string | null
+    // An inactive training is no longer offered as a program's name source.
+    is_active: boolean
 }
 
 /**
@@ -226,6 +223,7 @@ const typedName = ref({ en: '', id: '' })
 const loadedCompetencyIds = ref<number[]>([])
 const loadedProficiencyLevelId = ref<number | null>(null)
 const loadedGrades = ref<string[]>([])
+const loadedTrainingId = ref<number | null>(null)
 
 // Localized name for a competency / program, falling back to the canonical value.
 function masterName(item: {
@@ -311,6 +309,7 @@ function openMaster(type: MasterType, item?: Program) {
     loadedCompetencyIds.value = [...masterForm.related_competencies]
     loadedProficiencyLevelId.value = masterForm.proficiency_level_id
     loadedGrades.value = [...masterForm.grades]
+    loadedTrainingId.value = masterForm.training_id
 
     // Seed the cache with the loaded type's selection so that leaving it and
     // coming back restores exactly what was stored.
@@ -417,21 +416,12 @@ function onProgramPackageChange(value: string) {
     }
 }
 
-// A master's name with its effective window appended, so the reason a
-// competency is or isn't on offer is visible right where it is picked.
-function periodLabel(item: Competency): string {
-    return (
-        masterName(item) +
-        periodSuffix(item, t.value.idp.settings.always, t.value.idp.settings.ongoing)
-    )
-}
-
-// Competencies offered to the program: those of the chosen competency type (all
-// of them when no type is picked) whose effective period has not already
-// closed — an expired competency can no longer be developed by new work.
+// Competencies offered to the program: those of the chosen competency type
+// (all of them when no type is picked) that are still active — a deactivated
+// competency can no longer be developed by new work.
 //
-// A competency the program was loaded with keeps its place even once expired,
-// so editing some other field never silently unlinks it.
+// A competency the program was loaded with keeps its place even once switched
+// off, so editing some other field never silently unlinks it.
 const competencyOptions = computed<Option[]>(() => {
     const loaded = new Set(loadedCompetencyIds.value)
 
@@ -440,9 +430,9 @@ const competencyOptions = computed<Option[]>(() => {
             (c) =>
                 (masterForm.competency_type_id == null ||
                     c.competency_type_id === masterForm.competency_type_id) &&
-                (!remainingWindow(c).past || loaded.has(c.id)),
+                (c.is_active || loaded.has(c.id)),
         )
-        .map((c) => ({ value: String(c.id), label: periodLabel(c) }))
+        .map((c) => ({ value: String(c.id), label: masterName(c) }))
 })
 
 // A program develops exactly one competency; the pivot behind it still takes a
@@ -468,11 +458,16 @@ const nameSourceOptions = computed<{ value: NameSource; label: string }[]>(() =>
     { value: 'training', label: t.value.idp.settings.nameSourceTraining },
 ])
 
+// Only active trainings can name a new program. One the program was loaded
+// with keeps its place even once switched off, so editing some other field
+// never silently blanks the name source.
 const trainingOptions = computed<Option[]>(() =>
-    props.trainings.map((training) => ({
-        value: String(training.id),
-        label: masterName(training),
-    })),
+    props.trainings
+        .filter((tr) => tr.is_active || tr.id === loadedTrainingId.value)
+        .map((training) => ({
+            value: String(training.id),
+            label: masterName(training),
+        })),
 )
 
 const selectedTrainingValue = computed<string>({

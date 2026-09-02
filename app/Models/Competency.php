@@ -2,7 +2,7 @@
 
 namespace App\Models;
 
-use App\Models\Concerns\HasEffectivePeriod;
+use App\Models\Concerns\HasActiveState;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -15,7 +15,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Competency extends Model
 {
-    use HasEffectivePeriod;
+    use HasActiveState;
 
     protected $table = 'competencies';
 
@@ -25,13 +25,20 @@ class Competency extends Model
         'name_id',
         'description_en',
         'description_id',
-        'effective_start_date',
-        'effective_end_date',
+        'is_active',
     ];
 
     protected $casts = [
-        'effective_start_date' => 'date',
-        'effective_end_date' => 'date',
+        'is_active' => 'boolean',
+    ];
+
+    /**
+     * A new master is usable straight away. Declared here as well as on the
+     * column so a model created without the field still carries the value —
+     * otherwise `is_active` would be unset in memory until the row is re-read.
+     */
+    protected $attributes = [
+        'is_active' => true,
     ];
 
     public function competencyType(): BelongsTo
