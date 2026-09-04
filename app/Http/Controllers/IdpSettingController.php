@@ -90,8 +90,7 @@ class IdpSettingController extends Controller
                 // Null when the name was typed rather than taken from a training.
                 'training_id' => $p->training_id,
                 'proficiency_level_id' => $p->proficiency_level_id,
-                // Free-typed competencies / proficiency (an "Others" program).
-                'custom_competency' => $p->custom_competency,
+                // Free-typed proficiency level (an "Others" program).
                 'custom_proficiency_level' => $p->custom_proficiency_level,
                 'grades' => $p->grades->pluck('grade')->values(),
             ]),
@@ -904,8 +903,7 @@ class IdpSettingController extends Controller
             // reaches many programs, and the competency screen edits that side.
             'related_competencies' => ['nullable', 'array', 'max:1'],
             'related_competencies.*' => ['integer', 'exists:competencies,id'],
-            // Free-typed competencies / proficiency for an "Others" program.
-            'custom_competency' => ['nullable', 'string', 'max:2000'],
+            // Free-typed proficiency level for an "Others" program.
             'custom_proficiency_level' => ['nullable', 'string', 'max:255'],
             // Development-program corporate scope: any number of grades, each
             // stored as the raw string.
@@ -1130,24 +1128,23 @@ class IdpSettingController extends Controller
      * A development program is scoped through the master implementations of the
      * competencies it develops: the proficiency level it targets has to be one
      * an implementation maps those competencies to, and its grades have to fall
-     * inside that mapping's coverage. Competencies whose effective period has
-     * already closed can no longer be developed at all.
+     * inside that mapping's coverage. Inactive competencies can no longer be
+     * developed at all.
+     *
+     * This applies to every competency type, the catch-all "Others" included —
+     * a program on it picks a real competency master too. What "Others" still
+     * free-types is its proficiency level, which arrives in
+     * `custom_proficiency_level` and so leaves nothing here to police.
      *
      * Only what the form *adds* is checked. Whatever the program already stores
      * stays valid, so editing an unrelated field never fails because a
-     * competency has since expired or an implementation has since narrowed —
-     * the same exemption the competency form gives its pinned levels.
+     * competency has since been deactivated or an implementation has since
+     * narrowed — the same exemption the competency form gives its pinned levels.
      *
      * @param  array<string, mixed>  $data
      */
     private function assertProgramSelectionsUsable(array $data, ?Model $master): void
     {
-        // An "Others" program free-types its competencies and level instead of
-        // pointing at masters, so none of this applies to it.
-        if (CompetencyType::find($data['competency_type_id'] ?? null)?->isOthers() ?? false) {
-            return;
-        }
-
         $program = $master instanceof DevelopmentProgram ? $master : null;
 
         $competencyIds = array_values(array_unique(array_map(

@@ -46,7 +46,7 @@
                     <tr>
                         <td>{{ $plan['competency_name'] }}<br><span class="muted">{{ $plan['competency_type'] }}</span></td>
                         <td>{{ $plan['development_program'] }}</td>
-                        <td>{{ $plan['expected_outcome'] ?? '—' }}</td>
+                        <td>{!! $plan['expected_outcome'] ? nl2br(e($plan['expected_outcome'])) : '—' !!}</td>
                         <td>{{ $plan['time_frame_start'] ?? '—' }} – {{ $plan['time_frame_end'] ?? '—' }}</td>
                         <td>{{ $plan['realization_date'] ?? '—' }}</td>
                     </tr>

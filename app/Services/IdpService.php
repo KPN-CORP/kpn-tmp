@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Competency;
+use App\Models\CompetencyType;
 use App\Models\DevelopmentModel;
 use App\Models\DevelopmentModelPackage;
 use App\Models\DevelopmentProgram;
@@ -57,34 +58,56 @@ class IdpService
 
         $approvalFor = $this->approvalResolver($employeeId, $viewer, $canManage);
 
-        $programs = DevelopmentProgram::orderBy('name_en')
-            ->get(['id', 'name_en', 'name_id', 'development_model_id']);
+        $programs = DevelopmentProgram::with('competencyType:id,name_en')
+            ->orderBy('name_en')
+            ->get(['id', 'name_en', 'name_id', 'development_model_id', 'competency_type_id']);
 
         // Only active masters are offered for new plans. Plans store the name
         // verbatim, so items already picked from a since-deactivated competency
         // / review tool keep displaying — same read-only treatment the
         // historical development models get above.
-        $competencies = Competency::with('developmentPrograms:id,name_en,name_id,development_model_id')
+        $competencies = Competency::with([
+            'competencyType:id,name_en',
+            'developmentPrograms:id,name_en,name_id,development_model_id,competency_type_id',
+            'developmentPrograms.competencyType:id,name_en',
+        ])
             ->active()
             ->orderBy('name_en')
-            ->get(['id', 'name_en', 'name_id']);
+            ->get(['id', 'name_en', 'name_id', 'competency_type_id']);
 
         $reviewTools = ReviewTool::active()->orderBy('name_en')->get(['id', 'name_en', 'name_id']);
 
+        // The competency types come from the master table rather than a
+        // hard-coded pair. A plan stores the type's NAME verbatim (the column is
+        // a string, not an FK), so the option value is `name_en` like every
+        // other master here.
+        $competencyTypes = CompetencyType::orderBy('name_en')->get(['id', 'name_en', 'name_id']);
+
         // Shape a master row into a localizable option. `value` is the canonical
         // name that IDP rows store and match on; value_en/value_id drive the
-        // display label.
+        // display label. `competency_type` is the master's competency type as
+        // the plan stores it (a name string, not an id) — null when the master
+        // is untyped, which by convention makes it global and fits every type.
         $option = fn ($m) => [
             'value' => $m->name_en,
             'value_en' => $m->name_en,
             'value_id' => $m->name_id,
+            'competency_type' => $m->competencyType?->name_en,
         ];
 
-        // competency name (lower-cased) => [{ value, value_en, value_id, model_id }]
+        // A development program additionally carries the development model it is
+        // filed under (the 70-20-10 split). A plan is added under one model, so
+        // the picker only offers that model's programs. Null is legacy data with
+        // no model, which — like an untyped master — counts as global.
+        $programOption = fn (DevelopmentProgram $p) => $option($p) + ['model_id' => $p->development_model_id];
+
+        // competency name (lower-cased) => [{ value, value_en, value_id,
+        // competency_type, model_id }] — the programs that build it, so the
+        // plan form can narrow the program picker to the chosen competency.
         $competencyMap = [];
         foreach ($competencies as $competency) {
             $linked = $competency->developmentPrograms
-                ->map(fn ($p) => $option($p) + ['model_id' => $p->development_model_id])
+                ->map($programOption)
                 ->values();
 
             if ($linked->isNotEmpty()) {
@@ -107,8 +130,17 @@ class IdpService
                     ->values(),
             ]),
             'options' => [
+                // Every type — the catch-all "Others" included — picks its
+                // competency from the master data, so a type carries nothing
+                // beyond its name.
+                'competencyTypes' => $competencyTypes->map($option)->values(),
                 'competencyNames' => $competencies->map($option)->values(),
-                'developmentPrograms' => $programs->map($option)->unique('value')->values(),
+                // Deduped per model, not globally: a program name is unique
+                // within a development model, so the same name may legitimately
+                // exist under two models as two different programs.
+                'developmentPrograms' => $programs->map($programOption)
+                    ->unique(fn (array $p) => $p['model_id'].'|'.strtolower(trim((string) $p['value'])))
+                    ->values(),
                 'reviewTools' => $reviewTools->map($option)->values(),
             ],
             'competencyMap' => $competencyMap,

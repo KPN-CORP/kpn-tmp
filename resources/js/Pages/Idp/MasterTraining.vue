@@ -11,6 +11,7 @@ import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
+import FormSection from '@/Components/UI/FormSection.vue'
 import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
@@ -345,6 +346,21 @@ const modalTitle = computed(() =>
 
 /**
  * --------------------------------------------------------------------------
+ * Form: step completion
+ * --------------------------------------------------------------------------
+ * The drawer is a cascade (scope → name → where it is offered), so each
+ * section reports whether it is settled and the step badge turns into a check.
+ */
+
+// Scope is settled once the two required picks are made; the levels are optional.
+const scopeComplete = computed(
+    () => form.competency_type_id != null && form.competency_id != null,
+)
+
+const identityComplete = computed(() => form.value_en.trim() !== '')
+
+/**
+ * --------------------------------------------------------------------------
  * Search + table (client-side; ClientTable handles sort + pagination)
  * --------------------------------------------------------------------------
  */
@@ -601,28 +617,197 @@ function confirmDelete() {
              TRAINING MODAL
         ================================================================= -->
 
-        <Drawer :show="modal" :title="modalTitle" @close="modal = false">
+        <Drawer
+            :show="modal"
+            :title="modalTitle"
+            max-width="max-w-3xl"
+            @close="modal = false"
+        >
             <form id="training-form" class="space-y-4" @submit.prevent="submit">
-                <!-- English section -->
-                <div class="rounded-lg border border-border bg-slate-50/60 p-4">
-                    <div class="mb-3 flex items-center gap-2">
-                        <span
-                            class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
-                        >
-                            EN
-                        </span>
-                        <span class="text-sm font-semibold text-slate-700">
-                            {{ t.idp.settings.english }}
-                        </span>
-                    </div>
-
-                    <div class="space-y-3">
+                <!-- ========================================================
+                     1. Scope — what the training develops
+                ========================================================= -->
+                <FormSection
+                    :step="1"
+                    :title="t.idp.settings.scope"
+                    :hint="t.idp.settings.trainingScopeHint"
+                    icon="fa-solid fa-bullseye"
+                    :complete="scopeComplete"
+                >
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <!-- Competency type (scopes everything below it) -->
                         <div>
-                            <label class="mb-1 block text-xs font-medium text-slate-500">
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.competencyType }}
+                                <span class="text-red-500">*</span>
+                            </label>
+
+                            <SearchableSelect
+                                :model-value="
+                                    form.competency_type_id == null
+                                        ? ''
+                                        : String(form.competency_type_id)
+                                "
+                                :options="competencyTypeOptions"
+                                :placeholder="t.idp.settings.selectCompetencyType"
+                                :invalid="!!form.errors.competency_type_id"
+                                @update:model-value="
+                                    form.competency_type_id = $event === '' ? null : Number($event)
+                                "
+                            />
+                            <p
+                                v-if="form.errors.competency_type_id"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ form.errors.competency_type_id }}
+                            </p>
+                        </div>
+
+                        <!-- Competency (of that type, active only) -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.competency }}
+                                <span class="text-red-500">*</span>
+                            </label>
+
+                            <SearchableSelect
+                                v-if="form.competency_type_id != null && competencyOptions.length"
+                                :model-value="
+                                    form.competency_id == null ? '' : String(form.competency_id)
+                                "
+                                :options="competencyOptions"
+                                :placeholder="t.idp.settings.competencyPickHint"
+                                :invalid="!!form.errors.competency_id"
+                                @update:model-value="
+                                    form.competency_id = $event === '' ? null : Number($event)
+                                "
+                            />
+                            <p
+                                v-else
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i
+                                    class="mt-0.5 text-[10px] text-slate-300"
+                                    :class="
+                                        form.competency_type_id == null
+                                            ? 'fa-solid fa-lock'
+                                            : 'fa-solid fa-circle-info'
+                                    "
+                                />
+                                <span>
+                                    {{
+                                        form.competency_type_id == null
+                                            ? t.idp.settings.pickTypeFirst
+                                            : t.idp.settings.noCompetenciesForType
+                                    }}
+                                </span>
+                            </p>
+
+                            <p v-if="form.errors.competency_id" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.competency_id }}
+                            </p>
+
+                            <!-- A competency picked before it was switched off. Kept
+                                 so the link isn't lost, but it can't stay as it is. -->
+                            <p
+                                v-if="competencyInactive"
+                                class="mt-1.5 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700"
+                            >
+                                <i class="fa-solid fa-triangle-exclamation mt-0.5 text-[10px]" />
+                                <span>{{ t.idp.settings.competencyInactiveForTraining }}</span>
+                            </p>
+                        </div>
+
+                        <!-- Proficiency levels (filed under the type, or global) -->
+                        <div class="sm:col-span-2">
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.proficiencyLevel }}
+                            </label>
+
+                            <MultiSelect
+                                v-if="proficiencyOptions.length"
+                                :model-value="form.proficiency_level_ids"
+                                :options="proficiencyOptions"
+                                :placeholder="t.idp.settings.proficiencyLevelPickHint"
+                                :invalid="!!form.errors.proficiency_level_ids"
+                                select-all
+                                :select-all-label="t.idp.settings.selectAllLevels"
+                                :clear-all-label="t.idp.settings.clearAllLevels"
+                                @update:model-value="form.proficiency_level_ids = $event"
+                            />
+                            <p
+                                v-else
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i
+                                    class="mt-0.5 text-[10px] text-slate-300"
+                                    :class="
+                                        form.competency_type_id == null
+                                            ? 'fa-solid fa-lock'
+                                            : 'fa-solid fa-circle-info'
+                                    "
+                                />
+                                <span>
+                                    {{
+                                        form.competency_type_id == null
+                                            ? t.idp.settings.pickTypeFirst
+                                            : typedProficiencyLevels.length === 0
+                                                ? t.idp.settings.noProficiencyLevelsForType
+                                                : t.idp.settings.noActiveProficiencyLevelsForType
+                                    }}
+                                </span>
+                            </p>
+
+                            <p
+                                v-if="form.errors.proficiency_level_ids"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ form.errors.proficiency_level_ids }}
+                            </p>
+
+                            <!-- Levels pinned earlier that have since been switched off. -->
+                            <p
+                                v-if="inactiveLevelNames.length"
+                                class="mt-1.5 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700"
+                            >
+                                <i class="fa-solid fa-triangle-exclamation mt-0.5 text-[10px]" />
+                                <span>
+                                    {{ t.idp.settings.proficiencyInactiveForTraining }}
+                                    {{ inactiveLevelNames.join(', ') }}
+                                </span>
+                            </p>
+                        </div>
+                    </div>
+                </FormSection>
+
+                <!-- ========================================================
+                     2. Identity — what the training is called
+                ========================================================= -->
+                <FormSection
+                    :step="2"
+                    :title="t.idp.settings.trainingIdentity"
+                    :hint="t.idp.settings.trainingIdentityHint"
+                    icon="fa-solid fa-tag"
+                    :complete="identityComplete"
+                >
+                    <!-- Bilingual name, side by side -->
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label
+                                class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                            >
+                                <span
+                                    class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                >
+                                    EN
+                                </span>
                                 {{ t.idp.settings.trainingName }}
+                                <span class="text-red-500">*</span>
                             </label>
                             <input
                                 v-model="form.value_en"
+                                type="text"
+                                :placeholder="t.idp.settings.namePlaceholderEn"
                                 class="w-full rounded-md border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                                 :class="form.errors.value_en ? 'border-red-500' : 'border-border'"
                             >
@@ -632,41 +817,20 @@ function confirmDelete() {
                         </div>
 
                         <div>
-                            <label class="mb-1 block text-xs font-medium text-slate-500">
-                                {{ t.idp.settings.description }}
-                                <span class="font-normal text-slate-400">
-                                    ({{ t.idp.settings.optional }})
+                            <label
+                                class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                            >
+                                <span
+                                    class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                >
+                                    ID
                                 </span>
-                            </label>
-                            <textarea
-                                v-model="form.description_en"
-                                rows="4"
-                                class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                            />
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Bahasa Indonesia section -->
-                <div class="rounded-lg border border-border bg-slate-50/60 p-4">
-                    <div class="mb-3 flex items-center gap-2">
-                        <span
-                            class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
-                        >
-                            ID
-                        </span>
-                        <span class="text-sm font-semibold text-slate-700">
-                            {{ t.idp.settings.bahasa }}
-                        </span>
-                    </div>
-
-                    <div class="space-y-3">
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-slate-500">
                                 {{ t.idp.settings.trainingName }}
                             </label>
                             <input
                                 v-model="form.value_id"
+                                type="text"
+                                :placeholder="t.idp.settings.namePlaceholderId"
                                 class="w-full rounded-md border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                                 :class="form.errors.value_id ? 'border-red-500' : 'border-border'"
                             >
@@ -674,195 +838,148 @@ function confirmDelete() {
                                 {{ form.errors.value_id }}
                             </p>
                         </div>
+                    </div>
+
+                    <!-- Bilingual description, side by side -->
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label
+                                class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                            >
+                                <span
+                                    class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                >
+                                    EN
+                                </span>
+                                {{ t.idp.settings.description }}
+                            </label>
+                            <textarea
+                                v-model="form.description_en"
+                                rows="4"
+                                :placeholder="t.idp.settings.descriptionPlaceholderEn"
+                                class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="
+                                    form.errors.description_en ? 'border-red-500' : 'border-border'
+                                "
+                            />
+                            <p v-if="form.errors.description_en" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.description_en }}
+                            </p>
+                        </div>
 
                         <div>
-                            <label class="mb-1 block text-xs font-medium text-slate-500">
-                                {{ t.idp.settings.description }}
-                                <span class="font-normal text-slate-400">
-                                    ({{ t.idp.settings.optional }})
+                            <label
+                                class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                            >
+                                <span
+                                    class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                >
+                                    ID
                                 </span>
+                                {{ t.idp.settings.description }}
                             </label>
                             <textarea
                                 v-model="form.description_id"
                                 rows="4"
-                                class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :placeholder="t.idp.settings.descriptionPlaceholderId"
+                                class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="
+                                    form.errors.description_id ? 'border-red-500' : 'border-border'
+                                "
                             />
+                            <p v-if="form.errors.description_id" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.description_id }}
+                            </p>
                         </div>
                     </div>
-                </div>
+                </FormSection>
 
-                <hr class="border-border/60">
+                <!-- ========================================================
+                     3. Organization scope — where the training is offered
+                ========================================================= -->
+                <FormSection
+                    :step="3"
+                    :title="t.idp.settings.orgScope"
+                    :hint="t.idp.settings.trainingOrgScopeHint"
+                    icon="fa-solid fa-building"
+                >
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <!-- Business units -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.businessUnit }}
+                            </label>
 
-                <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    {{ t.idp.settings.scope }}
-                </p>
+                            <MultiSelect
+                                :model-value="form.business_units"
+                                :options="businessUnitOptions"
+                                :placeholder="t.idp.settings.businessUnitsPickHint"
+                                :invalid="!!form.errors.business_units"
+                                select-all
+                                :select-all-label="t.idp.settings.selectAllBusinessUnits"
+                                :clear-all-label="t.idp.settings.clearAllBusinessUnits"
+                                @update:model-value="form.business_units = $event"
+                            />
+                            <p v-if="form.errors.business_units" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.business_units }}
+                            </p>
+                        </div>
 
-                <!-- Competency type -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.competencyType }}
-                    </label>
-                    <SearchableSelect
-                        :model-value="form.competency_type_id == null ? '' : String(form.competency_type_id)"
-                        :options="competencyTypeOptions"
-                        :placeholder="t.idp.settings.competencyTypePickHint"
-                        :invalid="!!form.errors.competency_type_id"
-                        @update:model-value="form.competency_type_id = $event === '' ? null : Number($event)"
-                    />
-                    <p v-if="form.errors.competency_type_id" class="mt-1 text-xs text-red-600">
-                        {{ form.errors.competency_type_id }}
-                    </p>
-                </div>
+                        <!-- Work locations (corporate sites of the chosen units) -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.workLocation }}
+                            </label>
 
-                <!-- Competency (filtered by type + effective period) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.competency }}
-                    </label>
-                    <SearchableSelect
-                        v-if="form.competency_type_id != null && competencyOptions.length > 0"
-                        :model-value="form.competency_id == null ? '' : String(form.competency_id)"
-                        :options="competencyOptions"
-                        :placeholder="t.idp.settings.competencyPickHint"
-                        :invalid="!!form.errors.competency_id"
-                        @update:model-value="form.competency_id = $event === '' ? null : Number($event)"
-                    />
-                    <p
-                        v-else
-                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                    >
-                        {{
-                            form.competency_type_id == null
-                                ? t.idp.settings.pickTypeFirst
-                                : t.idp.settings.noCompetenciesForType
-                        }}
-                    </p>
-                    <p v-if="form.errors.competency_id" class="mt-1 text-xs text-red-600">
-                        {{ form.errors.competency_id }}
-                    </p>
+                            <MultiSelect
+                                v-if="workLocationOptions.length"
+                                :model-value="form.work_locations"
+                                :options="workLocationOptions"
+                                :placeholder="t.idp.settings.workLocationsPickHint"
+                                :invalid="!!form.errors.work_locations"
+                                select-all
+                                :select-all-label="t.idp.settings.selectAllWorkLocations"
+                                :clear-all-label="t.idp.settings.clearAllWorkLocations"
+                                @update:model-value="form.work_locations = $event"
+                            />
+                            <p
+                                v-else
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i
+                                    class="mt-0.5 text-[10px] text-slate-300"
+                                    :class="
+                                        form.business_units.length === 0
+                                            ? 'fa-solid fa-lock'
+                                            : 'fa-solid fa-circle-info'
+                                    "
+                                />
+                                <span>
+                                    {{
+                                        form.business_units.length === 0
+                                            ? t.idp.settings.pickBusinessUnitFirst
+                                            : t.idp.settings.noneForBusinessUnits
+                                    }}
+                                </span>
+                            </p>
 
-                    <!-- A competency saved before its period ended. Kept so the
-                         link isn't lost, but it can't stay as it is. -->
-                    <p v-if="competencyInactive" class="mt-1 text-xs font-medium text-amber-600">
-                        <i class="fa-solid fa-triangle-exclamation mr-1" />
-                        {{ t.idp.settings.competencyInactiveForTraining }}
-                    </p>
-                </div>
+                            <p v-if="form.errors.work_locations" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.work_locations }}
+                            </p>
+                        </div>
+                    </div>
+                </FormSection>
 
-                <!-- Proficiency level (filtered by its own effective period) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.proficiencyLevel }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
-                    <MultiSelect
-                        v-if="proficiencyOptions.length > 0"
-                        :model-value="form.proficiency_level_ids"
-                        :options="proficiencyOptions"
-                        :placeholder="t.idp.settings.proficiencyLevelPickHint"
-                        :invalid="!!form.errors.proficiency_level_ids"
-                        select-all
-                        :select-all-label="t.idp.settings.selectAllLevels"
-                        :clear-all-label="t.idp.settings.clearAllLevels"
-                        @update:model-value="form.proficiency_level_ids = $event"
-                    />
-                    <p
-                        v-else
-                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                    >
-                        {{
-                            form.competency_type_id == null
-                                ? t.idp.settings.pickTypeFirst
-                                : typedProficiencyLevels.length === 0
-                                    ? t.idp.settings.noProficiencyLevelsForType
-                                    : t.idp.settings.noActiveProficiencyLevelsForType
-                        }}
-                    </p>
-                    <p v-if="form.errors.proficiency_level_ids" class="mt-1 text-xs text-red-600">
-                        {{ form.errors.proficiency_level_ids }}
-                    </p>
-
-                    <!-- Levels pinned earlier whose period has since ended. -->
-                    <p
-                        v-if="inactiveLevelNames.length > 0"
-                        class="mt-1 text-xs font-medium text-amber-600"
-                    >
-                        <i class="fa-solid fa-triangle-exclamation mr-1" />
-                        {{ t.idp.settings.proficiencyInactiveForTraining }}
-                        {{ inactiveLevelNames.join(', ') }}
-                    </p>
-                </div>
-
-                <hr class="border-border/60">
-
-                <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    {{ t.idp.settings.orgScope }}
-                </p>
-
-                <!-- Business unit -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.businessUnit }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
-                    <MultiSelect
-                        :model-value="form.business_units"
-                        :options="businessUnitOptions"
-                        :placeholder="t.idp.settings.businessUnitsPickHint"
-                        :invalid="!!form.errors.business_units"
-                        select-all
-                        :select-all-label="t.idp.settings.selectAllBusinessUnits"
-                        :clear-all-label="t.idp.settings.clearAllBusinessUnits"
-                        @update:model-value="form.business_units = $event"
-                    />
-                    <p v-if="form.errors.business_units" class="mt-1 text-xs text-red-600">
-                        {{ form.errors.business_units }}
-                    </p>
-                </div>
-
-                <!-- Work location (corporate locations of the chosen unit) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.workLocation }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
-                    <MultiSelect
-                        v-if="workLocationOptions.length > 0"
-                        :model-value="form.work_locations"
-                        :options="workLocationOptions"
-                        :placeholder="t.idp.settings.workLocationsPickHint"
-                        :invalid="!!form.errors.work_locations"
-                        select-all
-                        :select-all-label="t.idp.settings.selectAllWorkLocations"
-                        :clear-all-label="t.idp.settings.clearAllWorkLocations"
-                        @update:model-value="form.work_locations = $event"
-                    />
-                    <p
-                        v-else
-                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                    >
-                        {{
-                            form.business_units.length === 0
-                                ? t.idp.settings.pickBusinessUnitFirst
-                                : t.idp.settings.noneForBusinessUnits
-                        }}
-                    </p>
-                    <p v-if="form.errors.work_locations" class="mt-1 text-xs text-red-600">
-                        {{ form.errors.work_locations }}
-                    </p>
-                </div>
-
-                <!-- Active / inactive -->
-                <ActiveStateField
-                    v-model="form.is_active"
-                    :error="form.errors.is_active"
-                />
+                <!-- ========================================================
+                     4. Status — usable for new work, or retired
+                ========================================================= -->
+                <FormSection
+                    :step="4"
+                    :title="t.idp.settings.status"
+                    icon="fa-solid fa-toggle-on"
+                >
+                    <ActiveStateField v-model="form.is_active" :error="form.errors.is_active" />
+                </FormSection>
             </form>
 
             <template #footer>
@@ -878,8 +995,9 @@ function confirmDelete() {
                     type="submit"
                     form="training-form"
                     :disabled="form.processing"
-                    class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60"
+                    class="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover disabled:opacity-60"
                 >
+                    <i v-if="form.processing" class="fa-solid fa-circle-notch fa-spin text-xs" />
                     {{ t.idp.form.save }}
                 </button>
             </template>

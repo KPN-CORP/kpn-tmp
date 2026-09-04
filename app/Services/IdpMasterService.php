@@ -241,10 +241,10 @@ class IdpMasterService
             // The name itself is already in `value_en` / `value_id`, copied off
             // the training during validation.
             'training_id' => $data['training_id'] ?? null,
-            // An "Others" program free-types its competencies and level rather
-            // than pointing at masters, so the two sets are mutually exclusive.
+            // An "Others" program free-types its proficiency level rather than
+            // taking it from an implementation, so the two are mutually
+            // exclusive. Its competency is a real master either way.
             'proficiency_level_id' => $isOthers ? null : ($data['proficiency_level_id'] ?? null),
-            'custom_competency' => $isOthers ? ($data['custom_competency'] ?? null) : null,
             'custom_proficiency_level' => $isOthers ? ($data['custom_proficiency_level'] ?? null) : null,
         ];
     }
@@ -293,11 +293,7 @@ class IdpMasterService
 
         if ($type === MasterDataType::DevelopmentProgram) {
             /** @var DevelopmentProgram $master */
-            $isOthers = $this->isOthersType($data['competency_type_id'] ?? null);
-
-            $master->competencies()->sync(
-                $isOthers ? [] : $this->intList($data['related_competencies'] ?? [])
-            );
+            $master->competencies()->sync($this->intList($data['related_competencies'] ?? []));
 
             $master->grades()->delete();
             $grades = collect($data['grades'] ?? [])

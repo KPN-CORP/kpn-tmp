@@ -9,6 +9,7 @@ import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
+import FormSection from '@/Components/UI/FormSection.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
 
@@ -63,7 +64,6 @@ interface Program {
     // The training the name was taken from, or null when it was typed.
     training_id: number | null
     proficiency_level_id: number | null
-    custom_competency: string | null
     custom_proficiency_level: string | null
     grades: string[]
 }
@@ -194,8 +194,8 @@ const masterForm = useForm({
     // Program → proficiency level (options come from the master
     // implementations of the picked competencies).
     proficiency_level_id: null as number | null,
-    // "Others"-type program → free-typed competencies + proficiency level.
-    custom_competency: '' as string,
+    // "Others"-type program → free-typed proficiency level. Its competency
+    // is picked from the masters filed under "Others", like any other type.
     custom_proficiency_level: '' as string,
     // Program → corporate scope: the grades the implementation covers for the
     // chosen proficiency level (any number of them).
@@ -299,8 +299,6 @@ function openMaster(type: MasterType, item?: Program) {
         type === 'development_program' ? program?.competency_type_id ?? null : null
     masterForm.proficiency_level_id =
         type === 'development_program' ? program?.proficiency_level_id ?? null : null
-    masterForm.custom_competency =
-        type === 'development_program' ? program?.custom_competency ?? '' : ''
     masterForm.custom_proficiency_level =
         type === 'development_program' ? program?.custom_proficiency_level ?? '' : ''
     masterForm.grades =
@@ -453,9 +451,19 @@ const selectedCompetencyValue = computed<string>({
  * --------------------------------------------------------------------------
  */
 
-const nameSourceOptions = computed<{ value: NameSource; label: string }[]>(() => [
-    { value: 'program', label: t.value.idp.settings.nameSourceProgram },
-    { value: 'training', label: t.value.idp.settings.nameSourceTraining },
+const nameSourceOptions = computed<
+    { value: NameSource; label: string; icon: string }[]
+>(() => [
+    {
+        value: 'program',
+        label: t.value.idp.settings.nameSourceProgram,
+        icon: 'fa-solid fa-keyboard',
+    },
+    {
+        value: 'training',
+        label: t.value.idp.settings.nameSourceTraining,
+        icon: 'fa-solid fa-graduation-cap',
+    },
 ])
 
 // Only active trainings can name a new program. One the program was loaded
@@ -680,7 +688,6 @@ function proficiencyLevelName(id: number | null): string {
 interface TypeSnapshot {
     competencies: number[]
     proficiencyLevelId: number | null
-    customCompetency: string
     customProficiency: string
 }
 const typeCache = ref<Record<number, TypeSnapshot>>({})
@@ -694,13 +701,14 @@ function snapshotType(): TypeSnapshot {
     return {
         competencies: [...masterForm.related_competencies],
         proficiencyLevelId: masterForm.proficiency_level_id,
-        customCompetency: masterForm.custom_competency,
         customProficiency: masterForm.custom_proficiency_level,
     }
 }
 
 // React to a change of competency type: stash the outgoing type's selection,
-// then restore (or reset) the incoming type's. "Others" swaps to free typing.
+// then restore (or reset) the incoming type's. The competency itself is picked
+// from the masters under every type, "Others" included; what "Others" swaps to
+// free typing is the proficiency level.
 watch(
     () => masterForm.competency_type_id,
     (typeId, oldTypeId) => {
@@ -712,21 +720,10 @@ watch(
 
         const snap = typeId != null ? typeCache.value[typeId] : undefined
 
-        if (isOthersType.value) {
-            // Free typing — restore any previously typed text, clear masters.
-            masterForm.related_competencies = []
-            masterForm.proficiency_level_id = null
-            masterForm.custom_competency = snap?.customCompetency ?? ''
-            masterForm.custom_proficiency_level = snap?.customProficiency ?? ''
-            return
-        }
-
-        masterForm.custom_competency = ''
-        masterForm.custom_proficiency_level = ''
-
         if (typeId == null) {
             masterForm.related_competencies = []
             masterForm.proficiency_level_id = null
+            masterForm.custom_proficiency_level = ''
             return
         }
 
@@ -737,6 +734,15 @@ watch(
                 props.competencies.find((c) => c.id === id)?.competency_type_id ===
                 typeId,
         )
+
+        if (isOthersType.value) {
+            // Free-typed level — restore any previously typed text.
+            masterForm.proficiency_level_id = null
+            masterForm.custom_proficiency_level = snap?.customProficiency ?? ''
+            return
+        }
+
+        masterForm.custom_proficiency_level = ''
         masterForm.proficiency_level_id = snap?.proficiencyLevelId ?? null
     },
 )
@@ -804,7 +810,6 @@ interface ProgramRow {
     percentage: number | null
     colorIndex: number
     competencies: Competency[]
-    customCompetency: string
     proficiency: string
     grades: string[]
 }
@@ -830,7 +835,6 @@ const programRows = computed<ProgramRow[]>(() => {
             competencies: props.competencies.filter((c) =>
                 c.related_program.includes(p.id),
             ),
-            customCompetency: p.custom_competency ?? '',
             // Free-typed proficiency (Others) falls back onto the picked level.
             proficiency:
                 proficiencyLevelName(p.proficiency_level_id) ||
@@ -841,12 +845,37 @@ const programRows = computed<ProgramRow[]>(() => {
             if (!q) return true
             if (row.name.toLowerCase().includes(q)) return true
             if (row.program.value.toLowerCase().includes(q)) return true
-            if (row.customCompetency.toLowerCase().includes(q)) return true
             return row.competencies.some((c) =>
                 masterName(c).toLowerCase().includes(q),
             )
         })
 })
+
+/**
+ * --------------------------------------------------------------------------
+ * Program form: step completion
+ * --------------------------------------------------------------------------
+ * The form is a cascade (name → competency scope → placement), so each section
+ * reports whether it is settled — the step badge turns into a check.
+ */
+
+const isProgram = computed(() => masterType.value === 'development_program')
+
+const identityComplete = computed(() =>
+    nameSource.value === 'training'
+        ? masterForm.training_id != null && masterForm.value_en.trim() !== ''
+        : masterForm.value_en.trim() !== '',
+)
+
+const scopeComplete = computed(
+    () =>
+        masterForm.competency_type_id != null &&
+        masterForm.related_competencies.length > 0,
+)
+
+const placementComplete = computed(
+    () => masterForm.development_model_id !== null,
+)
 
 const programColumns = computed<Column[]>(() => [
     { key: 'name', label: t.value.idp.settings.program, sortable: true, thClass: 'w-64' },
@@ -958,14 +987,6 @@ const programColumns = computed<Column[]>(() => [
                                 {{ masterName(c) }}
                             </span>
                         </div>
-                        <span
-                            v-else-if="row.customCompetency"
-                            class="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-600"
-                            :title="t.idp.settings.othersType"
-                        >
-                            <i class="fa-solid fa-pen-nib text-[9px]" />
-                            {{ row.customCompetency }}
-                        </span>
                         <span v-else class="text-xs italic text-slate-300">
                             {{ t.idp.settings.noCompetenciesLinked }}
                         </span>
@@ -1032,6 +1053,7 @@ const programColumns = computed<Column[]>(() => [
         <Drawer
             :show="masterModal"
             :title="masterTitle()"
+            max-width="max-w-3xl"
             @close="masterModal = false"
         >
             <form
@@ -1039,408 +1061,467 @@ const programColumns = computed<Column[]>(() => [
                 class="space-y-4"
                 @submit.prevent="submitMaster"
             >
-                <!-- 1. Development program -> Competency type (scopes competencies) -->
-                <div v-if="masterType === 'development_program'">
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.competencyType }}
-                        <span class="text-red-500">*</span>
-                    </label>
-
-                    <SearchableSelect
-                        :model-value="
-                            masterForm.competency_type_id == null
-                                ? ''
-                                : String(masterForm.competency_type_id)
-                        "
-                        :options="competencyTypeOptions"
-                        :placeholder="t.idp.settings.competencyTypePickHint"
-                        @update:model-value="
-                            masterForm.competency_type_id =
-                                $event === '' ? null : Number($event)
-                        "
-                    />
-                    <p
-                        v-if="masterForm.errors.competency_type_id"
-                        class="mt-1 text-xs text-red-600"
-                    >
-                        {{ masterForm.errors.competency_type_id }}
-                    </p>
-                    <!-- <p v-else class="mt-1.5 text-xs text-slate-400">
-                        {{
-                            isOthersType
-                                ? t.idp.settings.othersTypeHint
-                                : t.idp.settings.programTypeHint
-                        }}
-                    </p> -->
-                </div>
-
-                <!-- 2. Development program -> Competency (after a type is chosen) -->
-                <div
-                    v-if="
-                        masterType === 'development_program' &&
-                        masterForm.competency_type_id != null
-                    "
+                <!-- ========================================================
+                     1. Scope — what the program develops, and for whom
+                ========================================================= -->
+                <FormSection
+                    v-if="isProgram"
+                    :step="1"
+                    :title="t.idp.settings.scope"
+                    icon="fa-solid fa-bullseye"
+                    :complete="scopeComplete"
                 >
-                    <label
-                        class="mb-1.5 flex items-center gap-2 text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.competency }}
-                    </label>
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <!-- Competency type (scopes everything below it) -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.competencyType }}
+                                <span class="text-red-500">*</span>
+                            </label>
 
-                    <!-- Real competency type → pick one of the competency masters -->
-                    <template v-if="!isOthersType">
-                        <SearchableSelect
-                            v-if="competencyOptions.length"
-                            v-model="selectedCompetencyValue"
-                            :options="competencyOptions"
-                            :placeholder="t.idp.settings.searchCompetency"
-                        />
-                        <p
-                            v-else
-                            class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                        >
-                            {{ t.idp.settings.noCompetenciesForType }}
-                        </p>
+                            <SearchableSelect
+                                :model-value="
+                                    masterForm.competency_type_id == null
+                                        ? ''
+                                        : String(masterForm.competency_type_id)
+                                "
+                                :options="competencyTypeOptions"
+                                :placeholder="t.idp.settings.selectCompetencyType"
+                                :invalid="!!masterForm.errors.competency_type_id"
+                                @update:model-value="
+                                    masterForm.competency_type_id =
+                                        $event === '' ? null : Number($event)
+                                "
+                            />
+                            <p
+                                v-if="masterForm.errors.competency_type_id"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ masterForm.errors.competency_type_id }}
+                            </p>
+                        </div>
 
-                        <p
-                            v-if="masterForm.errors.related_competencies"
-                            class="mt-1 text-xs text-red-600"
-                        >
-                            {{ masterForm.errors.related_competencies }}
-                        </p>
-                    </template>
+                        <!-- Competency — a master filed under the chosen type -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.competency }}
+                                <span class="text-red-500">*</span>
+                            </label>
 
-                    <!-- "Others" type → free-type the competencies -->
-                    <template v-else>
-                        <textarea
-                            v-model="masterForm.custom_competency"
-                            rows="3"
-                            :placeholder="t.idp.settings.customCompetencyPlaceholder"
-                            class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        />
-                        <p class="mt-1.5 text-xs text-slate-400">
-                            {{ t.idp.settings.customCompetencyHint }}
-                        </p>
-                    </template>
-                </div>
+                            <!-- Waiting on a competency type -->
+                            <p
+                                v-if="masterForm.competency_type_id == null"
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i class="fa-solid fa-lock mt-0.5 text-[10px] text-slate-300" />
+                                <span>{{ t.idp.settings.pickTypeFirst }}</span>
+                            </p>
 
-                <!-- 3. Development program -> Proficiency level (after a type is chosen) -->
-                <div
-                    v-if="
-                        masterType === 'development_program' &&
-                        masterForm.competency_type_id != null
-                    "
+                            <template v-else>
+                                <SearchableSelect
+                                    v-if="competencyOptions.length"
+                                    v-model="selectedCompetencyValue"
+                                    :options="competencyOptions"
+                                    :placeholder="t.idp.settings.searchCompetency"
+                                    :invalid="!!masterForm.errors.related_competencies"
+                                />
+                                <p
+                                    v-else
+                                    class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                                >
+                                    <i
+                                        class="fa-solid fa-circle-info mt-0.5 text-[10px] text-slate-400"
+                                    />
+                                    <span>{{ t.idp.settings.noCompetenciesForType }}</span>
+                                </p>
+
+                                <p
+                                    v-if="masterForm.errors.related_competencies"
+                                    class="mt-1 text-xs text-red-600"
+                                >
+                                    {{ masterForm.errors.related_competencies }}
+                                </p>
+                            </template>
+                        </div>
+
+                        <!-- Proficiency level (from the master implementation) -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.proficiencyLevel }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+
+                            <p
+                                v-if="masterForm.competency_type_id == null"
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i class="fa-solid fa-lock mt-0.5 text-[10px] text-slate-300" />
+                                <span>{{ t.idp.settings.pickTypeFirst }}</span>
+                            </p>
+
+                            <template v-else-if="!isOthersType">
+                                <SearchableSelect
+                                    v-if="proficiencyLevelOptions.length"
+                                    :model-value="
+                                        masterForm.proficiency_level_id == null
+                                            ? ''
+                                            : String(masterForm.proficiency_level_id)
+                                    "
+                                    :options="proficiencyLevelOptions"
+                                    :placeholder="t.idp.settings.proficiencyLevelPickHint"
+                                    :invalid="!!masterForm.errors.proficiency_level_id"
+                                    @update:model-value="
+                                        masterForm.proficiency_level_id =
+                                            $event === '' ? null : Number($event)
+                                    "
+                                />
+                                <p
+                                    v-else
+                                    class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                                >
+                                    <i
+                                        class="mt-0.5 text-[10px] text-slate-300"
+                                        :class="
+                                            masterForm.related_competencies.length
+                                                ? 'fa-solid fa-circle-info'
+                                                : 'fa-solid fa-lock'
+                                        "
+                                    />
+                                    <span>
+                                        {{
+                                            masterForm.related_competencies.length
+                                                ? t.idp.settings.noImplementedProficiency
+                                                : t.idp.settings.pickCompetencyFirst
+                                        }}
+                                    </span>
+                                </p>
+
+                                <p
+                                    v-if="masterForm.errors.proficiency_level_id"
+                                    class="mt-1 text-xs text-red-600"
+                                >
+                                    {{ masterForm.errors.proficiency_level_id }}
+                                </p>
+                            </template>
+
+                            <!-- "Others" type → free-type the proficiency level -->
+                            <input
+                                v-else
+                                v-model="masterForm.custom_proficiency_level"
+                                type="text"
+                                :placeholder="t.idp.settings.customProficiencyPlaceholder"
+                                class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            >
+                        </div>
+
+                        <!-- Grades covered by that implementation -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.grade }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+
+                            <MultiSelect
+                                v-if="gradeOptions.length"
+                                v-model="masterForm.grades"
+                                :options="gradeOptions"
+                                :placeholder="t.idp.settings.gradePickHint"
+                                :invalid="!!masterForm.errors.grades"
+                                select-all
+                                :select-all-label="t.idp.settings.selectAllGrades"
+                                :clear-all-label="t.idp.settings.clearAllGrades"
+                            />
+                            <p
+                                v-else
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i
+                                    class="mt-0.5 text-[10px] text-slate-300"
+                                    :class="
+                                        masterForm.proficiency_level_id == null
+                                            ? 'fa-solid fa-lock'
+                                            : 'fa-solid fa-circle-info'
+                                    "
+                                />
+                                <span>
+                                    {{
+                                        masterForm.proficiency_level_id == null
+                                            ? t.idp.settings.pickProficiencyFirst
+                                            : t.idp.settings.noGradesForProficiency
+                                    }}
+                                </span>
+                            </p>
+
+                            <p
+                                v-if="masterForm.errors.grades"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ masterForm.errors.grades }}
+                            </p>
+                        </div>
+                    </div>
+                </FormSection>
+
+                <!-- ========================================================
+                     2. Placement — package + development model
+                ========================================================= -->
+                <FormSection
+                    v-if="isProgram"
+                    :step="2"
+                    :title="t.idp.settings.programPlacement"
+                    icon="fa-solid fa-cubes"
+                    :complete="placementComplete"
                 >
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.proficiencyLevel }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.modelPackage }}
+                            </label>
 
-                    <!-- Real competency type → pick a level derived from competencies -->
-                    <template v-if="!isOthersType">
-                        <SearchableSelect
-                            v-if="proficiencyLevelOptions.length"
-                            :model-value="
-                                masterForm.proficiency_level_id == null
-                                    ? ''
-                                    : String(masterForm.proficiency_level_id)
-                            "
-                            :options="proficiencyLevelOptions"
-                            :placeholder="t.idp.settings.proficiencyLevelPickHint"
-                            @update:model-value="
-                                masterForm.proficiency_level_id =
-                                    $event === '' ? null : Number($event)
-                            "
-                        />
-                        <p
-                            v-else
-                            class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                        >
-                            {{
-                                masterForm.related_competencies.length
-                                    ? t.idp.settings.noImplementedProficiency
-                                    : t.idp.settings.pickCompetencyFirst
-                            }}
-                        </p>
+                            <SearchableSelect
+                                :model-value="
+                                    masterPackageId == null ? '' : String(masterPackageId)
+                                "
+                                :options="packageOptions"
+                                :placeholder="t.idp.settings.packagePickHint"
+                                @update:model-value="onProgramPackageChange($event)"
+                            />
+                        </div>
 
-                        <p
-                            v-if="masterForm.errors.proficiency_level_id"
-                            class="mt-1 text-xs text-red-600"
-                        >
-                            {{ masterForm.errors.proficiency_level_id }}
-                        </p>
-                        <p
-                            v-else-if="proficiencyLevelOptions.length"
-                            class="mt-1.5 text-xs text-slate-400"
-                        >
-                            {{ t.idp.settings.proficiencyFromImplementation }}
-                        </p>
-                    </template>
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.model }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
 
-                    <!-- "Others" type → free-type the proficiency level -->
-                    <input
-                        v-else
-                        v-model="masterForm.custom_proficiency_level"
-                        type="text"
-                        :placeholder="t.idp.settings.customProficiencyPlaceholder"
-                        class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                    >
-                </div>
+                            <SearchableSelect
+                                :model-value="
+                                    masterForm.development_model_id == null
+                                        ? ''
+                                        : String(masterForm.development_model_id)
+                                "
+                                :options="packageModelOptions"
+                                :disabled="masterPackageId == null"
+                                :invalid="!!masterForm.errors.development_model_id"
+                                :placeholder="
+                                    masterPackageId == null
+                                        ? t.idp.settings.selectPackageFirst
+                                        : t.idp.settings.selectModel
+                                "
+                                @update:model-value="
+                                    masterForm.development_model_id =
+                                        $event === '' ? null : Number($event)
+                                "
+                            />
+                            <p
+                                v-if="masterForm.errors.development_model_id"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ masterForm.errors.development_model_id }}
+                            </p>
+                        </div>
+                    </div>
+                </FormSection>
 
-                <!-- 4. Development program -> Model package (scopes the model list) -->
-                <div v-if="masterType === 'development_program'">
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.modelPackage }}
-                    </label>
-
-                    <SearchableSelect
-                        :model-value="
-                            masterPackageId == null ? '' : String(masterPackageId)
-                        "
-                        :options="packageOptions"
-                        :placeholder="t.idp.settings.packagePickHint"
-                        @update:model-value="onProgramPackageChange($event)"
-                    />
-                </div>
-
-                <!-- 4. Development program -> Development model (within package) -->
-                <div v-if="masterType === 'development_program'">
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.model }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
-
-                    <SearchableSelect
-                        :model-value="
-                            masterForm.development_model_id == null
-                                ? ''
-                                : String(masterForm.development_model_id)
-                        "
-                        :options="packageModelOptions"
-                        :disabled="masterPackageId == null"
-                        :placeholder="
-                            masterPackageId == null
-                                ? t.idp.settings.selectPackageFirst
-                                : t.idp.settings.modelPickHint
-                        "
-                        @update:model-value="
-                            masterForm.development_model_id =
-                                $event === '' ? null : Number($event)
-                        "
-                    />
-                </div>
-
-                <!-- 5. Development program -> where the name comes from -->
-                <div v-if="masterType === 'development_program'">
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.nameSource }}
-                    </label>
-
+                <!-- ========================================================
+                     3. Identity — what the program is called
+                ========================================================= -->
+                <FormSection
+                    :step="3"
+                    :title="isProgram ? t.idp.settings.programIdentity : t.idp.settings.name"
+                    icon="fa-solid fa-tag"
+                    :complete="identityComplete"
+                >
+                    <!-- Where the name comes from: typed, or a master training -->
                     <div
-                        class="inline-flex rounded-md border border-border bg-white p-0.5"
+                        v-if="isProgram"
+                        class="grid gap-2 sm:grid-cols-2"
+                        role="radiogroup"
+                        :aria-label="t.idp.settings.nameSource"
                     >
                         <button
                             v-for="option in nameSourceOptions"
                             :key="option.value"
                             type="button"
-                            class="rounded px-3 py-1.5 text-sm font-medium transition"
+                            role="radio"
+                            :aria-checked="nameSource === option.value"
+                            class="flex items-center gap-2.5 rounded-lg border p-3 text-left transition"
                             :class="
                                 nameSource === option.value
-                                    ? 'bg-primary text-white'
-                                    : 'text-slate-600 hover:bg-slate-50'
+                                    ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+                                    : 'border-border bg-white hover:border-slate-300 hover:bg-slate-50'
                             "
                             @click="nameSource = option.value"
                         >
-                            {{ option.label }}
+                            <span
+                                class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition"
+                                :class="
+                                    nameSource === option.value
+                                        ? 'border-primary'
+                                        : 'border-slate-300'
+                                "
+                            >
+                                <span
+                                    v-if="nameSource === option.value"
+                                    class="h-2 w-2 rounded-full bg-primary"
+                                />
+                            </span>
+
+                            <span
+                                class="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-800"
+                            >
+                                <i :class="option.icon" class="text-xs text-slate-400" />
+                                {{ option.label }}
+                            </span>
                         </button>
                     </div>
-                </div>
 
-                <!-- 5a. Name taken from the Master Training catalogue -->
-                <div
-                    v-if="
-                        masterType === 'development_program' &&
-                        nameSource === 'training'
-                    "
-                >
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.training }}
-                    </label>
+                    <!-- 3a. Name taken from the Master Training catalogue -->
+                    <div v-if="isProgram && nameSource === 'training'">
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                            {{ t.idp.settings.training }}
+                            <span class="text-red-500">*</span>
+                        </label>
 
-                    <SearchableSelect
-                        v-if="trainingOptions.length"
-                        v-model="selectedTrainingValue"
-                        :options="trainingOptions"
-                        :placeholder="t.idp.settings.searchTraining"
-                        :invalid="
-                            !!masterForm.errors.training_id ||
-                            !!masterForm.errors.value_en
-                        "
-                    />
-                    <p
-                        v-else
-                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                    >
-                        {{ t.idp.settings.noTrainings }}
-                    </p>
+                        <SearchableSelect
+                            v-if="trainingOptions.length"
+                            v-model="selectedTrainingValue"
+                            :options="trainingOptions"
+                            :placeholder="t.idp.settings.searchTraining"
+                            :invalid="
+                                !!masterForm.errors.training_id ||
+                                !!masterForm.errors.value_en
+                            "
+                        />
+                        <p
+                            v-else
+                            class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                        >
+                            <i class="fa-solid fa-circle-info mt-0.5 text-[10px] text-slate-400" />
+                            <span>{{ t.idp.settings.noTrainings }}</span>
+                        </p>
 
-                    <p
-                        v-if="masterForm.errors.training_id || masterForm.errors.value_en"
-                        class="mt-1 text-xs text-red-600"
-                    >
-                        {{ masterForm.errors.training_id || masterForm.errors.value_en }}
-                    </p>
-                    <p v-else class="mt-1.5 text-xs text-slate-400">
-                        {{ t.idp.settings.nameFromTrainingHint }}
-                    </p>
-                </div>
+                        <p
+                            v-if="masterForm.errors.training_id || masterForm.errors.value_en"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.training_id || masterForm.errors.value_en }}
+                        </p>
 
-                <!-- 5b. Bilingual name (English + Bahasa), grouped by language.
-                     Applies to review tools, and to a program naming itself. -->
-                <!-- English section -->
-                <div
-                    v-if="showNameInputs"
-                    class="rounded-lg border border-border bg-slate-50/60 p-4"
-                >
-                        <div class="mb-3 flex items-center gap-2">
-                            <span
-                                class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                        <!-- The name the training resolves to, in both languages -->
+                        <div
+                            v-if="masterForm.training_id !== null"
+                            class="mt-3 rounded-lg border border-border bg-slate-50/60 px-3 py-2.5"
+                        >
+                            <p
+                                class="text-[10px] font-semibold uppercase tracking-wide text-slate-400"
                             >
-                                EN
-                            </span>
-                            <span class="text-sm font-semibold text-slate-700">
+                                {{ t.idp.settings.savedName }}
+                            </p>
+                            <div class="mt-1.5 space-y-1.5">
+                                <p class="flex items-start gap-2 text-sm text-slate-700">
+                                    <span
+                                        class="mt-0.5 inline-flex shrink-0 items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                    >
+                                        EN
+                                    </span>
+                                    <span class="min-w-0 break-words">
+                                        {{ masterForm.value_en || '—' }}
+                                    </span>
+                                </p>
+                                <p class="flex items-start gap-2 text-sm text-slate-700">
+                                    <span
+                                        class="mt-0.5 inline-flex shrink-0 items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                    >
+                                        ID
+                                    </span>
+                                    <span class="min-w-0 break-words">
+                                        {{ masterForm.value_id || '—' }}
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3b. Bilingual name, typed side by side. A program name is
+                         an activity description, often a full sentence, so it wraps
+                         in a textarea instead of scrolling sideways in a one-line
+                         input. Enter is swallowed: the name is stored verbatim in
+                         lists, exports and PDFs, where a line break has no meaning. -->
+                    <div v-if="showNameInputs" class="grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label
+                                class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                            >
+                                <span
+                                    class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                >
+                                    EN
+                                </span>
                                 {{ t.idp.settings.english }}
-                            </span>
-                        </div>
-
-                        <div class="space-y-3">
-                            <div>
-                                <label
-                                    class="mb-1 block text-xs font-medium text-slate-500"
-                                >
-                                    {{ t.idp.settings.name }}
-                                </label>
-                                <input
-                                    v-model="masterForm.value_en"
-                                    class="w-full rounded-md border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                                    :class="
-                                        masterForm.errors.value_en
-                                            ? 'border-red-500'
-                                            : 'border-border'
-                                    "
-                                >
-                                <p
-                                    v-if="masterForm.errors.value_en"
-                                    class="mt-1 text-xs text-red-600"
-                                >
-                                    {{ masterForm.errors.value_en }}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Bahasa Indonesia section -->
-                    <div
-                        v-if="showNameInputs"
-                        class="rounded-lg border border-border bg-slate-50/60 p-4"
-                    >
-                        <div class="mb-3 flex items-center gap-2">
-                            <span
-                                class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                <span class="text-red-500">*</span>
+                            </label>
+                            <textarea
+                                v-model="masterForm.value_en"
+                                rows="3"
+                                :placeholder="t.idp.settings.namePlaceholderEn"
+                                class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="
+                                    masterForm.errors.value_en
+                                        ? 'border-red-500'
+                                        : 'border-border'
+                                "
+                                @keydown.enter.prevent
+                            />
+                            <p
+                                v-if="masterForm.errors.value_en"
+                                class="mt-1 text-xs text-red-600"
                             >
-                                ID
-                            </span>
-                            <span class="text-sm font-semibold text-slate-700">
-                                {{ t.idp.settings.bahasa }}
-                            </span>
+                                {{ masterForm.errors.value_en }}
+                            </p>
                         </div>
 
-                        <div class="space-y-3">
-                            <div>
-                                <label
-                                    class="mb-1 block text-xs font-medium text-slate-500"
+                        <div>
+                            <label
+                                class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                            >
+                                <span
+                                    class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
                                 >
-                                    {{ t.idp.settings.name }}
-                                </label>
-                                <input
-                                    v-model="masterForm.value_id"
-                                    class="w-full rounded-md border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                                    :class="
-                                        masterForm.errors.value_id
-                                            ? 'border-red-500'
-                                            : 'border-border'
-                                    "
-                                >
-                                <p
-                                    v-if="masterForm.errors.value_id"
-                                    class="mt-1 text-xs text-red-600"
-                                >
-                                    {{ masterForm.errors.value_id }}
-                                </p>
-                            </div>
+                                    ID
+                                </span>
+                                {{ t.idp.settings.bahasa }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+                            <textarea
+                                v-model="masterForm.value_id"
+                                rows="3"
+                                :placeholder="t.idp.settings.namePlaceholderId"
+                                class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="
+                                    masterForm.errors.value_id
+                                        ? 'border-red-500'
+                                        : 'border-border'
+                                "
+                                @keydown.enter.prevent
+                            />
+                            <p
+                                v-if="masterForm.errors.value_id"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ masterForm.errors.value_id }}
+                            </p>
                         </div>
                     </div>
-
-                <!-- 6. Development program -> Corporate scope (grades) -->
-                <div v-if="masterType === 'development_program'">
-                    <label
-                        class="mb-1.5 block text-sm font-medium text-slate-700"
-                    >
-                        {{ t.idp.settings.grade }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
-
-                    <MultiSelect
-                        v-if="gradeOptions.length"
-                        v-model="masterForm.grades"
-                        :options="gradeOptions"
-                        :placeholder="t.idp.settings.gradePickHint"
-                        select-all
-                        :select-all-label="t.idp.settings.selectAllGrades"
-                        :clear-all-label="t.idp.settings.clearAllGrades"
-                    />
-                    <p
-                        v-else
-                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                    >
-                        {{
-                            masterForm.proficiency_level_id == null
-                                ? t.idp.settings.pickProficiencyFirst
-                                : t.idp.settings.noGradesForProficiency
-                        }}
-                    </p>
-
-                    <p
-                        v-if="masterForm.errors.grades"
-                        class="mt-1 text-xs text-red-600"
-                    >
-                        {{ masterForm.errors.grades }}
-                    </p>
-                    <p
-                        v-else-if="gradeOptions.length"
-                        class="mt-1.5 text-xs text-slate-400"
-                    >
-                        {{ t.idp.settings.gradeFromImplementation }}
-                    </p>
-                </div>
+                </FormSection>
             </form>
 
             <template #footer>
@@ -1456,8 +1537,12 @@ const programColumns = computed<Column[]>(() => [
                     type="submit"
                     form="master-form"
                     :disabled="masterForm.processing"
-                    class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60"
+                    class="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover disabled:opacity-60"
                 >
+                    <i
+                        v-if="masterForm.processing"
+                        class="fa-solid fa-circle-notch fa-spin text-xs"
+                    />
                     {{ t.idp.form.save }}
                 </button>
             </template>

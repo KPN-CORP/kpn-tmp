@@ -703,6 +703,140 @@ validation rule, the toggle endpoint and the audit trail — all shared, none of
   the form unchanged adds nothing; `option()` payload carries `is_active`; `active()` /
   `inactive()` scopes split correctly.
 
+## Phase 5.10 — IDP plan form: the master-driven cascade ✅ DONE (code + runtime-verified)
+The add/edit plan drawer used to offer a hard-coded `Soft Competency / Technical Competency`
+pair, every competency, and every development program in the catalogue. All three pickers now
+narrow off the IDP master data, and the server mirrors each narrowing.
+
+- **Competency type** comes from the `competency_types` master (not a fixed pair). A plan
+  stores the type's NAME verbatim, so the option value is `name_en` like every other master
+  here. The catch-all "Others" type holds no competencies, so a plan on it **free-types** the
+  competency name — the same rule development programs follow.
+- **Competency name** is narrowed to the chosen type, and to **active** competencies only.
+  A competency is always filed under a type, so the type scopes it **strictly** (an untyped
+  competency is legacy data and belongs under no type at all).
+- **Development program** is narrowed by all three of the plan's own choices:
+  1. the **development model** the plan is filed under (`development_programs.development_model_id`);
+  2. the **competency** it builds (the `competency_development_program` pivot); and
+  3. the **competency type**.
+  The type and model scope programs **loosely** — a program with no type or no model is legacy
+  data and counts as global — because they are narrowed primarily by the competency, and
+  treating a missing value as "none" would empty the picker. A competency with **no** linked
+  programs falls back to the whole catalogue, still narrowed to the model and the type.
+- **Wire contract**: every program option carries `model_id` (in the flat
+  `options.developmentPrograms` list and in each `competencyMap` entry). The flat list is
+  deduped **per model**, not globally — a program name is unique *within* a development model,
+  so the same name may legitimately exist under two models as two different programs. In the
+  current data every one of the 36 linked competencies has programs spread across all three
+  models, so the model filter is what stops a 70-model plan from offering a 10-model program.
+- **Server mirror** (`StoreIndividualDevelopmentPlanRequest::withValidator`): the type must be
+  one of the masters; competency and review tool must be active; the competency must belong to
+  the type; the program must fit the model, the competency and the type. Every check **exempts
+  the value the plan already stores**, so deactivating a master or re-filing a program can
+  never make an unrelated edit impossible, and a name matching no master at all is left alone
+  (legacy plans hold free text).
+- **Vue** (`Components/Domain/IdpPanel.vue`): `matchesType` / `fitsType` / `fitsModel` mirror
+  the server rules; a dependent field stays **locked with an explanation** rather than showing
+  an empty dropdown; changing a parent choice drops a child that no longer fits (suppressed by
+  `loadingForm` while a row is being loaded, so editing an unrelated field never blanks what
+  the row stores); stored-but-off-list values stay selectable and are flagged amber, with
+  "deactivated" and "filed under another type" told apart. New locale key `noProgramsForModel`
+  ("this competency has programs, but none under this development model") separates that from
+  `noProgramsForCompetency`.
+
+## Phase 5.11 — Development program: "Others" picks a real competency ✅ DONE (code + runtime-verified)
+A development program on the catch-all **Others** competency type used to free-type the
+competencies it develops into a textarea (`development_programs.custom_competency`). It now
+picks a competency master filed under Others, exactly like a program on any other type — the
+competency picker no longer special-cases the type at all.
+
+- **Migration** `..._drop_custom_competency_from_development_programs_table` (reversible):
+  drops `custom_competency`. Nothing to migrate — all 357 live programs had it null/empty,
+  and every one already carries a competency link.
+- **The free-typed proficiency level stays.** `custom_proficiency_level` is untouched: Others
+  has no Master Implementation map to draw a level from, so that field is still the only way
+  to record one. `programAttributes()` keeps the "level or free text, never both" rule.
+- **`syncLinks()`** no longer blanks a program's competency pivot on Others — it syncs
+  `related_competencies` for every type.
+- **`assertProgramSelectionsUsable()`** lost its Others early-return, so an Others program
+  gets the same checks as any other: the competency must be active, and the level + grades
+  must come from an implementation. Since Others submits no `proficiency_level_id`, only the
+  competency check actually bites. The existing exemption for what the program already stores
+  is unchanged.
+- **Wire contract**: the program payload and the master validation rules drop
+  `custom_competency`. `related_competencies` stays `nullable|array|max:1` (unchanged — the
+  server has never required it for any type).
+- **Vue** `Pages/Idp/Settings.vue`: one `SearchableSelect` for the competency, scoped by type
+  and to active masters, with `*` always shown; the Others textarea, the `customCompetency`
+  snapshot/row/search plumbing, and the violet free-text chip in the program table are gone.
+  The competency-type watcher now restores the cached competency for every type and only
+  swaps the *proficiency* field on Others. Locale: `othersTypeHint` rewritten;
+  `customCompetencyPlaceholder` / `customCompetencyHint` deleted (`othersType`, used only as
+  the removed chip's tooltip, is now unused but left in place).
+- ⚠️ **Operational note**: the `Others` competency type currently has **zero** competencies,
+  so the picker shows its `noCompetenciesForType` empty state until competencies are filed
+  under it on the Competency master page.
+
+**Form declutter (same slice).** The program drawer had grown a grey explanatory line under
+almost every field plus a dashed "Summary" card restating the whole form. Both are gone:
+every per-field and per-section hint (`programTypeHint`, `othersTypeHint`,
+`proficiencyFromImplementation`, `gradeFromImplementation`, `modelPickHint`,
+`programScopeHint` / `programPlacementHint` / `programIdentityHint`, the two
+`nameSource*Hint` card blurbs and `nameFromTrainingHint`) and the summary block with its
+`summaryRows` / `selectedCompetencyName` / `selectedProficiencyName` computeds. The 15
+resulting dead keys were deleted from the `idp.settings` block in `en`/`id` — note
+`programScopeHint` and `othersTypeHint` also exist under `idp.form`, where `IdpPanel` still
+uses them, so only the settings copies went. **Kept** on purpose: the step badges and section
+icons, the required `*` / `(optional)` markers, the validation errors, and the dashed
+locked/empty-state boxes (`pickTypeFirst`, `noCompetenciesForType`,
+`noImplementedProficiency`, `pickProficiencyFirst`, `noGradesForProficiency`, `noTrainings`)
+— those explain why a field has no options, which nothing else says. The name-source radio
+cards became single-line, so they centre their contents now.
+
+## Phase 5.12 — IDP plan form: "Others" picks a master, competencies scoped by model ✅ DONE (code + runtime-verified)
+Two changes to the add/edit plan drawer, both narrowing what the pickers offer:
+
+- **The catch-all "Others" type picks a master competency**, like every other type. The
+  free-typed competency name is gone — the same move Phase 5.11 made on the development
+  program form. `is_others` is no longer shipped in `options.competencyTypes`
+  (`IdpService`), and the request's `isOthers()` early-return is gone, so Others now gets
+  the full set of cross-master checks: the competency must be active, must belong to
+  Others, and the program must fit. `CompetencyType::isOthers()` itself stays —
+  `IdpMasterService` / `Settings.vue` still use it for the free-typed proficiency level.
+- **Competency names are narrowed by the development model too**, not just the type. A
+  competency reaches its programs through the `competency_development_program` pivot, and
+  a plan is filed under exactly one development model, so a competency whose linked
+  programs all sit under *other* models is off the list — there would be nothing to pick
+  in the program field below it. A competency with **no** links at all stays on offer
+  (it is global, and the program picker then falls back to the whole catalogue — the
+  existing convention, unchanged).
+- **Development program options are unchanged** — already narrowed by model + competency +
+  type since Phase 5.10. The three predicates are now one shared `selectable()` on both
+  sides, so "the competency is offered" and "the competency has a selectable program" can
+  never disagree.
+- **Server mirror**: a new `competency_name` check in
+  `StoreIndividualDevelopmentPlanRequest::withValidator` rejects a competency with no
+  program under the chosen model, with the usual **exemption** for the value the plan
+  already stores — so an unrelated edit to an existing plan never fails because the
+  master data has since been re-filed. A name matching no master at all is still left
+  alone (legacy plans hold free text).
+- **Vue** (`IdpPanel.vue`): the Others `<input>`, its "Free text" badge and the
+  `othersTypeHint` note are gone; the competency field is always a `SearchableSelect`.
+  New empty state `noCompetenciesForModel` ("this type has competencies, but none with a
+  program under this model") separates that from `noCompetenciesForType`, and a stored
+  off-list competency is now flagged with one of **three** reasons — deactivated
+  (`inactiveMaster`), filed under another type (`typeMismatch`), or no program under this
+  model (`modelMismatch`, new). The competency-dropping watcher also keys on
+  `development_model_id`. Dead keys `freeText` / `competencyNamePlaceholder` /
+  `othersTypeHint` deleted from `idp.form` in `en`/`id`.
+- ⚠️ **Not touched**: `SingleEmployeeDevelopmentPlanImport` (the IDP Excel import) still
+  hard-codes `Soft Competency` / `Technical Competency` and only checks the master link
+  for Soft Competency. It does not follow this cascade — a separate slice.
+- ⚠️ **Operational note**: in the current local data 35 of 36 competencies are untyped and
+  all 357 programs are untyped, so only `Soft Competency` offers anything (one competency)
+  and `Others` / `Technical Competency` show their empty state until competencies are filed
+  under them on the Competency master page.
+
 ## Entity map (facecard → kpn-tmp)
 App-owned: CompetencyAssessment, DevelopmentModel, Competency, CompetencyType,
 ProficiencyLevel, KeyBehavior, DevelopmentProgram, ReviewTool, Training,

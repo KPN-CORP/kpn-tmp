@@ -12,9 +12,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * split). Program names are long free text, reading as activity descriptions,
  * so `name_en` / `name_id` are TEXT rather than short strings.
  *
- * A program on the "Others" competency type free-types its competencies and
- * proficiency level (`custom_competency` / `custom_proficiency_level`) instead
- * of linking master rows.
+ * Every program develops one competency master, picked from the competencies
+ * filed under its competency type — the catch-all "Others" type included. What
+ * a program on "Others" still free-types is its proficiency level
+ * (`custom_proficiency_level`): that type has no implementation map to draw a
+ * level from.
  *
  * The name is either typed here or taken from the Master Training catalogue.
  * `training_id` records which — it is null for a typed name — while `name_en` /
@@ -30,7 +32,6 @@ class DevelopmentProgram extends Model
         'proficiency_level_id',
         'name_en',
         'name_id',
-        'custom_competency',
         'custom_proficiency_level',
     ];
 
