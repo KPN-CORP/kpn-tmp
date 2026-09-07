@@ -630,7 +630,6 @@ function confirmDelete() {
                 <FormSection
                     :step="1"
                     :title="t.idp.settings.scope"
-                    :hint="t.idp.settings.trainingScopeHint"
                     icon="fa-solid fa-bullseye"
                     :complete="scopeComplete"
                 >
@@ -786,7 +785,6 @@ function confirmDelete() {
                 <FormSection
                     :step="2"
                     :title="t.idp.settings.trainingIdentity"
-                    :hint="t.idp.settings.trainingIdentityHint"
                     icon="fa-solid fa-tag"
                     :complete="identityComplete"
                 >
@@ -900,7 +898,6 @@ function confirmDelete() {
                 <FormSection
                     :step="3"
                     :title="t.idp.settings.orgScope"
-                    :hint="t.idp.settings.trainingOrgScopeHint"
                     icon="fa-solid fa-building"
                 >
                     <div class="grid gap-4 sm:grid-cols-2">

@@ -837,6 +837,64 @@ Two changes to the add/edit plan drawer, both narrowing what the pickers offer:
   and `Others` / `Technical Competency` show their empty state until competencies are filed
   under them on the Competency master page.
 
+## Phase 5.13 — IDP plan form: competency type scoped by the development model ✅ DONE (code + runtime-verified)
+The last field in the add/edit plan cascade that ignored the development model. Competency
+names and development programs were already narrowed by it (Phases 5.10 / 5.12), but the
+**competency type** offered every master — so a type could be picked that dead-ended on the
+very next field. It is now narrowed off the same master-development data.
+
+- **The rule**: a competency type is offered only when it holds an **active** competency that
+  reaches a **development program filed under the plan's development model** — i.e. exactly
+  when the competency picker below it would have something to show. A competency with no
+  linked programs at all stays global (the program picker then falls back to that model's
+  whole catalogue), so such a type is always offered; that is what stops the narrowing from
+  emptying the picker on legacy data.
+- **Vue** (`Components/Domain/IdpPanel.vue`): the type/model predicates (`matchesTypeName`,
+  `fitsTypeName`, `selectableFor`, `reachesModelFor`) now take the competency type as an
+  argument rather than reading `form.competency_type` — the type picker has to ask "would THIS
+  type offer anything?", which cannot be answered against the type currently selected. The
+  form-reading wrappers (`matchesType` / `fitsType` / `selectable` / `reachesModel`) are kept,
+  so every other caller is unchanged. New `typeUsable()` / `usableCompetencyTypes`, an empty
+  state (`noTypesForModel`) when no type works under this model, an amber flag
+  (`typeModelMismatch`, vs `inactiveMaster` when the master is gone) on a stored off-list
+  type, and a watcher that drops a type that no longer fits when the model changes —
+  suppressed by `loadingForm`, so opening an existing plan never blanks what it stores.
+- **Server mirror** (`StoreIndividualDevelopmentPlanRequest::withValidator`): the shared
+  closures moved above the early returns so the new check can reuse them, plus a
+  `$reachesModel` closure. The check runs right after "the type must be one of the masters"
+  and returns early, so an unusable type reports one clear error instead of cascading. It
+  **exempts the type the plan already stores**, like every other check here.
+- **Wire contract unchanged** — the front end derives this from `options.competencyNames`
+  (which already carry `competency_type`) and `competencyMap` (which already carry
+  `model_id`). `options.competencyTypes` still ships every type, which is what keeps a stored
+  off-list type labelled.
+- Verified against the local DB: a usable type + real program passes; the two types with no
+  competencies are rejected; a bogus type still reports "not one of the configured types";
+  editing a plan that stores an unusable type passes, while switching it to one is rejected;
+  and a competency linked only to model 9's programs makes its type usable under model 9 but
+  not model 8 (checked in a rolled-back transaction).
+- ⚠️ **Operational note**: with the current data (35 of 36 competencies untyped, all 357
+  programs untyped) only `Soft Competency` has a competency, so the type picker now offers
+  **just that one** until competencies are filed under `Technical Competency` / `Others` on
+  the Competency master page. `noCompetenciesForType` on the competency field is consequently
+  near-unreachable now — it only shows for a stored off-list type — but is kept.
+
+**Form declutter (same slice).** The plan drawer carried a grey explanatory line under
+several fields plus a one-line blurb in every section header. Both are gone, the same trim
+Phase 5.11 gave the development-program drawer: the four `FormSection` `:hint`s
+(`sectionAreaHint` / `sectionProgramHint` / `sectionTimelineHint` / `sectionResultHint`), the
+per-field notes (`reviewToolsHint`, `programScopeHint` / `programScopeAllHint`, `outcomeHint`,
+`evidenceRequiredHint`) and the green "ready to submit" banner (with its `readyToSubmit`
+computed). The 10 dead keys were deleted from the `idp.form` block in `en`/`id` — note
+`idp.settings.reviewToolsHint` is a different key, still used by the Review Tools page. The
+expected-outcome character counter keeps its right edge with `ml-auto` now that the hint no
+longer occupies the left half of its row. **Kept** on purpose: the step badges and section
+icons, the required `*` / `(optional)` markers, the option counters, the error summary and
+per-field errors, the amber off-list flags, the dashed locked/empty-state boxes
+(`pickTypeFirst`, `pickCompetencyFirst`, `noTypesForModel`, `noCompetencies*`, `noPrograms*`,
+`evidenceLocked`), the full-text read-back of the selected program, the duration chip, and
+the footer's "still needed" list — each says something no other element does.
+
 ## Entity map (facecard → kpn-tmp)
 App-owned: CompetencyAssessment, DevelopmentModel, Competency, CompetencyType,
 ProficiencyLevel, KeyBehavior, DevelopmentProgram, ReviewTool, Training,

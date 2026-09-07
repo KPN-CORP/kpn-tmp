@@ -73,6 +73,8 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
      * Cross-master checks the dropdowns already enforce, mirrored server-side:
      *
      *  - the competency type must be one of the `competency_types` masters;
+     *  - the competency type must hold a competency that reaches a development
+     *    program filed under the chosen development model;
      *  - the chosen competency name and review tool must be ACTIVE masters;
      *  - the competency must belong to the chosen competency type;
      *  - the competency must reach at least one development program filed
@@ -108,6 +110,68 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
                 );
 
                 return;
+            }
+
+            // A competency is always filed under a type (the master form requires
+            // one), so the type scopes it strictly — an untyped competency is
+            // legacy data and belongs under no type at all.
+            $matchesType = fn (?string $masterType) => $masterType !== null
+                && trim($masterType) !== ''
+                && strcasecmp(trim($masterType), $type) === 0;
+
+            // Development programs go the other way: an untyped program is
+            // global. They are narrowed primarily by the competency they build,
+            // and treating a missing type as "none" would reject everything.
+            $fitsType = fn (?string $masterType) => $masterType === null
+                || trim($masterType) === ''
+                || strcasecmp(trim($masterType), $type) === 0;
+
+            $modelId = $this->input('development_model_id');
+            $modelId = is_numeric($modelId) ? (int) $modelId : null;
+
+            // A program is filed under one development model (the 70-20-10
+            // split) and the plan is being added under one, so only that
+            // model's programs may fill it. A program with no model is legacy
+            // data and, like an untyped master, counts as global.
+            $fitsModel = fn (?int $programModel) => $programModel === null
+                || $modelId === null
+                || $programModel === $modelId;
+
+            // A program the plan could actually pick: filed under this plan's
+            // development model, and under this plan's competency type.
+            $selectable = fn (DevelopmentProgram $p) => $fitsModel($p->development_model_id)
+                && $fitsType($p->competencyType?->name_en);
+
+            // A competency reaches a program this plan could pick — or has no
+            // linked programs at all, which makes it global (the program picker
+            // then offers the model's whole catalogue).
+            $reachesModel = function (Competency $c) use ($selectable) {
+                $links = $c->developmentPrograms;
+
+                return $links->isEmpty() || $links->contains($selectable);
+            };
+
+            // --- the type must reach a competency usable under this model ---
+            // The type picker is narrowed by the development model too: a type
+            // holding no competency that reaches one of this model's programs
+            // dead-ends on the very next field, so it is not offered at all.
+            if ($chosenType && $type !== trim((string) $plan?->competency_type)) {
+                $typeCompetencies = Competency::with([
+                    'developmentPrograms:id,name_en,development_model_id,competency_type_id',
+                    'developmentPrograms.competencyType:id,name_en',
+                ])
+                    ->where('competency_type_id', $chosenType->id)
+                    ->active()
+                    ->get(['id', 'name_en', 'competency_type_id']);
+
+                if (! $typeCompetencies->contains($reachesModel)) {
+                    $validator->errors()->add(
+                        'competency_type',
+                        'The selected competency type has no competency with a development program filed under the chosen development model.',
+                    );
+
+                    return;
+                }
             }
 
             // --- review tool must be active ---
@@ -146,36 +210,6 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
             if ($competencies->isEmpty() || $type === '') {
                 return;
             }
-
-            // A competency is always filed under a type (the master form requires
-            // one), so the type scopes it strictly — an untyped competency is
-            // legacy data and belongs under no type at all.
-            $matchesType = fn (?string $masterType) => $masterType !== null
-                && trim($masterType) !== ''
-                && strcasecmp(trim($masterType), $type) === 0;
-
-            // Development programs go the other way: an untyped program is
-            // global. They are narrowed primarily by the competency they build,
-            // and treating a missing type as "none" would reject everything.
-            $fitsType = fn (?string $masterType) => $masterType === null
-                || trim($masterType) === ''
-                || strcasecmp(trim($masterType), $type) === 0;
-
-            $modelId = $this->input('development_model_id');
-            $modelId = is_numeric($modelId) ? (int) $modelId : null;
-
-            // A program is filed under one development model (the 70-20-10
-            // split) and the plan is being added under one, so only that
-            // model's programs may fill it. A program with no model is legacy
-            // data and, like an untyped master, counts as global.
-            $fitsModel = fn (?int $programModel) => $programModel === null
-                || $modelId === null
-                || $programModel === $modelId;
-
-            // A program the plan could actually pick: filed under this plan's
-            // development model, and under this plan's competency type.
-            $selectable = fn (DevelopmentProgram $p) => $fitsModel($p->development_model_id)
-                && $fitsType($p->competencyType?->name_en);
 
             // --- competency must belong to the chosen type ---
             $typed = $competencies->filter(fn (Competency $c) => $matchesType($c->competencyType?->name_en));

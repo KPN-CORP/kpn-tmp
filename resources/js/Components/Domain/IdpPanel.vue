@@ -174,19 +174,29 @@ function masterLabel(item: MasterOption): string {
 // the type scopes it strictly: an untyped competency is legacy data and belongs
 // under no type at all. Mirrors the server-side check in
 // StoreIndividualDevelopmentPlanRequest.
-function matchesType(item: MasterOption): boolean {
-    const type = form.competency_type.trim()
+//
+// The predicates take the type explicitly rather than reading the form, because
+// the competency-type picker itself asks them "would THIS type offer anything?"
+// — which cannot be answered against the type currently selected.
+function matchesTypeName(item: MasterOption, type: string): boolean {
     const masterType = (item.competency_type ?? '').trim()
     return type !== '' && masterType !== '' && masterType.toLowerCase() === type.toLowerCase()
+}
+
+function matchesType(item: MasterOption): boolean {
+    return matchesTypeName(item, form.competency_type.trim())
 }
 
 // Development programs are scoped the other way round: an untyped program is
 // global and fits every type. They are narrowed primarily by the competency
 // they build, and treating a missing type as "none" would empty the picker.
-function fitsType(item: MasterOption): boolean {
-    const type = form.competency_type.trim()
+function fitsTypeName(item: MasterOption, type: string): boolean {
     const masterType = (item.competency_type ?? '').trim()
     return type === '' || masterType === '' || masterType.toLowerCase() === type.toLowerCase()
+}
+
+function fitsType(item: MasterOption): boolean {
+    return fitsTypeName(item, form.competency_type.trim())
 }
 
 // A program is filed under one development model (the 70-20-10 split) and the
@@ -206,23 +216,36 @@ function linksFor(name: string): ProgramOption[] | undefined {
 }
 
 // A program the plan could actually pick: filed under this plan's development
-// model, and under this plan's competency type.
+// model, and under the given competency type.
+function selectableFor(program: ProgramOption, type: string): boolean {
+    return fitsModel(program) && fitsTypeName(program, type)
+}
+
 function selectable(program: ProgramOption): boolean {
-    return fitsModel(program) && fitsType(program)
+    return selectableFor(program, form.competency_type.trim())
 }
 
 // A competency is only worth offering when it reaches a program this plan could
 // pick — i.e. one filed under the development model the plan sits under. A
 // competency with no linked programs at all is global, so it stays on offer.
-function reachesModel(item: MasterOption): boolean {
+function reachesModelFor(item: MasterOption, type: string): boolean {
     const links = linksFor(item.value)
-    return !links?.length || links.some(selectable)
+    return !links?.length || links.some((program) => selectableFor(program, type))
 }
 
-// Competencies of the chosen type, before the development-model narrowing —
-// what tells "this type has none" apart from "none under this model".
+function reachesModel(item: MasterOption): boolean {
+    return reachesModelFor(item, form.competency_type.trim())
+}
+
+// The competencies filed under a given type, before the development-model
+// narrowing — what tells "this type has none" apart from "none under this model".
+function competenciesOfType(type: string): MasterOption[] {
+    return props.options.competencyNames.filter((item) => matchesTypeName(item, type))
+}
+
+// Competencies of the chosen type, before the development-model narrowing.
 const typedCompetencies = computed<MasterOption[]>(() =>
-    props.options.competencyNames.filter(matchesType),
+    competenciesOfType(form.competency_type.trim()),
 )
 
 // Competency names are narrowed by the competency type AND by the development
@@ -273,11 +296,45 @@ function localize(map: Record<string, string>, value: string | null): string {
     return value ? (map[value] ?? value) : ''
 }
 
-// The competency types are master data, not a fixed pair. Plans store the name
-// verbatim, so a type the master no longer lists stays selectable on a plan
-// that already uses it (same treatment the other masters get).
+// The competency types are master data, not a fixed pair. They are narrowed by
+// the development model the plan is filed under, the same way the two pickers
+// below them are: a type is only worth offering when it holds a competency that
+// reaches a development program filed under this model, since otherwise the
+// cascade dead-ends on the very next field. A type whose competencies have no
+// linked programs at all stays on offer — those are global, and the program
+// picker then falls back to the model's whole catalogue.
+function typeUsable(type: string): boolean {
+    return competenciesOfType(type).some((item) => reachesModelFor(item, type))
+}
+
+const usableCompetencyTypes = computed<MasterOption[]>(() =>
+    props.options.competencyTypes.filter((item) => typeUsable(item.value)),
+)
+
+// Plans store the type name verbatim, so a type the master no longer offers
+// stays selectable on a plan that already uses it (same treatment the other
+// masters get).
 const competencyTypeOptions = computed<Option[]>(() =>
-    toSelectOptions(props.options.competencyTypes, form.competency_type),
+    toSelectOptions(usableCompetencyTypes.value, form.competency_type),
+)
+
+// No type at all can be used under this development model — a dead end worth
+// spelling out, rather than rendering an empty control.
+const noUsableTypes = computed(
+    () => !usableCompetencyTypes.value.length && !form.competency_type,
+)
+
+// The plan stores a type the picker no longer offers. It stays selectable (the
+// server exempts it too) but is flagged, telling "the master is gone" apart
+// from "nothing under this development model".
+const typeIsAMaster = computed(() =>
+    props.options.competencyTypes.some((item) => item.value === form.competency_type),
+)
+
+const typeOffList = computed(
+    () =>
+        !!form.competency_type &&
+        !usableCompetencyTypes.value.some((item) => item.value === form.competency_type),
 )
 
 const competencyTypeLabels = computed(() => labelMap(props.options.competencyTypes))
@@ -382,10 +439,6 @@ const durationLabel = computed(() => {
 // Result evidence is only required once a realization date is set (the server
 // rule is `required_with:realization_date`), so the field reflects that.
 const evidenceRequired = computed(() => !!form.realization_date)
-
-// An item may only be submitted for approval once it has been realized, which
-// nothing in the form used to say.
-const readyToSubmit = computed(() => resultComplete.value)
 
 // Validation errors come back attached to fields spread down a scrolling
 // drawer; summarise them at the top so a failed save is never silent.
@@ -515,11 +568,21 @@ function openEdit(plan: Plan) {
     })
 }
 
-// Changing the competency type (or the development model the plan is filed
-// under) drops a competency that no longer fits; changing the competency drops
-// a program it does not build. Values loaded from an existing plan are left
-// alone (see `loadingForm`), so editing an unrelated field never silently
-// blanks what the row already stores.
+// Changing the development model drops a competency type that no longer fits
+// under it; changing the competency type (or the model) drops a competency that
+// no longer fits; changing the competency drops a program it does not build.
+// Values loaded from an existing plan are left alone (see `loadingForm`), so
+// editing an unrelated field never silently blanks what the row already stores.
+watch(
+    () => form.development_model_id,
+    () => {
+        if (loadingForm.value || !form.competency_type) return
+        if (!usableCompetencyTypes.value.some((item) => item.value === form.competency_type)) {
+            form.competency_type = ''
+        }
+    },
+)
+
 watch(
     () => [form.competency_type, form.development_model_id],
     () => {
@@ -1101,7 +1164,6 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 <FormSection
                     :step="1"
                     :title="t.idp.form.sectionArea"
-                    :hint="t.idp.form.sectionAreaHint"
                     icon="fa-solid fa-bullseye"
                     :complete="areaComplete"
                 >
@@ -1109,15 +1171,28 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                         {{ form.errors.development_model_id }}
                     </p>
 
-                    <!-- Competency type — two choices, so a segmented control
-                         rather than a dropdown: one click instead of three. -->
+                    <!-- Competency type — scoped to the development model this
+                         plan is filed under: only a type holding a competency
+                         that reaches one of this model's programs is offered. -->
                     <div>
                         <label class="mb-1.5 block text-sm font-medium text-slate-700">
                             {{ t.idp.form.type }} <span class="text-red-500">*</span>
                         </label>
+
+                        <p
+                            v-if="noUsableTypes"
+                            class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                        >
+                            <i class="fa-solid fa-circle-info mt-0.5 text-[10px] text-slate-400" />
+                            <span>{{ t.idp.form.noTypesForModel }}</span>
+                        </p>
+
                         <!-- Few types read best as one-click choices; a longer
                              master list falls back to a searchable select. -->
-                        <div v-if="competencyTypeOptions.length <= 3" class="grid gap-2 sm:grid-cols-3">
+                        <div
+                            v-else-if="competencyTypeOptions.length <= 3"
+                            class="grid gap-2 sm:grid-cols-3"
+                        >
                             <button
                                 v-for="option in competencyTypeOptions"
                                 :key="option.value"
@@ -1151,6 +1226,19 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                         />
                         <p v-if="form.errors.competency_type" class="mt-1 text-xs text-red-600">
                             {{ form.errors.competency_type }}
+                        </p>
+                        <p
+                            v-else-if="typeOffList"
+                            class="mt-1 flex items-start gap-1.5 text-xs font-medium text-amber-600"
+                        >
+                            <i class="fa-solid fa-triangle-exclamation mt-0.5 text-[10px]" />
+                            <span>
+                                {{
+                                    typeIsAMaster
+                                        ? t.idp.form.typeModelMismatch
+                                        : t.idp.form.inactiveMaster
+                                }}
+                            </span>
                         </p>
                     </div>
 
@@ -1247,7 +1335,6 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                             <i class="fa-solid fa-triangle-exclamation mt-0.5 text-[10px]" />
                             <span>{{ t.idp.form.inactiveMaster }}</span>
                         </p>
-                        <p v-else class="mt-1.5 text-xs text-slate-400">{{ t.idp.form.reviewToolsHint }}</p>
                     </div>
                 </FormSection>
 
@@ -1255,7 +1342,6 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 <FormSection
                     :step="2"
                     :title="t.idp.form.sectionProgram"
-                    :hint="t.idp.form.sectionProgramHint"
                     icon="fa-solid fa-book-open"
                     :complete="programComplete"
                 >
@@ -1323,9 +1409,6 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                         <p v-if="form.errors.development_program" class="mt-1 text-xs text-red-600">
                             {{ form.errors.development_program }}
                         </p>
-                        <p v-else-if="!programLocked" class="mt-1.5 text-xs text-slate-400">
-                            {{ programNarrowed ? t.idp.form.programScopeHint : t.idp.form.programScopeAllHint }}
-                        </p>
                     </div>
 
                     <div>
@@ -1345,13 +1428,12 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                             class="w-full resize-y rounded-lg border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                             :class="form.errors.expected_outcome ? 'border-red-500' : 'border-border'"
                         />
-                        <div class="mt-1 flex items-start justify-between gap-3">
+                        <div class="mt-1 flex items-start gap-3">
                             <p v-if="form.errors.expected_outcome" class="text-xs text-red-600">
                                 {{ form.errors.expected_outcome }}
                             </p>
-                            <p v-else class="text-xs text-slate-400">{{ t.idp.form.outcomeHint }}</p>
                             <span
-                                class="shrink-0 text-xs tabular-nums"
+                                class="ml-auto shrink-0 text-xs tabular-nums"
                                 :class="(form.expected_outcome ?? '').length >= 500 ? 'text-amber-600' : 'text-slate-400'"
                             >
                                 {{ (form.expected_outcome ?? '').length }} / 500
@@ -1364,7 +1446,6 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 <FormSection
                     :step="3"
                     :title="t.idp.form.sectionTimeline"
-                    :hint="t.idp.form.sectionTimelineHint"
                     icon="fa-solid fa-calendar-days"
                     :complete="timelineComplete"
                 >
@@ -1416,7 +1497,6 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 <FormSection
                     :step="4"
                     :title="t.idp.form.sectionResult"
-                    :hint="t.idp.form.sectionResultHint"
                     icon="fa-solid fa-circle-check"
                     :complete="resultComplete"
                 >
@@ -1470,20 +1550,9 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                                 <p v-if="form.errors.result_evidence" class="mt-1 text-xs text-red-600">
                                     {{ form.errors.result_evidence }}
                                 </p>
-                                <p v-else class="mt-1.5 text-xs text-slate-400">
-                                    {{ t.idp.form.evidenceRequiredHint }}
-                                </p>
                             </template>
                         </div>
                     </div>
-
-                    <p
-                        v-if="readyToSubmit"
-                        class="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700"
-                    >
-                        <i class="fa-solid fa-paper-plane mt-0.5 text-[10px]" />
-                        <span>{{ t.idp.form.readyToSubmit }}</span>
-                    </p>
                 </FormSection>
             </form>
 

@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import { usePage } from '@inertiajs/vue3'
 import LanguageSwitcher from '@/Components/UI/LanguageSwitcher.vue'
-import NotificationBell from '@/Components/Layout/NotificationBell.vue'
 import { useLocale } from '@/Composables/useLocale'
 
 defineEmits<{
@@ -40,9 +39,6 @@ const initials = computed(() => {
         </button>
 
         <div class="ml-auto flex min-w-0 items-center gap-3 sm:gap-5">
-            <!-- Notifications -->
-            <NotificationBell />
-
             <!-- Language switcher -->
             <LanguageSwitcher
                 align="right"

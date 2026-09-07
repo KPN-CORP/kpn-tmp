@@ -7,6 +7,7 @@ import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
+import FormSection from '@/Components/UI/FormSection.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
@@ -339,6 +340,16 @@ const implTitle = computed(() =>
 )
 
 /**
+ * The form is a cascade (competency type -> competency -> level/grades), so the
+ * scope section reports whether its two required fields are settled — the step
+ * badge turns into a check. Org scope and status are always satisfiable, so
+ * they carry a plain step number.
+ */
+const scopeComplete = computed(
+    () => implForm.competency_type_id != null && implForm.competency_id != null,
+)
+
+/**
  * --------------------------------------------------------------------------
  * Implementation table — search → ClientTable (sort + pagination)
  * --------------------------------------------------------------------------
@@ -613,159 +624,243 @@ function confirmDelete() {
              IMPLEMENTATION MODAL
         ================================================================= -->
 
-        <Drawer :show="implModal" :title="implTitle" @close="implModal = false">
+        <Drawer
+            :show="implModal"
+            :title="implTitle"
+            max-width="max-w-3xl"
+            @close="implModal = false"
+        >
             <form id="impl-form" class="space-y-4" @submit.prevent="submitImpl">
-                <!-- Competency type -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.competencyType }}
-                    </label>
-                    <SearchableSelect
-                        :model-value="implForm.competency_type_id == null ? '' : String(implForm.competency_type_id)"
-                        :options="competencyTypeOptions"
-                        :placeholder="t.idp.settings.competencyTypePickHint"
-                        :invalid="!!implForm.errors.competency_type_id"
-                        @update:model-value="implForm.competency_type_id = $event === '' ? null : Number($event)"
+                <!-- ========================================================
+                     1. Scope — which competency, at which proficiency
+                ========================================================= -->
+                <FormSection
+                    :step="1"
+                    :title="t.idp.settings.scope"
+                    icon="fa-solid fa-bullseye"
+                    :complete="scopeComplete"
+                >
+                    <div class="grid gap-4 sm:grid-cols-2">
+                        <!-- Competency type (scopes everything below it) -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.competencyType }}
+                                <span class="text-red-500">*</span>
+                            </label>
+
+                            <SearchableSelect
+                                :model-value="
+                                    implForm.competency_type_id == null
+                                        ? ''
+                                        : String(implForm.competency_type_id)
+                                "
+                                :options="competencyTypeOptions"
+                                :placeholder="t.idp.settings.selectCompetencyType"
+                                :invalid="!!implForm.errors.competency_type_id"
+                                @update:model-value="
+                                    implForm.competency_type_id =
+                                        $event === '' ? null : Number($event)
+                                "
+                            />
+                            <p
+                                v-if="implForm.errors.competency_type_id"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ implForm.errors.competency_type_id }}
+                            </p>
+                        </div>
+
+                        <!-- Competency (of that type, active only) -->
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.competency }}
+                                <span class="text-red-500">*</span>
+                            </label>
+
+                            <SearchableSelect
+                                v-if="implForm.competency_type_id != null && competencyOptions.length"
+                                :model-value="
+                                    implForm.competency_id == null
+                                        ? ''
+                                        : String(implForm.competency_id)
+                                "
+                                :options="competencyOptions"
+                                :placeholder="t.idp.settings.competencyPickHint"
+                                :invalid="!!implForm.errors.competency_id"
+                                @update:model-value="
+                                    implForm.competency_id = $event === '' ? null : Number($event)
+                                "
+                            />
+                            <p
+                                v-else
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i
+                                    class="mt-0.5 text-[10px] text-slate-300"
+                                    :class="
+                                        implForm.competency_type_id == null
+                                            ? 'fa-solid fa-lock'
+                                            : 'fa-solid fa-circle-info'
+                                    "
+                                />
+                                <span>
+                                    {{
+                                        implForm.competency_type_id == null
+                                            ? t.idp.settings.pickTypeFirst
+                                            : t.idp.settings.noCompetenciesForType
+                                    }}
+                                </span>
+                            </p>
+
+                            <p v-if="implForm.errors.competency_id" class="mt-1 text-xs text-red-600">
+                                {{ implForm.errors.competency_id }}
+                            </p>
+
+                            <!-- A competency saved before it was switched off. Kept so
+                                 the mapping isn't lost, but it can't stay as it is. -->
+                            <p
+                                v-if="competencyInactive"
+                                class="mt-1.5 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700"
+                            >
+                                <i class="fa-solid fa-triangle-exclamation mt-0.5 text-[10px]" />
+                                <span>{{ t.idp.settings.competencyInactiveForImplementation }}</span>
+                            </p>
+                        </div>
+
+                        <!-- Proficiency levels the competency offers -->
+                        <div class="sm:col-span-2">
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.proficiencyLevel }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+
+                            <MultiSelect
+                                v-if="selectedCompetency && proficiencyOptions.length"
+                                :model-value="implForm.proficiency_level_ids"
+                                :options="proficiencyOptions"
+                                :placeholder="t.idp.settings.proficiencyLevelPickHint"
+                                :invalid="!!implForm.errors.proficiency_level_ids"
+                                select-all
+                                :select-all-label="t.idp.settings.selectAllLevels"
+                                :clear-all-label="t.idp.settings.clearAllLevels"
+                                @update:model-value="implForm.proficiency_level_ids = $event"
+                            />
+                            <p
+                                v-else
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i
+                                    class="mt-0.5 text-[10px] text-slate-300"
+                                    :class="
+                                        selectedCompetency
+                                            ? 'fa-solid fa-circle-info'
+                                            : 'fa-solid fa-lock'
+                                    "
+                                />
+                                <span>
+                                    {{
+                                        !selectedCompetency
+                                            ? t.idp.settings.pickCompetencyFirst
+                                            : selectedCompetency.proficiency_level_ids.length > 0
+                                                ? t.idp.settings.noActiveProficiencyForCompetency
+                                                : t.idp.settings.noProficiencyForCompetency
+                                    }}
+                                </span>
+                            </p>
+
+                            <p
+                                v-if="implForm.errors.proficiency_level_ids"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ implForm.errors.proficiency_level_ids }}
+                            </p>
+
+                            <!-- Levels pinned earlier that have since been switched off. -->
+                            <p
+                                v-if="inactivePinnedLevelNames.length"
+                                class="mt-1.5 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700"
+                            >
+                                <i class="fa-solid fa-triangle-exclamation mt-0.5 text-[10px]" />
+                                <span>
+                                    {{ t.idp.settings.inactiveLevelsPinned }}
+                                    {{ inactivePinnedLevelNames.join(', ') }}
+                                </span>
+                            </p>
+                        </div>
+
+                        <!-- Grades (empty means every grade) -->
+                        <div class="sm:col-span-2">
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.settings.grade }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+
+                            <MultiSelect
+                                :model-value="implForm.grades"
+                                :options="gradeOptions"
+                                :placeholder="t.idp.settings.gradePickHint"
+                                :invalid="!!implForm.errors.grades"
+                                select-all
+                                :select-all-label="t.idp.settings.selectAllGrades"
+                                :clear-all-label="t.idp.settings.clearAllGrades"
+                                @update:model-value="implForm.grades = $event"
+                            />
+                            <p v-if="implForm.errors.grades" class="mt-1 text-xs text-red-600">
+                                {{ implForm.errors.grades }}
+                            </p>
+                        </div>
+                    </div>
+                </FormSection>
+
+                <!-- ========================================================
+                     2. Organization scope — who the mapping applies to
+                ========================================================= -->
+                <FormSection
+                    :step="2"
+                    :title="t.idp.settings.orgScope"
+                    icon="fa-solid fa-building"
+                >
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                            {{ t.idp.settings.businessUnit }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
+
+                        <MultiSelect
+                            :model-value="implForm.business_units"
+                            :options="businessUnitOptions"
+                            :placeholder="t.idp.settings.businessUnitsPickHint"
+                            :invalid="!!implForm.errors.business_units"
+                            select-all
+                            :select-all-label="t.idp.settings.selectAllBusinessUnits"
+                            :clear-all-label="t.idp.settings.clearAllBusinessUnits"
+                            @update:model-value="implForm.business_units = $event"
+                        />
+                        <p v-if="implForm.errors.business_units" class="mt-1 text-xs text-red-600">
+                            {{ implForm.errors.business_units }}
+                        </p>
+                    </div>
+                </FormSection>
+
+                <!-- ========================================================
+                     3. Status — applies from now on, or retired
+                ========================================================= -->
+                <FormSection
+                    :step="3"
+                    :title="t.idp.settings.status"
+                    icon="fa-solid fa-toggle-on"
+                >
+                    <ActiveStateField
+                        v-model="implForm.is_active"
+                        :error="implForm.errors.is_active"
                     />
-                    <p v-if="implForm.errors.competency_type_id" class="mt-1 text-xs text-red-600">
-                        {{ implForm.errors.competency_type_id }}
-                    </p>
-                </div>
-
-                <!-- Competency name (filtered by type) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.competency }}
-                    </label>
-                    <SearchableSelect
-                        v-if="implForm.competency_type_id != null && competencyOptions.length > 0"
-                        :model-value="implForm.competency_id == null ? '' : String(implForm.competency_id)"
-                        :options="competencyOptions"
-                        :placeholder="t.idp.settings.competencyPickHint"
-                        :invalid="!!implForm.errors.competency_id"
-                        @update:model-value="implForm.competency_id = $event === '' ? null : Number($event)"
-                    />
-                    <p
-                        v-else
-                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                    >
-                        {{
-                            implForm.competency_type_id == null
-                                ? t.idp.settings.pickTypeFirst
-                                : t.idp.settings.noCompetenciesForType
-                        }}
-                    </p>
-                    <p v-if="implForm.errors.competency_id" class="mt-1 text-xs text-red-600">
-                        {{ implForm.errors.competency_id }}
-                    </p>
-
-                    <!-- A competency saved before it was switched off. Kept so
-                         the mapping isn't lost, but it can't stay as it is. -->
-                    <p v-if="competencyInactive" class="mt-1 text-xs font-medium text-amber-600">
-                        <i class="fa-solid fa-triangle-exclamation mr-1" />
-                        {{ t.idp.settings.competencyInactiveForImplementation }}
-                    </p>
-                </div>
-
-                <!-- Proficiency levels (multi-select, scoped to the competency) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.proficiencyLevel }}
-                    </label>
-
-                    <MultiSelect
-                        v-if="selectedCompetency && proficiencyOptions.length"
-                        :model-value="implForm.proficiency_level_ids"
-                        :options="proficiencyOptions"
-                        :placeholder="t.idp.settings.proficiencyLevelPickHint"
-                        :invalid="!!implForm.errors.proficiency_level_ids"
-                        select-all
-                        :select-all-label="t.idp.settings.selectAllLevels"
-                        :clear-all-label="t.idp.settings.clearAllLevels"
-                        @update:model-value="implForm.proficiency_level_ids = $event"
-                    />
-                    <p
-                        v-else
-                        class="rounded-md border border-dashed border-border px-3 py-2 text-xs text-slate-400"
-                    >
-                        {{
-                            !selectedCompetency
-                                ? t.idp.settings.proficiencyFromCompetency
-                                : selectedCompetency.proficiency_level_ids.length > 0
-                                    ? t.idp.settings.noActiveProficiencyForCompetency
-                                    : t.idp.settings.noProficiencyForCompetency
-                        }}
-                    </p>
-                    <p v-if="implForm.errors.proficiency_level_ids" class="mt-1 text-xs text-red-600">
-                        {{ implForm.errors.proficiency_level_ids }}
-                    </p>
-
-                    <!-- Levels pinned earlier that have since been switched
-                         off. -->
-                    <p
-                        v-if="inactivePinnedLevelNames.length > 0"
-                        class="mt-1 text-xs font-medium text-amber-600"
-                    >
-                        <i class="fa-solid fa-triangle-exclamation mr-1" />
-                        {{ t.idp.settings.inactiveLevelsPinned }}
-                        {{ inactivePinnedLevelNames.join(', ') }}
-                    </p>
-                </div>
-
-                <!-- Grades (multi-select; empty means every grade) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.grade }}
-                        <span class="font-normal text-slate-400">
-                            ({{ t.idp.settings.optional }})
-                        </span>
-                    </label>
-                    <MultiSelect
-                        :model-value="implForm.grades"
-                        :options="gradeOptions"
-                        :placeholder="t.idp.settings.gradePickHint"
-                        :invalid="!!implForm.errors.grades"
-                        select-all
-                        :select-all-label="t.idp.settings.selectAllGrades"
-                        :clear-all-label="t.idp.settings.clearAllGrades"
-                        @update:model-value="implForm.grades = $event"
-                    />
-                    <p v-if="implForm.errors.grades" class="mt-1 text-xs text-red-600">
-                        {{ implForm.errors.grades }}
-                    </p>
-                </div>
-
-                <hr class="border-border/60">
-
-                <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    {{ t.idp.settings.orgScope }}
-                </p>
-
-                <!-- Business units (any number; empty = not narrowed) -->
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.idp.settings.businessUnit }}
-                    </label>
-                    <MultiSelect
-                        :model-value="implForm.business_units"
-                        :options="businessUnitOptions"
-                        :placeholder="t.idp.settings.businessUnitsPickHint"
-                        :invalid="!!implForm.errors.business_units"
-                        select-all
-                        :select-all-label="t.idp.settings.selectAllBusinessUnits"
-                        :clear-all-label="t.idp.settings.clearAllBusinessUnits"
-                        @update:model-value="implForm.business_units = $event"
-                    />
-                    <p v-if="implForm.errors.business_units" class="mt-1 text-xs text-red-600">
-                        {{ implForm.errors.business_units }}
-                    </p>
-                </div>
-
-                <!-- Active / inactive -->
-                <ActiveStateField
-                    v-model="implForm.is_active"
-                    :error="implForm.errors.is_active"
-                />
+                </FormSection>
             </form>
 
             <template #footer>
