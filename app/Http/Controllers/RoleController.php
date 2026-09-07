@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\BusinessUnit;
 use App\Models\Employee;
 use App\Models\Permission;
 use App\Models\Role;
@@ -79,14 +80,20 @@ class RoleController extends Controller
      */
     private function scopeOptions(): array
     {
+        // Business units come from the corporate master, so a role can be
+        // scoped to a unit before anyone is filed under it. Company and
+        // location have no master of their own, so they stay derived from the
+        // employee table.
+        $businessUnits = BusinessUnit::names();
+
         try {
             return [
-                'businessUnits' => Employee::whereNotNull('group_company')->distinct()->orderBy('group_company')->pluck('group_company')->all(),
+                'businessUnits' => $businessUnits,
                 'companies' => Employee::whereNotNull('company_name')->distinct()->orderBy('company_name')->pluck('company_name')->all(),
                 'locations' => Employee::whereNotNull('office_area')->distinct()->orderBy('office_area')->pluck('office_area')->all(),
             ];
         } catch (\Throwable $e) {
-            return ['businessUnits' => [], 'companies' => [], 'locations' => []];
+            return ['businessUnits' => $businessUnits, 'companies' => [], 'locations' => []];
         }
     }
 

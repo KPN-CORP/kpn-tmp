@@ -6,6 +6,7 @@ use App\Exports\EmployeeExport;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Resources\EmployeeResource;
 use App\Jobs\GenerateFacecardZip;
+use App\Models\BusinessUnit;
 use App\Models\CompetencyAssessment;
 use App\Models\Employee;
 use App\Models\FormalEducation;
@@ -408,8 +409,11 @@ class EmployeeController extends Controller
             ->pluck($column)
             ->values();
 
+        // The business units come from the corporate master, not from the
+        // employee set: a unit exists whether or not anyone is filed under it
+        // yet. Every other option here stays derived from the visible rows.
         return [
-            'businessUnits' => $pluckDistinct('group_company'),
+            'businessUnits' => collect(BusinessUnit::names()),
             'jobLevels' => $pluckDistinct('job_level'),
             'designations' => $pluckDistinct('designation_name'),
         ];

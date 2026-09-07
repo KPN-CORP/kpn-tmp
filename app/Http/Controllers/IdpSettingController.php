@@ -7,8 +7,11 @@ use App\Http\Requests\StoreDevelopmentModelPackageRequest;
 use App\Http\Requests\StoreDevelopmentModelRequest;
 use App\Http\Requests\UpdateDevelopmentModelPackageRequest;
 use App\Http\Requests\UpdateDevelopmentModelRequest;
+use App\Models\BusinessUnit;
 use App\Models\Competency;
 use App\Models\CompetencyImplementation;
+use App\Models\CompetencyKeyBehavior;
+use App\Models\CompetencyProficiencyLevel;
 use App\Models\CompetencyType;
 use App\Models\DevelopmentModel;
 use App\Models\DevelopmentModelPackage;
@@ -17,6 +20,7 @@ use App\Models\Employee;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\KeyBehavior;
 use App\Models\ProficiencyLevel;
+use App\Models\SubCompetency;
 use App\Models\Training;
 use App\Services\IdpMasterService;
 use App\Services\MasterStatusAudit;
@@ -47,7 +51,7 @@ class IdpSettingController extends Controller
             ->orderBy('name_en')
             ->get();
 
-        $competencies = Competency::with(['proficiencyLevels:id', 'developmentPrograms:id,name_en'])
+        $competencies = Competency::with(['masterProficiencyLevels:id', 'developmentPrograms:id,name_en'])
             ->orderBy('name_en')
             ->get()
             ->map(fn (Competency $c) => $this->option($c) + [
@@ -56,7 +60,7 @@ class IdpSettingController extends Controller
                 'competency_type_id' => $c->competency_type_id,
                 // The program form derives its proficiency options from the
                 // levels of the competencies picked for the program.
-                'proficiency_level_ids' => $c->proficiencyLevels->pluck('id')->all(),
+                'proficiency_level_ids' => $c->masterProficiencyLevels->pluck('id')->all(),
                 'related_program' => $c->developmentPrograms->pluck('id')->values(),
                 'linked_programs' => $c->developmentPrograms->pluck('name_en')->values(),
             ]);
@@ -161,11 +165,14 @@ class IdpSettingController extends Controller
      * the employee master calls `group_company`). The location itself is the
      * `area` — the named site, e.g. "Head Office - Jakarta".
      *
-     * The business-unit list is the union of the two sources, so a unit that
-     * has employees but no location rows (or the reverse) still shows up; its
-     * location dropdown is then simply empty. Both reads are guarded, so an
-     * unreachable kpncorp leaves the screen working with no options rather than
-     * 500ing.
+     * The business-unit list is the corporate master ({@see BusinessUnit}), so
+     * a unit with no location rows (or no employees) still shows up; its
+     * location dropdown is then simply empty. Location groups are resolved onto
+     * a master unit by name, which is what folds the corporate tables'
+     * "KPN Plantations" into the master's "Plantations" - that pair used to
+     * appear as two separate business units. A group naming no master unit is
+     * dropped. Both reads are guarded, so an unreachable kpncorp leaves the
+     * screen working with no options rather than 500ing.
      *
      * @return array{businessUnits: list<string>, byBusinessUnit: array<string, list<string>>}
      */
@@ -173,6 +180,8 @@ class IdpSettingController extends Controller
     {
         $clean = fn ($v) => trim((string) $v);
         $isReal = fn ($v) => $v !== '' && $v !== '-';
+
+        $businessUnits = BusinessUnit::names();
 
         $byBusinessUnit = [];
         try {
@@ -183,10 +192,10 @@ class IdpSettingController extends Controller
                 ->distinct()
                 ->orderBy('area')
                 ->get()
-                ->each(function ($row) use (&$byBusinessUnit, $clean, $isReal) {
-                    $bu = $clean($row->company_name);
+                ->each(function ($row) use (&$byBusinessUnit, $businessUnits, $clean, $isReal) {
+                    $bu = BusinessUnit::resolveName($clean($row->company_name), $businessUnits);
                     $area = $clean($row->area);
-                    if ($isReal($bu) && $isReal($area)) {
+                    if ($bu !== null && $isReal($area)) {
                         $byBusinessUnit[$bu][$area] = true;
                     }
                 });
@@ -196,19 +205,6 @@ class IdpSettingController extends Controller
         $byBusinessUnit = collect($byBusinessUnit)
             ->map(fn (array $areas) => collect(array_keys($areas))->sort()->values()->all())
             ->all();
-
-        // Business units the employee master knows about, so the list matches
-        // what the rest of the app calls a business unit.
-        $employeeUnits = [];
-        try {
-            $employeeUnits = Employee::whereNotNull('group_company')
-                ->distinct()->pluck('group_company')
-                ->map($clean)->filter($isReal)->values()->all();
-        } catch (\Throwable) {
-        }
-
-        $businessUnits = collect([...array_keys($byBusinessUnit), ...$employeeUnits])
-            ->unique()->sort()->values()->all();
 
         return ['businessUnits' => $businessUnits, 'byBusinessUnit' => $byBusinessUnit];
     }
@@ -230,36 +226,149 @@ class IdpSettingController extends Controller
     /**
      * Competency management (competencies + competency types), on its own page.
      */
+    /**
+     * Master Data -> Competency Type. The types live on their own screen: they
+     * are edited on their own, and the competency screen only *reads* them (to
+     * scope its type filter and its proficiency levels).
+     */
+    public function competencyType(): Response
+    {
+        return Inertia::render('MasterData/CompetencyType', [
+            'competencyTypes' => $this->competencyTypesData(),
+            // The corporate business-unit master — the only source for what
+            // units exist (see App\Models\BusinessUnit).
+            'businessUnits' => BusinessUnit::names(),
+        ]);
+    }
+
+    /**
+     * Master Data -> Competency. Competency types still travel along, read-only:
+     * they name the type column, drive the type filter, and scope the
+     * proficiency levels the form may pin.
+     */
     public function competency(): Response
     {
-        $competencies = Competency::with(['proficiencyLevels:id', 'keyBehaviors:id'])
+        $competencies = Competency::with(['proficiencyLevels.keyBehaviors', 'subCompetencies'])
             ->orderBy('name_en')
             ->get()
-            ->map(fn (Competency $c) => $this->option($c) + [
-                'description_en' => $c->description_en,
-                'description_id' => $c->description_id,
-                'competency_type_id' => $c->competency_type_id,
-                'proficiency_level_ids' => $c->proficiencyLevels->pluck('id')->all(),
-                'key_behavior_ids' => $c->keyBehaviors->pluck('id')->all(),
-            ]);
+            ->map(fn (Competency $c) => $this->competencyPayload($c));
 
-        return Inertia::render('Idp/Competency', [
+        return Inertia::render('MasterData/Competency', [
             'competencies' => $competencies,
             'competencyTypes' => $this->competencyTypesData(),
-            // Levels carry the type they are filed under so the competency form
-            // can scope its level options to the chosen competency type
-            // (a level with no type is global and fits every type).
-            'proficiencyLevels' => ProficiencyLevel::orderBy('name_en')->get()
-                ->map(fn (ProficiencyLevel $pl) => $this->option($pl) + [
-                    'competency_type_id' => $pl->competency_type_id,
-                ]),
-            // Key behaviors carry their owning proficiency_level_id so the
-            // competency form can scope the behavior dropdown to the chosen level.
-            'keyBehaviors' => KeyBehavior::orderBy('name_en')->get()
-                ->map(fn (KeyBehavior $kb) => $this->option($kb) + [
-                    'proficiency_level_id' => $kb->proficiency_level_id,
-                ]),
         ]);
+    }
+
+    /**
+     * The add/edit form for one competency, on its own page: the form outgrew a
+     * drawer (a type, a bilingual name + description, any number of proficiency
+     * levels each with their own key behaviors, and the active flag).
+     */
+    public function createCompetency(): Response
+    {
+        return $this->competencyForm(null);
+    }
+
+    public function editCompetency(int $id): Response
+    {
+        return $this->competencyForm(
+            Competency::with(['proficiencyLevels.keyBehaviors', 'subCompetencies'])->findOrFail($id)
+        );
+    }
+
+    private function competencyForm(?Competency $competency): Response
+    {
+        return Inertia::render('MasterData/CompetencyForm', [
+            // null when adding. The payload is the same shape the list ships,
+            // so both screens read one interface.
+            'competency' => $competency === null ? null : $this->competencyPayload($competency),
+            'competencyTypes' => $this->competencyTypesData(),
+        ]);
+    }
+
+    /**
+     * The activate / deactivate trail for one rung of a competency's ladder,
+     * newest first. Read from the audit log on disk, like every other status
+     * history here.
+     */
+    public function competencyLevelStatusHistory(CompetencyProficiencyLevel $level): JsonResponse
+    {
+        return response()->json([
+            'history' => $this->audit->for(MasterStatusAudit::COMPETENCY_LEVEL, $level->id),
+        ]);
+    }
+
+    public function storeCompetency(Request $request): RedirectResponse
+    {
+        $type = MasterDataType::CompetencyName;
+        // The route fixes the kind, so the form does not post it.
+        $request->merge(['type' => $type->value]);
+
+        $this->masters->create($type, $this->validateMaster($request, $type));
+
+        return redirect()->route('master_data.competency')
+            ->with('success', 'Competency added successfully.');
+    }
+
+    public function updateCompetency(Request $request, int $id): RedirectResponse
+    {
+        $type = MasterDataType::CompetencyName;
+        $request->merge(['type' => $type->value]);
+
+        $competency = $type->query()->findOrFail($id);
+
+        $this->masters->update(
+            $type,
+            $competency,
+            $this->validateMaster($request, $type, $competency),
+            array_keys($request->all()),
+        );
+
+        return redirect()->route('master_data.competency')
+            ->with('success', 'Competency updated successfully.');
+    }
+
+    /**
+     * One competency as both the list and the form read it.
+     *
+     * @return array<string, mixed>
+     */
+    private function competencyPayload(Competency $competency): array
+    {
+        return $this->option($competency) + [
+            'description_en' => $competency->description_en,
+            'description_id' => $competency->description_id,
+            'competency_type_id' => $competency->competency_type_id,
+            // The competency's own proficiency ladder, each rung with the key
+            // behaviors observed at it. Field names are the DB's own, like the
+            // sub-competencies: nested rows, no legacy wire contract to keep.
+            'proficiency_levels' => $competency->proficiencyLevels->map(
+                fn (CompetencyProficiencyLevel $level) => [
+                    'id' => $level->id,
+                    'name_en' => $level->name_en,
+                    'name_id' => $level->name_id,
+                    'sequence' => $level->sequence,
+                    'is_active' => (bool) $level->is_active,
+                    'key_behaviors' => $level->keyBehaviors->map(
+                        fn (CompetencyKeyBehavior $behavior) => [
+                            'id' => $behavior->id,
+                            'name_en' => $behavior->name_en,
+                            'name_id' => $behavior->name_id,
+                        ]
+                    )->all(),
+                ]
+            )->all(),
+            // Nested rows, in the DB's own field names: there is no legacy
+            // single-table wire contract to keep here, unlike the masters'
+            // value_en / value_id.
+            'sub_competencies' => $competency->subCompetencies->map(fn (SubCompetency $sc) => [
+                'id' => $sc->id,
+                'name_en' => $sc->name_en,
+                'name_id' => $sc->name_id,
+                'description_en' => $sc->description_en,
+                'description_id' => $sc->description_id,
+            ])->all(),
+        ];
     }
 
     /**
@@ -288,12 +397,12 @@ class IdpSettingController extends Controller
 
         // Competencies carry their type + available proficiency levels so the
         // form can cascade (type -> competency -> proficiency levels).
-        $competencies = Competency::with('proficiencyLevels:id')
+        $competencies = Competency::with('masterProficiencyLevels:id')
             ->orderBy('name_en')
             ->get()
             ->map(fn (Competency $c) => $this->option($c) + [
                 'competency_type_id' => $c->competency_type_id,
-                'proficiency_level_ids' => $c->proficiencyLevels->pluck('id')->all(),
+                'proficiency_level_ids' => $c->masterProficiencyLevels->pluck('id')->all(),
             ]);
 
         $hierarchy = $this->orgHierarchyData();
@@ -416,12 +525,14 @@ class IdpSettingController extends Controller
     private function competencyTypesData(): Collection
     {
         return CompetencyType::withCount('competencies')
+            ->with('businessUnits')
             ->orderBy('name_en')
             ->get()
             ->map(fn (CompetencyType $ct) => $this->option($ct) + [
                 'description_en' => $ct->description_en,
                 'description_id' => $ct->description_id,
                 'competencies_count' => (int) $ct->competencies_count,
+                'business_units' => $ct->businessUnits->pluck('business_unit')->all(),
             ]);
     }
 
@@ -471,16 +582,20 @@ class IdpSettingController extends Controller
      * can cascade purely client-side (business unit -> job family / function ->
      * position):
      *
-     *  - businessUnits         the union of every business-unit grouping value
-     *    across the source tables (employees, departments, designations).
+     *  - businessUnits         the corporate business-unit master
+     *    ({@see BusinessUnit}).
      *  - jobFamiliesByBu       bu => distinct employee `company_name`.
      *  - functionsByBu         bu => distinct `departments.department_name`.
      *  - positionsByBuFunction bu => function => distinct
      *    `designations.designation_name`.
      *
-     * The business unit is the employee `group_company` (matched to
-     * `departments`/`designations.parent_company_id`). Everything is read
-     * defensively so an unreachable kpncorp never 500s the screen.
+     * Each source spells the unit its own way - the employee `group_company`,
+     * `departments`/`designations.parent_company_id` - so every grouping value
+     * is resolved onto a master unit name before it becomes a key, folding e.g.
+     * "KPN Plantations" into "Plantations". A value naming no master unit (e.g.
+     * "KPN Sugar", which the master does not carry) is dropped, since nothing
+     * could ever select it. Everything is read defensively so an unreachable
+     * kpncorp never 500s the screen.
      *
      * @return array{businessUnits: list<string>, jobFamiliesByBu: array<string, list<string>>, functionsByBu: array<string, list<string>>, positionsByBuFunction: array<string, array<string, list<string>>>}
      */
@@ -488,6 +603,10 @@ class IdpSettingController extends Controller
     {
         $clean = fn ($v) => trim((string) $v);
         $isReal = fn ($v) => $v !== '' && $v !== '-';
+
+        $businessUnits = BusinessUnit::names();
+        // Every source's grouping value maps onto one master unit (or nothing).
+        $unit = fn ($v) => BusinessUnit::resolveName($clean($v), $businessUnits);
 
         // bu => [company_name] from the employee master.
         $jobFamiliesByBu = [];
@@ -499,10 +618,10 @@ class IdpSettingController extends Controller
                 ->distinct()
                 ->orderBy('company_name')
                 ->get()
-                ->each(function ($row) use (&$jobFamiliesByBu, $clean, $isReal) {
-                    $bu = $clean($row->group_company);
+                ->each(function ($row) use (&$jobFamiliesByBu, $unit, $clean, $isReal) {
+                    $bu = $unit($row->group_company);
                     $family = $clean($row->company_name);
-                    if ($isReal($bu) && $isReal($family)) {
+                    if ($bu !== null && $isReal($family)) {
                         $jobFamiliesByBu[$bu][$family] = true;
                     }
                 });
@@ -520,10 +639,10 @@ class IdpSettingController extends Controller
                 ->distinct()
                 ->orderBy('department_name')
                 ->get()
-                ->each(function ($row) use (&$functionsByBu, $clean, $isReal) {
-                    $bu = $clean($row->parent_company_id);
+                ->each(function ($row) use (&$functionsByBu, $unit, $clean, $isReal) {
+                    $bu = $unit($row->parent_company_id);
                     $fn = $clean($row->department_name);
-                    if ($isReal($bu) && $isReal($fn)) {
+                    if ($bu !== null && $isReal($fn)) {
                         $functionsByBu[$bu][$fn] = true;
                     }
                 });
@@ -542,11 +661,11 @@ class IdpSettingController extends Controller
                 ->distinct()
                 ->orderBy('designation_name')
                 ->get()
-                ->each(function ($row) use (&$positionsByBuFunction, $clean, $isReal) {
-                    $bu = $clean($row->parent_company_id);
+                ->each(function ($row) use (&$positionsByBuFunction, $unit, $clean, $isReal) {
+                    $bu = $unit($row->parent_company_id);
                     $fn = $clean($row->department_name);
                     $pos = $clean($row->designation_name);
-                    if ($isReal($bu) && $isReal($fn) && $isReal($pos)) {
+                    if ($bu !== null && $isReal($fn) && $isReal($pos)) {
                         $positionsByBuFunction[$bu][$fn][$pos] = true;
                     }
                 });
@@ -561,13 +680,6 @@ class IdpSettingController extends Controller
         $positionsByBuFunction = collect($positionsByBuFunction)
             ->map(fn ($byFn) => collect($byFn)->map($toList)->all())
             ->all();
-
-        // The business-unit list is the union of every grouping value seen.
-        $businessUnits = collect([
-            ...array_keys($jobFamiliesByBu),
-            ...array_keys($functionsByBu),
-            ...array_keys($positionsByBuFunction),
-        ])->unique()->sort()->values()->all();
 
         return [
             'businessUnits' => $businessUnits,
@@ -830,12 +942,22 @@ class IdpSettingController extends Controller
         $isProgram = $type === MasterDataType::DevelopmentProgram;
         $isCompetency = $type === MasterDataType::CompetencyName;
         $isTraining = $type === MasterDataType::Training;
+        $isCompetencyType = $type === MasterDataType::CompetencyType;
 
         // A program whose name comes from Master Training carries the training
         // rather than the text. Resolving it up front means the name rules -
         // required, length, uniqueness per model - all police the real value.
         if ($isProgram) {
             $this->applyTrainingName($request);
+        }
+
+        // A sub-competency row the user added and never touched is not an
+        // error, it is a row they changed their mind about - so it goes before
+        // the rules see it. A row with anything at all in it stays and has to
+        // name itself.
+        if ($isCompetency) {
+            $this->dropUntouchedSubCompetencies($request);
+            $this->dropUntouchedProficiencyLevels($request);
         }
 
         $uniqueName = Rule::unique($type->table(), 'name_en')->ignore($master?->id);
@@ -898,6 +1020,29 @@ class IdpSettingController extends Controller
             'key_behavior_ids.*' => ['integer', 'exists:key_behaviors,id'],
             'related_programs' => ['nullable', 'array'],
             'related_programs.*' => ['integer', 'exists:development_programs,id'],
+            // A competency's sub-competencies, edited inline as rows. An `id`
+            // means "update that row"; it is checked against the competency's
+            // own rows in the service, so a foreign id simply creates instead.
+            'sub_competencies' => ['nullable', 'array'],
+            'sub_competencies.*.id' => ['nullable', 'integer'],
+            'sub_competencies.*.name_en' => ['required', 'string', 'max:255'],
+            'sub_competencies.*.name_id' => ['nullable', 'string', 'max:255'],
+            'sub_competencies.*.description_en' => ['nullable', 'string'],
+            'sub_competencies.*.description_id' => ['nullable', 'string'],
+            // A competency's own proficiency ladder, typed in as rows, each
+            // with its own key behaviors. As with the sub-competencies, an
+            // `id` means "update that row" and is checked against the
+            // competency's own rows in the service.
+            'proficiency_levels' => ['nullable', 'array'],
+            'proficiency_levels.*.id' => ['nullable', 'integer'],
+            'proficiency_levels.*.name_en' => ['required', 'string', 'max:255'],
+            'proficiency_levels.*.name_id' => ['nullable', 'string', 'max:255'],
+            'proficiency_levels.*.sequence' => ['nullable', 'integer', 'min:1', 'max:999'],
+            'proficiency_levels.*.is_active' => ['nullable', 'boolean'],
+            'proficiency_levels.*.key_behaviors' => ['nullable', 'array'],
+            'proficiency_levels.*.key_behaviors.*.id' => ['nullable', 'integer'],
+            'proficiency_levels.*.key_behaviors.*.name_en' => ['required', 'string', 'max:255'],
+            'proficiency_levels.*.key_behaviors.*.name_id' => ['nullable', 'string', 'max:255'],
             // A development program develops exactly one competency. It stays
             // a list on the wire because the link is a pivot — a competency
             // reaches many programs, and the competency screen edits that side.
@@ -909,13 +1054,33 @@ class IdpSettingController extends Controller
             // stored as the raw string.
             'grades' => ['nullable', 'array'],
             'grades.*' => ['string', 'max:255'],
-            // A training's corporate scope: any number of business units and,
-            // under them, any number of work locations. Both are raw kpncorp
-            // strings. A location belongs to a unit, so it can't stand alone.
-            'business_units' => ['nullable', 'array', 'required_with:work_locations'],
+            // Corporate scope, as raw kpncorp business-unit names. A
+            // competency type must name at least one unit — it is what says
+            // where the type applies. A training's units are optional, but a
+            // work location belongs to a unit, so it can't stand alone.
+            'business_units' => [
+                $isCompetencyType ? 'required' : 'nullable',
+                'array', 'required_with:work_locations',
+            ],
             'business_units.*' => ['string', 'max:255'],
             'work_locations' => ['nullable', 'array'],
             'work_locations.*' => ['string', 'max:255'],
+        ], [
+            // The generated messages would read "The sub_competencies.0.name_en
+            // field is required", which names the wire path rather than the
+            // field. These are shown per row, so they say what is missing.
+            'sub_competencies.*.name_en.required' => 'Every sub competency needs an English name.',
+            'sub_competencies.*.name_en.max' => 'A sub competency name may not be longer than 255 characters.',
+            'sub_competencies.*.name_id.max' => 'A sub competency name may not be longer than 255 characters.',
+            'proficiency_levels.*.name_en.required' => 'Every proficiency level needs an English name.',
+            'proficiency_levels.*.sequence.min' => 'A proficiency level sequence starts at 1.',
+            'proficiency_levels.*.sequence.max' => 'A proficiency level sequence may not go past 999.',
+            'proficiency_levels.*.sequence.integer' => 'A proficiency level sequence must be a whole number.',
+            'proficiency_levels.*.name_en.max' => 'A proficiency level name may not be longer than 255 characters.',
+            'proficiency_levels.*.name_id.max' => 'A proficiency level name may not be longer than 255 characters.',
+            'proficiency_levels.*.key_behaviors.*.name_en.required' => 'Every key behavior needs an English name.',
+            'proficiency_levels.*.key_behaviors.*.name_en.max' => 'A key behavior name may not be longer than 255 characters.',
+            'proficiency_levels.*.key_behaviors.*.name_id.max' => 'A key behavior name may not be longer than 255 characters.',
         ]);
 
         // A competency's proficiency levels have to come from its own type. A
@@ -936,6 +1101,11 @@ class IdpSettingController extends Controller
             $this->assertLevelsActiveForCompetency($data, $master);
         }
 
+        if ($isCompetency) {
+            $this->assertSubCompetencyNamesUnique($data);
+            $this->assertProficiencyLadderConsistent($data);
+        }
+
         // A program reaches its masters through the implementation map, so its
         // competencies have to still be usable and its level + grades have to
         // come from an implementation of those competencies.
@@ -948,6 +1118,139 @@ class IdpSettingController extends Controller
         }
 
         return $data;
+    }
+
+    /**
+     * Drop the sub-competency rows that carry nothing at all - no name in
+     * either language, no description in either.
+     *
+     * The row keys are deliberately NOT re-indexed: a validation error comes
+     * back keyed by position (sub_competencies.2.name_en), and the form still
+     * has the blank row on screen, so renumbering would pin an error to the
+     * wrong row.
+     */
+    private function dropUntouchedSubCompetencies(Request $request): void
+    {
+        if (! $request->has('sub_competencies')) {
+            return;
+        }
+
+        $fields = ['name_en', 'name_id', 'description_en', 'description_id'];
+
+        $rows = collect((array) $request->input('sub_competencies'))
+            ->map(fn ($row) => (array) $row)
+            ->reject(fn (array $row) => collect($fields)->every(
+                fn (string $field) => trim((string) ($row[$field] ?? '')) === ''
+            ))
+            ->all();
+
+        $request->merge(['sub_competencies' => $rows]);
+    }
+
+    /**
+     * Drop the ladder rows that carry nothing at all - no name in either
+     * language and no key behavior with a name - plus, inside the rows that
+     * stay, the key behaviors that are entirely blank.
+     *
+     * Same reasoning as the sub-competencies: a rung the user added and never
+     * filled in is not an error. Keys are deliberately NOT re-indexed, so a
+     * validation error stays pinned to the row it came from.
+     */
+    private function dropUntouchedProficiencyLevels(Request $request): void
+    {
+        if (! $request->has('proficiency_levels')) {
+            return;
+        }
+
+        $named = fn (array $row) => trim((string) ($row['name_en'] ?? '')) !== ''
+            || trim((string) ($row['name_id'] ?? '')) !== '';
+
+        $rows = collect((array) $request->input('proficiency_levels'))
+            ->map(function ($row) use ($named) {
+                $row = (array) $row;
+
+                $row['key_behaviors'] = collect((array) ($row['key_behaviors'] ?? []))
+                    ->map(fn ($behavior) => (array) $behavior)
+                    ->filter($named)
+                    ->all();
+
+                return $row;
+            })
+            ->filter(fn (array $row) => $named($row) || $row['key_behaviors'] !== [])
+            ->all();
+
+        $request->merge(['proficiency_levels' => $rows]);
+    }
+
+    /**
+     * Two rungs may not share a name or a sequence number inside one
+     * competency, and two behaviors may not share a name inside one rung - the
+     * tables enforce the names, so a duplicate has to be reported as a field
+     * message rather than a database error. The sequence has no unique index
+     * (swapping two numbers in one save would collide with it), so it is
+     * policed only here.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function assertProficiencyLadderConsistent(array $data): void
+    {
+        $rows = collect($data['proficiency_levels'] ?? [])->map(fn ($row) => (array) $row);
+
+        $names = $rows
+            ->map(fn (array $row) => strtolower(trim((string) ($row['name_en'] ?? ''))))
+            ->filter();
+
+        if ($names->count() !== $names->unique()->count()) {
+            $this->fail(
+                'proficiency_levels',
+                'Each proficiency level needs its own name; two of them are the same.'
+            );
+        }
+
+        $sequences = $rows
+            ->map(fn (array $row) => (int) ($row['sequence'] ?? 0))
+            ->filter(fn (int $sequence) => $sequence > 0);
+
+        if ($sequences->count() !== $sequences->unique()->count()) {
+            $this->fail(
+                'proficiency_levels',
+                'Each proficiency level needs its own sequence number.'
+            );
+        }
+
+        foreach ($rows as $row) {
+            $behaviors = collect((array) ($row['key_behaviors'] ?? []))
+                ->map(fn ($behavior) => strtolower(trim((string) (((array) $behavior)['name_en'] ?? ''))))
+                ->filter();
+
+            if ($behaviors->count() !== $behaviors->unique()->count()) {
+                $this->fail(
+                    'proficiency_levels',
+                    "Each key behavior under '".($row['name_en'] ?? '?')."' needs its own name."
+                );
+            }
+        }
+    }
+
+    /**
+     * A sub-competency name is unique inside its competency, which the table
+     * enforces — so a duplicate in the submitted rows has to be caught here,
+     * or it would surface as a database error instead of a field message.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function assertSubCompetencyNamesUnique(array $data): void
+    {
+        $names = collect($data['sub_competencies'] ?? [])
+            ->map(fn ($row) => strtolower(trim((string) (((array) $row)['name_en'] ?? ''))))
+            ->filter();
+
+        if ($names->count() !== $names->unique()->count()) {
+            $this->fail(
+                'sub_competencies',
+                'Each sub competency needs its own name; two of them are the same.'
+            );
+        }
     }
 
     /**
@@ -1266,7 +1569,7 @@ class IdpSettingController extends Controller
         $this->assertLevelsActive(
             $data['proficiency_level_ids'],
             $master instanceof Competency
-                ? $master->proficiencyLevels()->pluck('proficiency_levels.id')->all()
+                ? $master->masterProficiencyLevels()->pluck('proficiency_levels.id')->all()
                 : [],
         );
     }

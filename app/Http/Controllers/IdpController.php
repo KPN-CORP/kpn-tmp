@@ -9,6 +9,7 @@ use App\Http\Requests\UpdateIndividualDevelopmentPlanRequest;
 use App\Http\Resources\EmployeeResource;
 use App\Imports\SingleEmployeeDevelopmentPlanImport;
 use App\Jobs\GenerateIdpZip;
+use App\Models\BusinessUnit;
 use App\Models\Competency;
 use App\Models\ImportLog;
 use App\Models\IndividualDevelopmentPlan;
@@ -112,8 +113,11 @@ class IdpController extends Controller
             ->pluck($column)
             ->values();
 
+        // The business units come from the corporate master, not from the
+        // employee set: a unit exists whether or not anyone is filed under it
+        // yet. Every other option here stays derived from the visible rows.
         return [
-            'businessUnits' => $pluckDistinct('group_company'),
+            'businessUnits' => collect(BusinessUnit::names()),
             'jobLevels' => $pluckDistinct('job_level'),
             'designations' => $pluckDistinct('designation_name'),
         ];

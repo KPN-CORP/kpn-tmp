@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Exports\ReportExport;
 use App\Http\Controllers\Concerns\ReadsSort;
+use App\Models\BusinessUnit;
 use App\Models\Employee;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\PerformanceAppraisal;
@@ -213,8 +214,11 @@ class ReportController extends Controller
             ->pluck($column)
             ->values();
 
+        // The business units come from the corporate master, not from the
+        // employee set: a unit exists whether or not anyone is filed under it
+        // yet. Every other option here stays derived from the visible rows.
         return [
-            'businessUnits' => $pluckDistinct('group_company'),
+            'businessUnits' => collect(BusinessUnit::names()),
             'jobLevels' => $pluckDistinct('job_level'),
             'designations' => $pluckDistinct('designation_name'),
             'units' => $pluckDistinct('unit'),

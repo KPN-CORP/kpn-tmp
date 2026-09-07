@@ -31,6 +31,13 @@ class MasterStatusAudit
     public const IMPLEMENTATION = 'implementation';
 
     /**
+     * A rung on one competency's own proficiency ladder. Not a master row — it
+     * belongs to the competency — but it is switched on and off the same way,
+     * so its trail lives in the same log.
+     */
+    public const COMPETENCY_LEVEL = 'competency_proficiency_level';
+
+    /**
      * How many entries a history read returns at most.
      */
     private const LIMIT = 200;

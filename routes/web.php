@@ -111,10 +111,27 @@ Route::middleware('auth')->group(function () use ($stub) {
 
     // --- Administration ---
     Route::middleware('permission:view_idp_master')->group(function () {
+        // Master Data — the shared IDP master entities that other screens only
+        // read. Competency type and competency were one screen; they are two now,
+        // and they write through the shared /idp-setting/masters endpoints below.
+        Route::get('/master-data/competency-type', [IdpSettingController::class, 'competencyType'])->name('master_data.competency_type');
+        Route::get('/master-data/competency', [IdpSettingController::class, 'competency'])->name('master_data.competency');
+        // Add/edit a competency on its own page rather than in a drawer over
+        // the list. These write instead of the shared /idp-setting/masters
+        // endpoints (which the other master screens still use) purely so a
+        // successful save can land back on the list; validation and the writes
+        // themselves are the same shared code.
+        Route::get('/master-data/competency/create', [IdpSettingController::class, 'createCompetency'])->name('master_data.competency.create');
+        Route::post('/master-data/competency', [IdpSettingController::class, 'storeCompetency'])->name('master_data.competency.store');
+        Route::get('/master-data/competency/{id}/edit', [IdpSettingController::class, 'editCompetency'])->name('master_data.competency.edit');
+        Route::put('/master-data/competency/{id}', [IdpSettingController::class, 'updateCompetency'])->name('master_data.competency.update');
+        // Activate/deactivate history for one rung of a competency's own
+        // proficiency ladder, read from the audit log like the masters' trail.
+        Route::get('/master-data/competency/levels/{level}/status-history', [IdpSettingController::class, 'competencyLevelStatusHistory'])->name('master_data.competency.levels.statusHistory');
+
         Route::get('/idp-setting', [IdpSettingController::class, 'index'])->name('idp.setting.index');
         Route::get('/idp-setting/development-model', [IdpSettingController::class, 'developmentModel'])->name('idp.setting.development_model');
         Route::get('/idp-setting/proficiency-level', [IdpSettingController::class, 'proficiencyLevel'])->name('idp.setting.proficiency_level');
-        Route::get('/idp-setting/competency', [IdpSettingController::class, 'competency'])->name('idp.setting.competency');
         Route::get('/idp-setting/review-tools', [IdpSettingController::class, 'reviewTools'])->name('idp.setting.review_tools');
         Route::get('/idp-setting/master-implementation', [IdpSettingController::class, 'masterImplementation'])->name('idp.setting.master_implementation');
         Route::get('/idp-setting/master-training', [IdpSettingController::class, 'masterTraining'])->name('idp.setting.master_training');

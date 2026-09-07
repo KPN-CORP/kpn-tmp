@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Enums\MasterDataType;
 use App\Models\Competency;
 use App\Models\CompetencyImplementation;
+use App\Models\CompetencyProficiencyLevel;
 use App\Models\CompetencyType;
 use App\Models\DevelopmentProgram;
 use App\Models\IndividualDevelopmentPlan;
@@ -259,22 +260,45 @@ class IdpMasterService
     {
         if ($type === MasterDataType::CompetencyName) {
             /** @var Competency $master */
-            $levelIds = $this->intList($data['proficiency_level_ids'] ?? []);
-            $master->proficiencyLevels()->sync($levelIds);
 
-            // A key behavior only counts while one of the chosen levels owns it.
-            $behaviorIds = $levelIds === []
-                ? []
-                : KeyBehavior::whereIn('id', $this->intList($data['key_behavior_ids'] ?? []))
-                    ->whereIn('proficiency_level_id', $levelIds)
-                    ->pluck('id')->all();
-            $master->keyBehaviors()->sync($behaviorIds);
+            // The competency form owns its proficiency ladder now and does not
+            // send these; only a caller that actually posts the master ids
+            // touches the legacy pivots, so the links that exist stay put.
+            if (in_array('proficiency_level_ids', $presentKeys, true)) {
+                $levelIds = $this->intList($data['proficiency_level_ids'] ?? []);
+                $master->masterProficiencyLevels()->sync($levelIds);
+
+                // A key behavior only counts while one of the chosen levels owns it.
+                $behaviorIds = $levelIds === []
+                    ? []
+                    : KeyBehavior::whereIn('id', $this->intList($data['key_behavior_ids'] ?? []))
+                        ->whereIn('proficiency_level_id', $levelIds)
+                        ->pluck('id')->all();
+                $master->masterKeyBehaviors()->sync($behaviorIds);
+            }
 
             // Program links are also editable from the program side, so only
             // touch them when this form actually sent them.
             if ($presentKeys === [] || in_array('related_programs', $presentKeys, true)) {
                 $master->developmentPrograms()->sync($this->intList($data['related_programs'] ?? []));
             }
+
+            // Sub-competencies belong to this form alone, but the same guard
+            // applies: a caller that did not send them must not wipe them.
+            if ($presentKeys === [] || in_array('sub_competencies', $presentKeys, true)) {
+                $this->syncSubCompetencies($master, $data['sub_competencies'] ?? []);
+            }
+
+            if ($presentKeys === [] || in_array('proficiency_levels', $presentKeys, true)) {
+                $this->syncOwnedProficiencyLevels($master, $data['proficiency_levels'] ?? []);
+            }
+
+            return;
+        }
+
+        if ($type === MasterDataType::CompetencyType) {
+            /** @var CompetencyType $master */
+            $this->replaceValues($master->businessUnits(), 'business_unit', $data['business_units'] ?? []);
 
             return;
         }
@@ -306,6 +330,171 @@ class IdpMasterService
                 $master->grades()->createMany($grades->map(fn ($grade) => ['grade' => $grade])->all());
             }
         }
+    }
+
+    /**
+     * Bring a competency's own proficiency ladder in step with the submitted
+     * rows, and each rung's key behaviors with it.
+     *
+     * Same id-preserving contract as {@see syncSubCompetencies()}: a row that
+     * comes back with its own id is updated in place (so renumbering or
+     * renaming a rung keeps its identity, and its activation history keeps
+     * pointing at the same row), rows with no id — or an id belonging to
+     * another competency — are created, and rows the form no longer carries are
+     * deleted, taking their behaviors with them. A rung with a blank name is
+     * dropped rather than saved.
+     *
+     * Switching a rung on or off is recorded in the same audit log the masters
+     * use, so the per-row history reads back the way theirs does.
+     */
+    private function syncOwnedProficiencyLevels(Competency $competency, mixed $rows): void
+    {
+        $existing = $competency->proficiencyLevels()->get()->keyBy('id');
+        $keep = [];
+
+        foreach ((array) $rows as $position => $row) {
+            $row = (array) $row;
+
+            $name = trim((string) ($row['name_en'] ?? ''));
+
+            if ($name === '') {
+                continue;
+            }
+
+            $attributes = [
+                'name_en' => $name,
+                'name_id' => $this->nullIfBlank($row['name_id'] ?? null),
+                // Falls back to the row's position, so a ladder saved without
+                // explicit numbers still comes back in the order it was typed.
+                'sequence' => (int) ($row['sequence'] ?? 0) ?: (int) $position + 1,
+                'is_active' => (bool) ($row['is_active'] ?? true),
+            ];
+
+            $level = $existing->get((int) ($row['id'] ?? 0));
+
+            if ($level !== null) {
+                $wasActive = (bool) $level->is_active;
+                $level->update($attributes);
+
+                // Only the transition is logged, so re-saving an unchanged
+                // ladder adds nothing.
+                if ($wasActive !== (bool) $level->is_active) {
+                    $this->audit->record(
+                        MasterStatusAudit::COMPETENCY_LEVEL,
+                        $level->id,
+                        $level->name_en,
+                        (bool) $level->is_active,
+                        Auth::user(),
+                    );
+                }
+            } else {
+                $level = $competency->proficiencyLevels()->create($attributes);
+
+                // A rung created switched off is a transition worth recording;
+                // one created active is just the default.
+                if (! $level->is_active) {
+                    $this->audit->record(
+                        MasterStatusAudit::COMPETENCY_LEVEL,
+                        $level->id,
+                        $level->name_en,
+                        false,
+                        Auth::user(),
+                    );
+                }
+            }
+
+            $keep[] = $level->id;
+            $this->syncOwnedKeyBehaviors($level, $row['key_behaviors'] ?? []);
+        }
+
+        $competency->proficiencyLevels()
+            ->when($keep !== [], fn ($q) => $q->whereNotIn('id', $keep))
+            ->delete();
+    }
+
+    /**
+     * The key behaviors of one rung, same id-preserving contract as the rungs
+     * themselves.
+     */
+    private function syncOwnedKeyBehaviors(CompetencyProficiencyLevel $level, mixed $rows): void
+    {
+        $existing = $level->keyBehaviors()->get()->keyBy('id');
+        $keep = [];
+
+        foreach ((array) $rows as $row) {
+            $row = (array) $row;
+
+            $attributes = [
+                'name_en' => trim((string) ($row['name_en'] ?? '')),
+                'name_id' => $this->nullIfBlank($row['name_id'] ?? null),
+            ];
+
+            if ($attributes['name_en'] === '') {
+                continue;
+            }
+
+            $behavior = $existing->get((int) ($row['id'] ?? 0));
+
+            if ($behavior !== null) {
+                $behavior->update($attributes);
+                $keep[] = $behavior->id;
+
+                continue;
+            }
+
+            $keep[] = $level->keyBehaviors()->create($attributes)->id;
+        }
+
+        $level->keyBehaviors()
+            ->when($keep !== [], fn ($q) => $q->whereNotIn('id', $keep))
+            ->delete();
+    }
+
+    /**
+     * Bring a competency's sub-competencies in step with the submitted rows.
+     *
+     * Unlike the other child lists here this is not a wholesale replace: a row
+     * that came back with its own id is UPDATED in place, so ids stay stable
+     * across an edit (renaming one part of a competency does not silently
+     * replace it with a new row). Rows with no id — or an id belonging to
+     * another competency — are created; rows the form no longer carries are
+     * deleted. A row with a blank name is dropped: the form's own remove button
+     * is how a row goes away, but an unfilled one should not become a record.
+     */
+    private function syncSubCompetencies(Competency $competency, mixed $rows): void
+    {
+        $existing = $competency->subCompetencies()->get()->keyBy('id');
+        $keep = [];
+
+        foreach ((array) $rows as $row) {
+            $row = (array) $row;
+
+            $attributes = [
+                'name_en' => trim((string) ($row['name_en'] ?? '')),
+                'name_id' => $this->nullIfBlank($row['name_id'] ?? null),
+                'description_en' => $this->nullIfBlank($row['description_en'] ?? null),
+                'description_id' => $this->nullIfBlank($row['description_id'] ?? null),
+            ];
+
+            if ($attributes['name_en'] === '') {
+                continue;
+            }
+
+            $current = $existing->get((int) ($row['id'] ?? 0));
+
+            if ($current !== null) {
+                $current->update($attributes);
+                $keep[] = $current->id;
+
+                continue;
+            }
+
+            $keep[] = $competency->subCompetencies()->create($attributes)->id;
+        }
+
+        $competency->subCompetencies()
+            ->when($keep !== [], fn ($q) => $q->whereNotIn('id', $keep))
+            ->delete();
     }
 
     /**

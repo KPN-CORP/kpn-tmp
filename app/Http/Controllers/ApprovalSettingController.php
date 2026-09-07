@@ -7,6 +7,7 @@ use App\Http\Requests\UpdateApprovalSuperiorRequest;
 use App\Imports\ApprovalLayerImport;
 use App\Models\ApprovalSuperior;
 use App\Models\ApprovalSuperiorHistory;
+use App\Models\BusinessUnit;
 use App\Models\Employee;
 use App\Services\EmployeeScopeService;
 use Illuminate\Http\JsonResponse;
@@ -128,8 +129,11 @@ class ApprovalSettingController extends Controller
             ->pluck($column)
             ->values();
 
+        // The business units come from the corporate master, not from the
+        // employee set: a unit exists whether or not anyone is filed under it
+        // yet. Every other option here stays derived from the visible rows.
         return [
-            'businessUnits' => $pluckDistinct('group_company'),
+            'businessUnits' => collect(BusinessUnit::names()),
             'areas' => $pluckDistinct('office_area'),
             'pts' => $pluckDistinct('company_name'),
         ];

@@ -20,6 +20,15 @@ class CompetencyType extends Model
     }
 
     /**
+     * The business units this type applies to — raw corporate names from
+     * kpncorp's business-unit master ({@see BusinessUnit}).
+     */
+    public function businessUnits(): HasMany
+    {
+        return $this->hasMany(CompetencyTypeBusinessUnit::class);
+    }
+
+    /**
      * The proficiency levels filed under this type. Levels with no type are
      * global and belong to none.
      */

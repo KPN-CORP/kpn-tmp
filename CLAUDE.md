@@ -895,11 +895,280 @@ per-field errors, the amber off-list flags, the dashed locked/empty-state boxes
 `evidenceLocked`), the full-text read-back of the selected program, the duration chip, and
 the footer's "still needed" list — each says something no other element does.
 
+## Phase 5.14 — Master Data menu: competency type split from competency ✅ DONE (code + runtime-verified)
+`/idp-setting/competency` was one screen carrying two entities: a competency-type table on
+top and the competency table below, both driven by one `masterType` ref switching a shared
+drawer. They are two screens now, on a new **Master Data** menu that sits *before* IDP
+Settings in the Administration section.
+
+- **Pages**: `Pages/MasterData/CompetencyType.vue` (types table + bilingual name/description
+  drawer; search added, since a standalone screen needs it) and
+  `Pages/MasterData/Competency.vue` (moved from `Pages/Idp/Competency.vue`, git-tracked as a
+  rename). The competency page drops the types table and the `masterType` switch — the type
+  is a `const MASTER_TYPE = 'competency_name'`, so `openMaster` / `deleteMaster` lost their
+  type argument and `masterHasDescription` (always true for both kinds) is gone.
+- **Competency types are still read on the competency page**, just read-only: they name the
+  type column, drive the type filter, and scope the proficiency levels the form may pin. So
+  `competencyTypes` still ships with the competency props — but it left `reloadOnly`
+  (`['competencies', 'flash']`), since nothing on that screen can change a type any more.
+- **Routes**: `GET /master-data/competency-type` (`master_data.competency_type`) and
+  `GET /master-data/competency` (`master_data.competency`), both still gated
+  `permission:view_idp_master`; `/idp-setting/competency` is gone. The **write** endpoints are
+  unchanged — both screens post through the shared `/idp-setting/masters` (+ `/{type}/{id}`,
+  `/active`, `/status-history`) with `type=competency_type` / `type=competency_name`, so the
+  wire contract, validation, delete guards and audit trail are untouched.
+- **Controller**: `IdpSettingController::competency()` split into `competencyType()` (types
+  only) and `competency()` (unchanged payload, new component name). Kept in that controller
+  rather than a new one so the private `option()` / `competencyTypesData()` helpers stay
+  shared.
+- **Nav**: new `masterData` parent (`fa-solid fa-database`) with children
+  `masterDataCompetencyType` / `masterDataCompetency`, inserted before `idpSetting`, whose
+  `idpSettingCompetency` child was removed. Note the sidebar's prefix-matching `isActive`
+  does not confuse `/master-data/competency` with `/master-data/competency-type` (it only
+  matches on an exact hit or a trailing `/`).
+- **Locale**: nav keys `masterData` / `masterDataCompetencyType` / `masterDataCompetency`;
+  page keys `competencyTypeTitle` / `competencyTypeSubtitle` / `searchCompetencyType`;
+  `competencySubtitle` reworded (it no longer covers types); `idpSettingCompetency` deleted.
+
+## Phase 5.15 — Corporate business-unit master + a business unit on competency type ✅ DONE (code + runtime-verified)
+Every business-unit dropdown in the app used to derive its options from whatever distinct
+values happened to sit in `employees.group_company` (plus `locations.company_name` on Master
+Training). So a unit with no employees yet was invisible, and the two sources disagreed
+("Plantations" vs "KPN Plantations", which showed up as two units). There is now one source
+of truth, and competency types carry a business-unit scope of their own.
+
+- **`App\Models\BusinessUnit`** — read-only, on the **kpncorp** connection, table
+  `master_bisnisunits` (`kode_bisnis` PK / `nama_bisnis` / `approval_medical`, 7 rows:
+  Plantations, Property, Cement, Katingan, KPN Corporation, Downstream, Others). Non-incrementing
+  string key, no timestamps, `$guarded = ['*']`.
+  - **`names()`** — the unit names in the master's own order (by `kode_bisnis`, which keeps the
+    catch-all "Others" last instead of sorting it into the middle). Guarded: an unreachable
+    kpncorp yields `[]`, so a screen that only needs options keeps working.
+  - **`resolveName($raw, $names)`** — maps a raw corporate grouping string onto the master unit
+    it names: exact case-insensitive first, then containment either way. This is what folds
+    `locations.company_name` / `departments`/`designations.parent_company_id`'s
+    "KPN Plantations" into the master's "Plantations". A value naming no master unit
+    ("KPN Sugar", which the master does not carry) resolves to null and its children are
+    dropped, since nothing could ever select them. It takes the name list rather than reading
+    it, so resolving a whole table hits kpncorp once.
+- **The NAME is what the app stores and compares**, not `kode_bisnis`: `nama_bisnis` is exactly
+  what `employees.group_company` holds, which is what role scopes, the list filters and the
+  master child tables are all matched against. No data migration was needed anywhere — the 5
+  units present in the employee data match `nama_bisnis` verbatim, so the master is a clean
+  superset. `kode_bisnis` is used only for ordering.
+- **All 7 call sites switched** to `BusinessUnit::names()`: the Facecard / IDP / Report /
+  Approval Layer list filters (`filterOptions()`, where every *other* option stays derived from
+  the visible rows), the Role scope picker (`RoleController::scopeOptions()`, where company and
+  location have no master of their own and stay derived), and the two IDP master helpers
+  — `workLocationData()` (Master Training) and `orgHierarchyData()` (Master Implementation),
+  both of which now resolve their group keys through `resolveName()`.
+  - ⚠️ **Consequence, as intended**: the list filters now offer **Katingan** and **Others**,
+    which match zero employees in the current data — filtering by one returns an empty list.
+  - **Fixed in passing**: Master Training used to offer both "Plantations" (0 locations) and
+    "KPN Plantations" (146). It is one unit now, with all 146 locations under it.
+- **Competency type → business units** (the new field on the Master Data screen):
+  `competency_type_business_units` (`..._create_competency_type_business_units_table`,
+  reversible, round-trip verified) — id, `competency_type_id` FK cascade, `business_unit`
+  string, unique per pair. Same shape as `training_business_units` /
+  `implementation_business_units`: raw corporate names, not FKs (kpncorp is another
+  connection). Model `CompetencyTypeBusinessUnit`, relation `CompetencyType::businessUnits()`,
+  synced wholesale by `IdpMasterService::syncLinks()` via the existing `replaceValues()`.
+  - **Required**: `business_units` is `required` for `competency_type` in
+    `validateMaster()` (a training's units stay optional — only the shared rule grew a
+    conditional). Nothing was backfilled, so the three existing types have no units until
+    edited, and editing one now means picking at least one unit.
+  - **Wire contract**: `competencyType()` gains a `businessUnits` prop (the master list) and
+    each type payload carries `business_units`. The form posts through the **unchanged**
+    shared `/idp-setting/masters` endpoints with `type=competency_type`.
+  - **Vue** `Pages/MasterData/CompetencyType.vue`: a `MultiSelect` with select-all/clear-all
+    (reusing Master Training's `businessUnitsPickHint` / `selectAllBusinessUnits` /
+    `clearAllBusinessUnits` keys), a business-unit chip column in the table, search covering
+    the units, and an amber flag on a stored unit the master no longer lists (kept selectable,
+    so an unrelated edit never silently drops it). New keys `noBusinessUnits` /
+    `unknownBusinessUnits` in `en`/`id`.
+- **Not touched**: `EmployeeScopeService` still *matches* `employees.group_company` against a
+  role's scope — that is filtering, not listing options, and the values are the same strings.
+  Nothing reads a competency type's business units yet; the field records scope for later use.
+
+## Phase 5.16 — Competency add/edit is its own page, not a drawer ✅ DONE (code + runtime-verified)
+The competency form had outgrown a drawer over the list: a competency type, a bilingual name
++ description, any number of proficiency levels each with their own key behaviors, and the
+active flag. It is a full page now — the list only links to it.
+
+- **`Pages/MasterData/CompetencyForm.vue`** (new) — the whole form, in four numbered
+  `FormSection` steps (type → bilingual name/description side by side → proficiency levels →
+  status) with a bottom action bar pinned to the viewport (`lg:pl-[var(--sidebar-width)]`, so
+  it lines up with the layout's content column) and a Back-to-list link in the page header.
+  All the level-row machinery moved over unchanged — `levelRows` / `rowsFromIds` /
+  `syncFormIds` / `pruneLevelRows`, the three-way proficiency mode, the "level switched off"
+  amber flag. The one difference: there is no open/close step, so the form is seeded straight
+  from the `competency` prop (null when adding) and `pruneLevelRows()` runs once at setup for
+  legacy rows holding a level from another type.
+- **`Pages/MasterData/Competency.vue`** shrank from 1406 to 768 lines. What stays is what
+  belongs to a row rather than to a form: the grouped table, search + type filter, sort +
+  paging, the active toggle, the status-history drawer and the delete dialog. "+ Competency"
+  and the row's edit icon are `Link`s now.
+- **Routes** — `GET /master-data/competency/create`, `POST /master-data/competency`,
+  `GET /master-data/competency/{id}/edit`, `PUT /master-data/competency/{id}` (names
+  `master_data.competency.create|store|edit|update`), all in the existing
+  `permission:view_idp_master` group.
+- **Why its own endpoints** rather than the shared `/idp-setting/masters` ones: only so a
+  successful save can land back on the **list**. The shared endpoints `back()`, which from a
+  form *page* means the form page. `storeCompetency` / `updateCompetency` are four lines each
+  — they merge the type (the route fixes it, so the form no longer posts `type`), call the
+  same `validateMaster()` and the same `IdpMasterService`, then
+  `redirect()->route('master_data.competency')`. Validation failures still bounce back to the
+  form with errors, as any Laravel redirect-back does. The shared endpoints are **untouched**
+  and every other master screen still uses them — as does this list, for delete and the
+  active toggle.
+- **Controller**: `competencyPayload()` (one competency as both screens read it) and
+  `competencyPickerData()` (the level + key-behavior option lists) extracted, so the list, the
+  create page and the edit page cannot drift apart. The list still needs both lists — it
+  resolves level and key-behavior names for its grouped rows.
+- Locale: one new key, `backToList`, in `en`/`id`.
+- ⚠️ **Still drawers**: Competency Type on the same menu, and every screen under IDP Settings.
+  Only the competency form moved.
+
+## Phase 5.17 — Sub-competencies on the competency form ✅ DONE (code + runtime-verified)
+A competency now breaks down into any number of **sub-competencies**, each with a bilingual
+name and an optional bilingual description, edited inline as a dynamic list on the competency
+form (step 3, between the name and the proficiency levels).
+
+- **`sub_competencies`** (`..._create_sub_competencies_table`, reversible, round-trip
+  verified): id, `competency_id` FK **cascade**, `name_en`, `name_id` nullable,
+  `description_en`/`description_id` text nullable, timestamps, unique
+  (`competency_id`, `name_en`). The name is unique **inside its competency**, not globally —
+  the parent's name already carries global uniqueness and two competencies may well break
+  down into similarly named parts. Model `SubCompetency`; relation
+  `Competency::subCompetencies()` ordered by id (creation order = display order).
+- **Not a master.** No screen of its own, no `is_active`, no competency type, no
+  `MasterDataType` case: rows live and die with their parent. That is why they are a child
+  table rather than another entry in the master machinery.
+- **Wire shape is the DB's own field names** (`name_en` / `name_id` / `description_en` /
+  `description_id`), not the masters' `value_en` / `value_id` — there is no legacy
+  single-table contract to preserve for a brand-new nested entity. Each row also carries its
+  `id` when stored, absent when just added; that is how the server tells an update from an
+  insert.
+- **`IdpMasterService::syncSubCompetencies()`** — deliberately NOT the wholesale replace the
+  other child lists use: a row that comes back with its own id is **updated in place**, so ids
+  stay stable across an edit (renaming one part does not silently replace it with a new row).
+  Rows with no id — **or an id belonging to another competency** — are created; rows the form
+  no longer carries are deleted. Guarded by `presentKeys` like `related_programs`, so a caller
+  that never sent the field cannot wipe the rows.
+- **Two validation subtleties**
+  - `IdpSettingController::dropUntouchedSubCompetencies()` runs **before** the rules (next to
+    `applyTrainingName()`): a row the user added and never touched is not an error, it is a
+    row they changed their mind about. Only rows blank in *all four* fields are dropped, so a
+    description with no name still reports "needs an English name". The remaining keys are
+    deliberately **not re-indexed** — errors come back keyed by position and the form still has
+    the blank row on screen, so renumbering would pin an error to the wrong row.
+  - `assertSubCompetencyNamesUnique()` catches two submitted rows sharing a name, which the
+    table's unique index would otherwise surface as a database error rather than a field
+    message. Custom messages replace the generated
+    "The sub_competencies.0.name_en field is required" with per-row wording.
+- **Label**: the competency form's name step said "Program Name" — it was reading the shared
+  `idp.settings.name` key, which Development Model / Proficiency Level / Review Tools /
+  Competency Type all use too. Rather than renaming that key for every screen, the competency
+  form now uses a new `idp.settings.competencyName` ("Competency Name") for the step title and
+  both name inputs. (Note `idp.form.competencyName` is a *different*, pre-existing key on the
+  IDP plan drawer.)
+- **Vue** `Pages/MasterData/CompetencyForm.vue`: `subRows` (local `uid` + the wire fields),
+  an add button, per-row remove, EN/ID cards side by side, a filled-row count on the step
+  header, and `subError(i, field)` to read the flat per-row error keys. The steps renumbered:
+  type 1, name 2, **sub competency 3**, proficiency level 4, status 5. New locale keys
+  `competencyName` / `subCompetencies` / `subCompetencyName` / `addSubCompetency` /
+  `removeSubCompetency` / `noSubCompetenciesYet` in `en`/`id`.
+- ⚠️ The list screen does **not** display sub-competencies yet — its grouped table is already
+  competency × proficiency level × key behavior. The rows do ship in the list payload (both
+  screens share `competencyPayload()`, which is what keeps them from drifting), so adding a
+  column or a count chip later needs no server change.
+
+## Phase 5.18 — A competency owns its proficiency ladder (free-typed) ✅ DONE (code + runtime-verified)
+The competency form's proficiency step used to pin rows of the shared
+`proficiency_levels` / `key_behaviors` masters through two pivots. A competency's ladder is
+its own thing in practice, so it is now typed in on the form: an ordered list of rungs, each
+with a bilingual name, a sequence number, an active flag, and any number of free-typed
+bilingual key behaviors under it. Both lists are dynamic (add/remove a row at a time).
+
+- **Tables** (`..._create_competency_owned_proficiency_levels`, reversible, round-trip
+  verified with data): `competency_proficiency_levels` (competency_id FK **cascade**,
+  `name_en`, `name_id`, `sequence` unsigned int, `is_active`, timestamps, unique
+  (competency_id, name_en)) and `competency_key_behaviors`
+  (`competency_proficiency_level_id` FK **cascade**, `name_en`, `name_id`, timestamps, unique
+  (level_id, name_en)). Models `CompetencyProficiencyLevel` (with `HasActiveState` and the
+  `$attributes` default) + `CompetencyKeyBehavior`.
+  - ⚠️ **`sequence` has no unique index on purpose**: swapping two rungs' numbers in one save
+    writes them one at a time and would collide with the index even though the end state is
+    valid. `assertProficiencyLadderConsistent()` policies distinctness instead (verified: a
+    straight 1↔2 swap saves fine).
+  - ⚠️ **Mind the near-identical names**: `competency_proficiency_level` (singular) is the OLD
+    pivot at master rows; `competency_proficiency_levels` (plural) is the new owned table.
+- **Relations renamed for clarity** on `Competency`: `proficiencyLevels()` is now the owned
+  `HasMany` (ordered by sequence, then id) — what the form and list read — and the pivots
+  became `masterProficiencyLevels()` / `masterKeyBehaviors()`. The six call sites that read
+  the pivots (the development-program screen, Master Implementation, the
+  `assertLevelsActiveForCompetency` exemption, `IdpMasterService`) were repointed at the new
+  names, so nothing changed for them.
+- **The pivots are deliberately left in place and untouched.** Master Implementation narrows
+  its level picker to the picked competency's *master* levels, and the development-program
+  screen reads the same links; dropping them would empty those pickers. The competency form
+  simply no longer writes them: `syncLinks()` now only touches the pivots when the caller
+  actually posts `proficiency_level_ids` (`in_array($presentKeys)`), which is what stops the
+  form's silence from wiping the existing links. Repointing those two screens at the owned
+  ladder is a **follow-up slice** — the user accepted that explicitly.
+- **The existing selections were copied across** by the migration: each competency's pinned
+  master levels become owned rungs numbered 1..n in the masters' own order, carrying their
+  names and active flag, with the competency's picked behaviors filed under the right rung.
+  Locally that turned Synergy's two pinned levels into `1=PL1 [B2, B3]`, `2=PL2 []`. Because
+  the pivots survive, `down()` just drops the two tables and re-running the migration rebuilds
+  the same rows.
+- **`IdpMasterService::syncOwnedProficiencyLevels()` / `syncOwnedKeyBehaviors()`** — the same
+  id-preserving contract as the sub-competencies, one level deeper: a row that comes back with
+  its own id is updated in place (so renaming or renumbering a rung keeps its identity, and
+  its activation history keeps pointing at the same row), rows with no id — or an id belonging
+  to another competency — are created, and rows the form no longer carries are deleted, taking
+  their behaviors with them. A rung or behavior with a blank name is dropped rather than saved.
+- **Activation history, as on the master screens**: switching a rung on or off writes to the
+  same `storage/app/audit/master-status-YYYY-MM.jsonl` under the new subject
+  `MasterStatusAudit::COMPETENCY_LEVEL`, and only on a **transition** (re-saving an unchanged
+  ladder adds nothing). A rung created switched off is recorded, like a master created
+  inactive. `GET /master-data/competency/levels/{level}/status-history` feeds the shared
+  `MasterStatusHistory` drawer, opened per rung from a clock icon (only on stored rungs — a
+  new one has no trail yet).
+- **Validation** mirrors the sub-competencies: `dropUntouchedProficiencyLevels()` runs before
+  the rules (a rung, or a behavior, the user added and never filled in is dropped, and keys
+  are not re-indexed so per-row errors stay pinned to the right row), then per-row `required`
+  / `max` rules with readable custom messages, plus the consistency guard for duplicate rung
+  names, duplicate sequence numbers, and duplicate behavior names inside one rung.
+- **Wire contract**: `competencyPayload()` swaps `proficiency_level_ids` / `key_behavior_ids`
+  for a nested `proficiency_levels` list (`{id, name_en, name_id, sequence, is_active,
+  key_behaviors: [{id, name_en, name_id}]}`), in the DB's own field names like the
+  sub-competencies. `competencyPickerData()` is **gone** — neither the form nor the list needs
+  the master option lists any more, so both pages lost the `proficiencyLevels` /
+  `keyBehaviors` props.
+- **Vue**: `CompetencyForm.vue` step 4 is rebuilt — the three-way proficiency mode selector,
+  the type-scoped level dropdowns, the "level switched off" flag and all the
+  `levelRows`/`pruneLevelRows` machinery are gone, replaced by `ladderRows` (uid + wire
+  fields, nested `key_behaviors`), a sequence input that auto-fills the next free number, an
+  inline active toggle, the per-rung history button, and add/remove at both levels.
+  `Competency.vue`'s grouped table now walks the nested rows instead of resolving master ids
+  (`rowName()` reads `name_en`/`name_id`), and the level chip shows its sequence number and
+  goes struck-through grey when the rung is inactive. New locale keys `sequence` /
+  `removeProficiencyLevel` / `noProficiencyLevelsYet` / `removeKeyBehavior` /
+  `noKeyBehaviorsYet` in `en`/`id`; `addProficiencyLevel`, `addKeyBehavior`, `keyBehaviors`,
+  `activeLabel`, `inactiveBadge` and `statusHistory` already existed.
+- ⚠️ **The `/idp-setting/proficiency-level` master screen is untouched** and still manages the
+  shared catalogue that Master Training, development programs and Master Implementation read.
+  A competency's ladder and that catalogue are now separate things with similar names — worth
+  knowing before wiring anything new to either.
+
 ## Entity map (facecard → kpn-tmp)
 App-owned: CompetencyAssessment, DevelopmentModel, Competency, CompetencyType,
 ProficiencyLevel, KeyBehavior, DevelopmentProgram, ReviewTool, Training,
 CompetencyImplementation, IndividualDevelopmentPlan, ResultSummary, MatrixGradeConfig,
 JobStatus, PerformanceAppraisal, ImportLog, UserGuide, ImplementationBusinessUnit,
-User + Spatie Role/Permission.
-`kpncorp` (read-only): Employee, FormalEducation, WorkExperience, TrainingCertification,
+CompetencyTypeBusinessUnit, SubCompetency, CompetencyProficiencyLevel,
+CompetencyKeyBehavior, User + Spatie Role/Permission.
+`kpncorp` (read-only): Employee, BusinessUnit (`master_bisnisunits` — the source of truth for
+every business-unit dropdown), FormalEducation, WorkExperience, TrainingCertification,
 MovementTransaction, PromotionTransaction.

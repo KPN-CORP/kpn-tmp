@@ -72,6 +72,24 @@ export const navigation: NavItem[] = [
     // --- Administration ---
     {
         section: 'administration',
+        label: 'masterData',
+        icon: 'fa-solid fa-database',
+        permission: 'view_idp_master',
+        children: [
+            {
+                label: 'masterDataCompetencyType',
+                href: '/master-data/competency-type',
+                permission: 'view_idp_master',
+            },
+            {
+                label: 'masterDataCompetency',
+                href: '/master-data/competency',
+                permission: 'view_idp_master',
+            },
+        ],
+    },
+    {
+        section: 'administration',
         label: 'idpSetting',
         icon: 'fa-solid fa-sliders',
         permission: 'view_idp_master',
@@ -84,11 +102,6 @@ export const navigation: NavItem[] = [
             {
                 label: 'idpSettingProficiencyLevel',
                 href: '/idp-setting/proficiency-level',
-                permission: 'view_idp_master',
-            },
-            {
-                label: 'idpSettingCompetency',
-                href: '/idp-setting/competency',
                 permission: 'view_idp_master',
             },
             {
