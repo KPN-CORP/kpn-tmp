@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -49,7 +50,7 @@ async function search() {
     searching.value = true
     try {
         const res = await fetch(
-            `/approval-setting/employees?q=${encodeURIComponent(query.value)}`,
+            `${route('approval.setting.employees')}?q=${encodeURIComponent(query.value)}`,
             { headers: { Accept: 'application/json' } },
         )
         results.value = res.ok ? await res.json() : []

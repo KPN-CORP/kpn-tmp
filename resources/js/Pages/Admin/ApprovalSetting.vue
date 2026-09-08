@@ -6,11 +6,14 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import EmployeeSelect from '@/Components/Domain/EmployeeSelect.vue'
 import HoverBadge from '@/Components/UI/HoverBadge.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -77,7 +80,7 @@ const state = reactive({
 
 function reload(sort: Sort = props.sort) {
     router.get(
-        '/approval-setting',
+        route('approval.setting.index'),
         {
             search: state.search || undefined,
             bu: state.bu || undefined,
@@ -164,19 +167,33 @@ const editForm = useForm<{ layers: (string | null)[] }>({ layers: [] })
 
 function openEdit(row: EmployeeRow) {
     editingEmployee.value = row
-    editForm.clearErrors()
-
-    editForm.layers = row.layers.map((l) => l?.id ?? null)
-    rowLabels.value = row.layers.map((l) => (l ? fmtRef(l) : null))
 
     // Always show at least one picker to start from.
-    if (editForm.layers.length === 0) {
-        editForm.layers = [null]
-        rowLabels.value = [null]
-    }
+    const layers = row.layers.length ? row.layers.map((l) => l?.id ?? null) : [null]
+    rowLabels.value = row.layers.length
+        ? row.layers.map((l) => (l ? fmtRef(l) : null))
+        : [null]
+
+    // Seeded as both data and defaults, so `isDirty` — which drives the
+    // discard prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(editForm, { layers })
 
     editModal.value = true
 }
+
+function closeEdit() {
+    editModal.value = false
+    seedForm(editForm, { layers: [] })
+    rowLabels.value = []
+}
+
+// The chain is thrown away when the drawer closes, so confirm first when there
+// is something to lose. Backdrop click, Escape and Cancel all route here.
+const {
+    confirming: confirmingEdit,
+    requestClose: requestCloseEdit,
+    discard: discardEdit,
+} = useUnsavedGuard(editForm, closeEdit)
 
 function addLayer() {
     editForm.layers.push(null)
@@ -190,9 +207,9 @@ function removeLayer(index: number) {
 
 function submitEdit() {
     if (!editingEmployee.value) return
-    editForm.put(`/approval-setting/${editingEmployee.value.employee_id}`, {
+    editForm.put(route('approval.setting.update', editingEmployee.value.employee_id), {
         preserveScroll: true,
-        onSuccess: () => (editModal.value = false),
+        onSuccess: () => closeEdit(),
     })
 }
 
@@ -220,7 +237,7 @@ async function openHistory(row: EmployeeRow) {
     historyLoading.value = true
     historyEntries.value = []
     try {
-        const res = await fetch(`/approval-setting/${row.employee_id}/history`, {
+        const res = await fetch(route('approval.setting.history', row.employee_id), {
             headers: { Accept: 'application/json' },
         })
         historyEntries.value = res.ok ? await res.json() : []
@@ -244,13 +261,22 @@ function onFile(e: Event) {
     importForm.file = (e.target as HTMLInputElement).files?.[0] ?? null
 }
 
+function closeImport() {
+    importModal.value = false
+    seedForm(importForm, { file: null })
+}
+
+// A picked-but-unsent file is lost on close, so ask before throwing it away.
+const {
+    confirming: confirmingImport,
+    requestClose: requestCloseImport,
+    discard: discardImport,
+} = useUnsavedGuard(importForm, closeImport)
+
 function submitImport() {
-    importForm.post('/approval-setting/import', {
+    importForm.post(route('approval.setting.import'), {
         preserveScroll: true,
-        onSuccess: () => {
-            importModal.value = false
-            importForm.reset()
-        },
+        onSuccess: () => closeImport(),
     })
 }
 </script>
@@ -422,7 +448,7 @@ function submitImport() {
         <!-- ============================================================
              UPDATE SUPERIOR MODAL
         ============================================================= -->
-        <Drawer :show="editModal" :title="t.approval.editSuperior" @close="editModal = false">
+        <Drawer :show="editModal" :title="t.approval.editSuperior" @close="requestCloseEdit">
             <form id="superior-form" class="space-y-5" @submit.prevent="submitEdit">
                 <!-- Subject employee (read-only) -->
                 <div>
@@ -499,7 +525,7 @@ function submitImport() {
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                    @click="editModal = false"
+                    @click="requestCloseEdit"
                 >
                     {{ t.approval.close }}
                 </button>
@@ -564,7 +590,7 @@ function submitImport() {
         <!-- ============================================================
              IMPORT MODAL
         ============================================================= -->
-        <Drawer :show="importModal" :title="t.approval.import" @close="importModal = false">
+        <Drawer :show="importModal" :title="t.approval.import" @close="requestCloseImport">
             <form id="import-form" class="space-y-4" @submit.prevent="submitImport">
                 <p class="text-sm text-slate-500">
                     {{ t.approval.importHint }}
@@ -589,7 +615,7 @@ function submitImport() {
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                    @click="importModal = false"
+                    @click="requestCloseImport"
                 >
                     {{ t.approval.close }}
                 </button>
@@ -603,5 +629,20 @@ function submitImport() {
                 </button>
             </template>
         </Drawer>
+
+        <!-- ============================================================
+             UNSAVED-CHANGES PROMPTS (one per form drawer)
+        ============================================================= -->
+        <UnsavedChangesDialog
+            :show="confirmingEdit"
+            @confirm="discardEdit"
+            @close="confirmingEdit = false"
+        />
+
+        <UnsavedChangesDialog
+            :show="confirmingImport"
+            @confirm="discardImport"
+            @close="confirmingImport = false"
+        />
     </AppLayout>
 </template>

@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { Link, router, usePage } from '@inertiajs/vue3'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 const page = usePage()
@@ -59,7 +60,7 @@ function ago(value: string | null): string {
 function onItemClick(item: NotificationItem) {
     close()
     router.post(
-        `/notifications/${item.id}/read`,
+        route('notifications.read', item.id),
         {},
         {
             preserveScroll: true,
@@ -72,7 +73,7 @@ function onItemClick(item: NotificationItem) {
 }
 
 function markAllRead() {
-    router.post('/notifications/read-all', {}, { preserveScroll: true, preserveState: true })
+    router.post(route('notifications.read_all'), {}, { preserveScroll: true, preserveState: true })
 }
 </script>
 
@@ -155,7 +156,7 @@ function markAllRead() {
 
                 <!-- Footer -->
                 <Link
-                    href="/approvals"
+                    :href="route('approvals.inbox')"
                     class="block border-t border-border px-4 py-2.5 text-center text-xs font-semibold text-primary transition hover:bg-slate-50"
                     @click="close"
                 >

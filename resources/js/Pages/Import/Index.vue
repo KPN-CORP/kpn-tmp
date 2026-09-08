@@ -8,6 +8,7 @@ import DataTable, { type Column, type Sort } from '@/Components/Domain/DataTable
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDateTime as fmt } from '@/Composables/useDate'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -44,7 +45,7 @@ const columns: Column[] = [
 ]
 
 function changeSort(sort: Sort) {
-    router.get('/import-center', { sort: sort.key, direction: sort.dir, per_page: props.logs.per_page }, { preserveState: true, preserveScroll: true, replace: true })
+    router.get(route('import.index'), { sort: sort.key, direction: sort.dir, per_page: props.logs.per_page }, { preserveState: true, preserveScroll: true, replace: true })
 }
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -59,7 +60,7 @@ function onFile(e: Event) {
 }
 
 function submit() {
-    form.post('/import-center/process', {
+    form.post(route('import.process'), {
         preserveScroll: true,
         forceFormData: true,
         onSuccess: () => {
@@ -71,18 +72,18 @@ function submit() {
 
 function remove(log: Log) {
     if (confirm(t.value.import.confirmDelete)) {
-        router.delete(`/import/${log.id}`, { preserveScroll: true })
+        router.delete(route('import.destroy', log.id), { preserveScroll: true })
     }
 }
 
 function clearAll() {
     if (confirm(t.value.import.confirmClear)) {
-        router.delete('/import', { preserveScroll: true })
+        router.delete(route('import.destroy_all'), { preserveScroll: true })
     }
 }
 
 function changePerPage(perPage: number) {
-    router.get('/import-center', { per_page: perPage }, { preserveState: true, preserveScroll: true, replace: true })
+    router.get(route('import.index'), { per_page: perPage }, { preserveState: true, preserveScroll: true, replace: true })
 }
 
 const statusTone: Record<string, string> = {
@@ -165,7 +166,7 @@ const statusTone: Record<string, string> = {
             <template #cell-action="{ row }">
                 <a
                     v-if="row.original_file_path"
-                    :href="`/import-download/${row.id}`"
+                    :href="route('import.download', row.id)"
                     class="mr-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-primary"
                 >
                     <i class="fa-solid fa-download" />

@@ -4,6 +4,7 @@ import AuthLayout from '@/Layouts/AuthLayout.vue'
 import AuthBrand from '@/Components/UI/AuthBrand.vue'
 import LanguageSwitcher from '@/Components/UI/LanguageSwitcher.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 defineProps<{
     status?: string
@@ -16,7 +17,7 @@ const form = useForm({
 })
 
 function submit() {
-    form.post('/forgot-password')
+    form.post(route('password.email'))
 }
 </script>
 
@@ -97,7 +98,7 @@ function submit() {
 
         <p class="mt-6 border-t border-border pt-4 text-center text-sm">
             <Link
-                href="/login"
+                :href="route('login')"
                 class="font-medium text-primary hover:underline"
             >
                 {{ t.auth.backToLogin }}

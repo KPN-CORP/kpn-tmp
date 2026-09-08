@@ -2,9 +2,12 @@
 import { computed, ref } from 'vue'
 import { router, useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -57,22 +60,38 @@ const columns = computed<Column[]>(() => [
 
 // --- Add ---
 const addModal = ref(false)
-const addForm = useForm({
-    employee_id: props.employeeId,
-    appraisal_year: new Date().getFullYear(),
-    potential: 'Medium',
-    talent_box: '',
-})
+
+function blankAdd() {
+    return {
+        employee_id: props.employeeId,
+        appraisal_year: new Date().getFullYear(),
+        potential: 'Medium',
+        talent_box: '',
+    }
+}
+
+const addForm = useForm(blankAdd())
+
+// Both drawers seed their values as data AND defaults, so `isDirty` — which
+// drives the discard prompt — measures this sitting's edits (see `seedForm`).
 function openAdd() {
-    addForm.clearErrors()
-    addForm.reset()
-    addForm.employee_id = props.employeeId
+    seedForm(addForm, blankAdd())
     addModal.value = true
 }
+function closeAdd() {
+    addModal.value = false
+    seedForm(addForm, blankAdd())
+}
+const {
+    confirming: confirmingAdd,
+    requestClose: requestCloseAdd,
+    discard: discardAdd,
+} = useUnsavedGuard(addForm, closeAdd)
+
 function submitAdd() {
-    addForm.post('/ninebox', {
+    addForm.post(route('ninebox.store'), {
         preserveScroll: true,
-        onSuccess: () => (addModal.value = false),
+        onSuccess: () => closeAdd(),
     })
 }
 
@@ -82,22 +101,33 @@ const editForm = useForm({ potential: '', talent_box: '' })
 const editingId = ref<number | null>(null)
 function openEdit(a: Appraisal) {
     editingId.value = a.id
-    editForm.clearErrors()
-    editForm.potential = a.potential ?? ''
-    editForm.talent_box = a.talent_box ?? ''
+    seedForm(editForm, {
+        potential: a.potential ?? '',
+        talent_box: a.talent_box ?? '',
+    })
     editModal.value = true
 }
+function closeEdit() {
+    editModal.value = false
+    seedForm(editForm, { potential: '', talent_box: '' })
+}
+const {
+    confirming: confirmingEdit,
+    requestClose: requestCloseEdit,
+    discard: discardEdit,
+} = useUnsavedGuard(editForm, closeEdit)
+
 function submitEdit() {
-    editForm.put(`/ninebox/${editingId.value}`, {
+    editForm.put(route('ninebox.update', editingId.value), {
         preserveScroll: true,
-        onSuccess: () => (editModal.value = false),
+        onSuccess: () => closeEdit(),
     })
 }
 
 // --- Delete ---
 function remove(a: Appraisal) {
     if (!confirm(t.value.appraisal.deleteConfirm)) return
-    router.delete('/ninebox', {
+    router.delete(route('ninebox.destroy'), {
         data: { employee_id: props.employeeId, appraisal_year: a.appraisal_year },
         preserveScroll: true,
     })
@@ -161,7 +191,7 @@ function remove(a: Appraisal) {
         </div>
 
         <!-- Add drawer -->
-        <Drawer :show="addModal" :title="t.appraisal.add" @close="addModal = false">
+        <Drawer :show="addModal" :title="t.appraisal.add" @close="requestCloseAdd">
             <form id="ninebox-add" class="space-y-4" @submit.prevent="submitAdd">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.appraisal.year }}</label>
@@ -184,7 +214,7 @@ function remove(a: Appraisal) {
                 </div>
             </form>
             <template #footer>
-                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="addModal = false">
+                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="requestCloseAdd">
                     {{ t.appraisal.cancel }}
                 </button>
                 <button type="submit" form="ninebox-add" :disabled="addForm.processing" class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
@@ -194,7 +224,7 @@ function remove(a: Appraisal) {
         </Drawer>
 
         <!-- Edit drawer -->
-        <Drawer :show="editModal" :title="t.appraisal.edit" @close="editModal = false">
+        <Drawer :show="editModal" :title="t.appraisal.edit" @close="requestCloseEdit">
             <form id="ninebox-edit" class="space-y-4" @submit.prevent="submitEdit">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.appraisal.potential }}</label>
@@ -206,7 +236,7 @@ function remove(a: Appraisal) {
                 </div>
             </form>
             <template #footer>
-                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="editModal = false">
+                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="requestCloseEdit">
                     {{ t.appraisal.cancel }}
                 </button>
                 <button type="submit" form="ninebox-edit" :disabled="editForm.processing" class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
@@ -214,5 +244,18 @@ function remove(a: Appraisal) {
                 </button>
             </template>
         </Drawer>
+
+        <!-- Unsaved-changes prompts, one per drawer. -->
+        <UnsavedChangesDialog
+            :show="confirmingAdd"
+            @confirm="discardAdd"
+            @close="confirmingAdd = false"
+        />
+
+        <UnsavedChangesDialog
+            :show="confirmingEdit"
+            @confirm="discardEdit"
+            @close="confirmingEdit = false"
+        />
     </section>
 </template>

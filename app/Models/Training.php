@@ -57,12 +57,18 @@ class Training extends Model
     }
 
     /**
-     * The proficiency levels this training targets. An empty list means it is
-     * not pinned to any.
+     * The proficiency levels this training targets — rungs of the competency it
+     * builds, since a level belongs to exactly one competency now. An empty list
+     * means it is not pinned to any.
      */
     public function proficiencyLevels(): BelongsToMany
     {
-        return $this->belongsToMany(ProficiencyLevel::class);
+        return $this->belongsToMany(
+            CompetencyProficiencyLevel::class,
+            'proficiency_level_training',
+            'training_id',
+            'proficiency_level_id',
+        );
     }
 
     /**

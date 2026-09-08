@@ -92,6 +92,14 @@ the PDF needs in pure PHP. Add browsershot only if a template needs full CSS/JS 
   `Config/locales/{en,id}.ts` (resolve via `useLocale().t`), never literals.
 - Server-paginated lists (Inertia partial reloads), matching facecard's chunked lists.
 - Keep controllers thin; put reusable/complex logic in `app/Services`.
+- **Never hard-code a URL in the UI.** Every path comes from a route name via
+  `route()` in `resources/js/Config/route.ts` (a thin Ziggy wrapper —
+  `@routes` in `app.blade.php` publishes the real route table, so renaming a path
+  in `routes/web/*.php` updates every caller). The wrapper's only addition is
+  `absolute: false`: the sidebar compares hrefs against Inertia's `page.url`, a
+  bare path, so an absolute URL would silently stop menu items highlighting.
+- Routes are split by domain under `routes/web/` (shell, facecard, idp, talent,
+  master-data, admin), each loaded inside the single `auth` group in `web.php`.
 
 ## Scaffold cleanup — Phase 0 ✅ DONE
 1. ✅ Renamed `CompetencyAssesment*` → `CompetencyAssessment*` (model, controller, both
@@ -527,7 +535,10 @@ has been implemented.
 ## Phase 5.6 — Development program named from Master Training ✅ DONE (code + runtime-verified)
 A development program's name is now either typed (bilingual, as before) or taken from the
 Master Training catalogue. The drawer carries a two-way switch — **Program name** shows the
-EN/ID inputs, **Master training** hides them and shows a training picker.
+EN/ID inputs, **Master training** hides them and shows a training picker. ⚠️ **The switch was
+retired by Phase 5.23**: which of the two applies is now read off the development model's
+`uses_master_training` flag. Everything else here (the `training_id` provenance column, the
+name copied during validation, the delete guard) still stands.
 
 - **`development_programs.training_id`** (nullable FK → `trainings`, `nullOnDelete`;
   `..._add_training_id_to_development_programs_table`, reversible, round-trip verified) is
@@ -929,6 +940,14 @@ Settings in the Administration section.
 - **Locale**: nav keys `masterData` / `masterDataCompetencyType` / `masterDataCompetency`;
   page keys `competencyTypeTitle` / `competencyTypeSubtitle` / `searchCompetencyType`;
   `competencySubtitle` reworded (it no longer covers types); `idpSettingCompetency` deleted.
+- **Later move**: **Master Implementation** joined this menu as its third item, so all three
+  screens that manage the shared competency masters sit together. Its page moved to
+  `Pages/MasterData/MasterImplementation.vue` (git-tracked rename) and its route to
+  `GET /master-data/master-implementation` (`master_data.master_implementation`); the write
+  endpoints stayed at `/idp-setting/implementations/*`, untouched, like the competency
+  screens' shared writes. The two competency menu labels gained a `Master` prefix
+  (`Master Competency Type` / `Master Competency`), and `idpSettingMasterImplementation` was
+  replaced by `masterDataMasterImplementation`. Page titles were not renamed.
 
 ## Phase 5.15 — Corporate business-unit master + a business unit on competency type ✅ DONE (code + runtime-verified)
 Every business-unit dropdown in the app used to derive its options from whatever distinct
@@ -1097,10 +1116,10 @@ bilingual key behaviors under it. Both lists are dynamic (add/remove a row at a 
   (`competency_proficiency_level_id` FK **cascade**, `name_en`, `name_id`, timestamps, unique
   (level_id, name_en)). Models `CompetencyProficiencyLevel` (with `HasActiveState` and the
   `$attributes` default) + `CompetencyKeyBehavior`.
-  - ⚠️ **`sequence` has no unique index on purpose**: swapping two rungs' numbers in one save
-    writes them one at a time and would collide with the index even though the end state is
-    valid. `assertProficiencyLadderConsistent()` policies distinctness instead (verified: a
-    straight 1↔2 swap saves fine).
+  - ⚠️ **`sequence` has no unique index on purpose**: reordering rungs writes them one at a
+    time and would collide with the index even though the end state is valid. (Phase 5.20
+    made the number positional and server-assigned, so it can no longer collide at all; the
+    index stays off for the same reason.)
   - ⚠️ **Mind the near-identical names**: `competency_proficiency_level` (singular) is the OLD
     pivot at master rows; `competency_proficiency_levels` (plural) is the new owned table.
 - **Relations renamed for clarity** on `Competency`: `proficiencyLevels()` is now the owned
@@ -1157,15 +1176,338 @@ bilingual key behaviors under it. Both lists are dynamic (add/remove a row at a 
   `removeProficiencyLevel` / `noProficiencyLevelsYet` / `removeKeyBehavior` /
   `noKeyBehaviorsYet` in `en`/`id`; `addProficiencyLevel`, `addKeyBehavior`, `keyBehaviors`,
   `activeLabel`, `inactiveBadge` and `statusHistory` already existed.
-- ⚠️ **The `/idp-setting/proficiency-level` master screen is untouched** and still manages the
-  shared catalogue that Master Training, development programs and Master Implementation read.
-  A competency's ladder and that catalogue are now separate things with similar names — worth
-  knowing before wiring anything new to either.
+- ⚠️ The `/idp-setting/proficiency-level` master screen survived this slice and kept managing
+  the shared catalogue the other screens read. **Phase 5.19 retired it**, so a competency's
+  ladder is now the only kind of proficiency level there is.
+
+## Phase 5.19 — The proficiency-level master is retired ✅ DONE (code + runtime-verified)
+`/idp-setting/proficiency-level` is gone, and so is the `proficiency_levels` catalogue behind
+it. A proficiency level was never a catalogue of its own: it is a rung on one competency's
+ladder, which is what `competency_proficiency_levels` has stored since Phase 5.18. The three
+screens that still selected from the shared master — **Master Implementation**, **Master
+Training** and the **development-program** form — each pick a competency first, so each now
+reads that competency's own ladder. This is the follow-up slice Phase 5.18 deferred.
+
+- **Migration** `..._drop_proficiency_level_master` (reversible, round-trip verified with
+  data): drops `proficiency_levels`, `key_behaviors` and the two pivots that pinned master
+  rows onto a competency (`competency_proficiency_level`, `competency_key_behavior`), and
+  repoints the three references — `implementation_proficiency_level`,
+  `proficiency_level_training` and `development_programs.proficiency_level_id` — at
+  `competency_proficiency_levels`. **The column names are unchanged**; each value is remapped
+  onto the owning competency's rung **of the same name**, and a reference with no matching
+  rung is dropped, since nothing could resolve it.
+  - `down()` restores the **meaning**, not the original rows (the Phase 5.4 convention): the
+    master is rebuilt from the ladders, one row per (competency type, name), the pivots are
+    refilled, and the three references point back at it. Descriptions and the original ids
+    are not recoverable — nothing carries them any more, so a rollback yields a smaller
+    catalogue than the one that was dropped.
+- **`MasterDataType`** loses its `ProficiencyLevel` and `KeyBehavior` cases, so
+  `type=proficiency_level` / `key_behavior` are no longer accepted wire values anywhere (the
+  `{type}` route binding 404s on them). Models `ProficiencyLevel` / `KeyBehavior`, the
+  `CompetencyType::proficiencyLevels()` relation and `Competency::masterProficiencyLevels()` /
+  `masterKeyBehaviors()` are deleted; `Competency::proficiencyLevels()` — the owned ladder —
+  is the only one left, which is why Phase 5.18's `master*` naming could go.
+- **Wire contract**: `proficiencyLevels` is still the prop name on all three screens, but it
+  now lists **every competency's rungs**, each carrying `competency_id` + `sequence`
+  (`IdpSettingController::proficiencyLevelOptions()`, shared by the three). A screen narrows
+  it by the competency it has chosen, and needs the whole list to name a level a row already
+  stores. `competencies[].proficiency_level_ids` are that competency's own rungs.
+- **Master Training changed shape**: its level picker used to be scoped by the competency
+  **type** (a level filed elsewhere was off the list, an untyped one was global). Levels have
+  no type any more, so it is scoped by the **competency** — the field stays locked until one
+  is picked (`pickCompetencyFirst`), and a `loadingForm` guard keeps the new
+  competency→levels cascade from blanking a row being loaded, the same guard Master
+  Implementation already had. Master Implementation and the development-program form needed
+  no behavioural change: they already cascaded through the competency and the implementation
+  map respectively.
+- **Server mirror**: `assertLevelsBelongToCompetency()` (new, shared by the training and
+  implementation checks) rejects a level that is not a rung of the chosen competency — with
+  **no exemption**, since a level's owner is stable and a mismatch means the pick has to be
+  redone. `assertLevelsActive()` reads the owned table now and keeps its exemption for what
+  the row already stores. The competency form's old "levels must belong to the chosen type"
+  and `assertLevelsActiveForCompetency()` checks are gone with the pivots.
+- **Two new delete guards**, both because a competency now *owns* what other screens point at:
+  - `assertRemovedLevelsUnused()` — a rung the competency form drops cannot be one an
+    implementation, a training or a development program still points at; the row would go and
+    take the link (or the program's level) with it. Only rungs actually removed are checked,
+    so renaming or renumbering a rung is unaffected.
+  - `IdpMasterService::deletionBlocker()` — a competency that a development program develops
+    can no longer be deleted, alongside the existing implementation / training guards.
+- **Deleted**: `Pages/Idp/ProficiencyLevel.vue`, the route
+  `GET /idp-setting/proficiency-level`, `IdpSettingController::proficiencyLevel()`, the nav
+  item, and 14 now-dead locale keys in `en`/`id` (`proficiencyLevelTitle` /
+  `proficiencyLevelSubtitle` / `searchProficiencyLevel` / `proficiencyLevels` /
+  `proficiencyLevelsHint` / `editProficiencyLevel` / `deleteProficiencyLevel` /
+  `levelTypePickHint` / `manageKeyBehaviors` / `editKeyBehavior` / `deleteKeyBehavior` /
+  `noKeyBehaviors` / `noProficiencyLevelsForType` / `noActiveProficiencyLevelsForType`).
+- Verified against the local DB: the migration round-trips (the one implementation link
+  remaps to its competency's identically named rung and back); all three payloads ship the
+  new shape; and, in a rolled-back transaction — an implementation/training saving its own
+  competency's rungs passes, one borrowing another competency's rung is rejected, dropping a
+  mapped rung from the ladder is rejected while an unchanged ladder saves, and newly pinning
+  an inactive rung is rejected.
+- ⚠️ **Operational note**: the local catalogue held 7 master levels while the only competency's
+  ladder had 2 rungs, so the drop discarded 5 rows nothing referenced. Anywhere with real
+  data, a master level that no competency's ladder names by the same string is **not**
+  carried over — check the ladders before running this in an environment that matters.
+
+## Phase 5.20 — Rung descriptions + positional ordering with up/down ✅ DONE (code + runtime-verified)
+Two changes to the proficiency ladder on the competency form. A rung now carries a bilingual
+**description**, like every other master with a name worth explaining. And **both** lists —
+the rungs and the key behaviors under each — are ordered by **row position**, moved with
+up/down buttons, instead of the rungs' typed sequence number.
+
+- **Migration** `..._add_description_and_key_behavior_sequence` (reversible, round-trip
+  verified): `description_en` / `description_id` (TEXT, nullable) on
+  `competency_proficiency_levels`, and `sequence` (unsigned int, default 1) on
+  `competency_key_behaviors`, backfilled by id so existing behaviors keep the order they were
+  created in. Neither `sequence` column carries a unique index — a reorder writes the rows one
+  at a time, and the number is now derived rather than asserted, so there is nothing to police.
+- **The sequence is server-assigned, not posted.** `IdpMasterService::syncOwnedProficiencyLevels()`
+  / `syncOwnedKeyBehaviors()` number the rows `1..n` from the submitted order. The counter runs
+  over the rows actually **kept**, not the array keys: `dropUntouchedProficiencyLevels()`
+  deliberately does not re-index after dropping blank rows (so per-row errors stay pinned to
+  the row on screen), and using the key would leave gaps. A blank-named row is skipped without
+  consuming a number.
+- **Wire contract**: both `sequence` fields now travel **one way**. `competencyPayload()` still
+  ships them (the list screen shows the rung's number) and the level gains
+  `description_en` / `description_id`, each key behavior gains `sequence`; the form drops the
+  numbers on the way in (`Omit<…, 'sequence'>`) and never sends them back. The
+  `proficiency_levels.*.sequence` rules and their three custom messages are gone, replaced by
+  `description_en` / `description_id` rules.
+- **`assertProficiencyLadderConsistent()`** lost its duplicate-sequence check — two rungs
+  cannot share a number that neither of them chooses. The duplicate-**name** checks (rungs
+  within a competency, behaviors within a rung) stay: those are real unique indexes.
+- **`dropUntouchedProficiencyLevels()`** now counts a description as "touched": a rung is only
+  dropped when its name AND description are blank in both languages and it has no named
+  behavior. So a rung with a description but no name still reports "needs an English name"
+  rather than vanishing — the same rule the sub-competencies follow.
+- **Vue** `Pages/MasterData/CompetencyForm.vue`: the rung header's number input became a
+  read-only position badge plus a paired up/down control (disabled at either end, so the
+  buttons never jump about); the same control sits beside each key behavior's remove button.
+  One shared `moveRow(rows, index, delta)` backs both. A bilingual description block was added
+  under the rung's names, matching the sub-competency cards. `nextSequence()` is gone.
+- **Vue** `Pages/MasterData/Competency.vue`: the grouped table prints a rung's description as a
+  muted line under its chip (`rowDescription()`, the same preferred-then-fallback rule as
+  `rowName()`), so a description written on the form is visible without opening it.
+- Locale: new `moveUp` / `moveDown` in `en`/`id`. `sequence` is kept — it now labels the
+  position badge.
+- Verified against the local DB in a rolled-back transaction: reversing the rungs and one
+  rung's behaviors renumbers both `1..n` **keeping every id**, descriptions save in both
+  languages, an untouched blank row is dropped without consuming a number, a rung appended
+  with no number lands last, and a row carrying only a description is still rejected for
+  having no name.
+
+## Phase 5.21 — Model package + its development models are one page, one save ✅ DONE (code + runtime-verified)
+`/idp-setting/development-model` was two stacked tables (packages on top, the selected
+package's models below) with two drawers and per-model endpoints. A package's models only
+mean anything **as a set** — their percentages have to total 100% — so they are now created,
+re-weighted and removed together with the package that holds them, on a form page of its own.
+
+- **The list is one table.** Packages only; each row has a chevron that expands its
+  development models underneath (weighting bar + one line per model with its description and
+  its program / plan usage counts). Several rows may be open at once, and the **active**
+  package opens on arrival. Add / edit are `Link`s to the form page; delete stays inline.
+- **The form is its own page** (`Pages/Idp/DevelopmentModelForm.vue`), the same shape
+  `MasterData/CompetencyForm.vue` uses: numbered `FormSection` steps and a bottom action bar
+  pinned to the viewport. Step 1 is the package — name + start + end on **one full-width row**
+  (`lg:grid-cols-4`, the name spanning two), with the active-pin card below it spanning the
+  width; step 2 is the models as a dynamic row list, above a **live** weighting bar that says
+  how much is left to allocate or how far over the split is.
+- **A model row is a header + two equal language halves.** The header carries what the model
+  *is* — its position badge, its name read-back, the in-use chip, the **percentage**, and the
+  remove button; the body is EN and ID side by side (`lg:grid-cols-2`), each a name plus a
+  description. The percentage sits in the header rather than in a third narrow column beside
+  the two tall language blocks, where it was stranded at the top; its error takes a full-width
+  line under the header so it never squeezes the row.
+- **The 100% rule is what gates the save.** Save is disabled (with the reason beside it)
+  until the rows total exactly 100, and `assertModelsConsistent()` mirrors that server-side —
+  a partial split is not saveable at all, where before each model was only capped at ≤100%
+  cumulatively. Two models sharing a name are rejected per row (the DB's unique index would
+  otherwise surface as a database error).
+- **Routes**: `GET /idp-setting/packages/create`, `GET …/{package}/edit` (names
+  `idp.setting.packages.create|edit`) join the existing POST / PUT / DELETE, which now
+  `redirect()->route('idp.setting.development_model')` so a save lands back on the list.
+  **The three `/idp-setting/models/*` endpoints are gone** — nothing else used them, and the
+  `replace_with` reassign they carried was never reachable from the UI. `StoreDevelopmentModelRequest`,
+  `UpdateDevelopmentModelRequest`, `App\Rules\SumPercentageCheck` (the old ≤100 cap) and the
+  empty scaffold `DevelopmentModelController` went with them.
+- **`syncPackageModels()`** follows the same id-preserving contract the competency form's
+  nested rows do: a row that comes back with its own id is updated in place (so renaming or
+  re-weighting a model keeps its identity, and the plans and programs pointing at it keep
+  pointing at it), rows with no id — or an id belonging to another package — are created, and
+  rows the form no longer carries are deleted (soft, as before). Both writes run in a
+  transaction. The canonical `name` stays in step with `name_en`.
+- **Two validation subtleties**, both borrowed from the competency form:
+  - `prepareForValidation()` drops rows blank in all four text fields — a row the user added
+    and thought better of is not an error. The keys are deliberately **not** re-indexed, since
+    errors come back keyed by position and the blank row is still on screen.
+  - `assertRemovedModelsUnused()` rejects dropping a model an IDP plan or a development
+    program still points at, naming it. Only rows actually removed are checked, so renaming
+    or re-weighting is unaffected; a create never triggers it.
+- **`development_models.uses_master_training`** (boolean, default false;
+  `..._add_uses_master_training_to_development_models_table`, reversible) — a checkbox
+  ("Master Training") on each model row, spanning both language columns since it is a
+  property of the model rather than of either language. It says that what this model develops
+  is drawn from the **Master Training** catalogue instead of being written out by hand.
+  - **The flag recorded intent only when it landed** — nothing read it. **Phase 5.23** wired
+    it up: it is now what decides where a development program's name and description come
+    from, replacing Phase 5.6's per-program name-source switch.
+  - `DevelopmentModel` casts it and declares `protected $attributes = ['uses_master_training'
+    => false]`, the same reason the `HasActiveState` models do: without it a model created
+    without the field has no such attribute in memory at all and reads as null.
+  - `prepareForValidation()` normalizes the wire value through `filter_var(…,
+    FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)` before the `boolean` rule sees it.
+    Inertia posts JSON, so a real bool arrives — but a form-encoded post would send
+    `"true"`/`"false"`, which Laravel's `boolean` rule rejects. A value meaning neither
+    becomes null and still fails the rule.
+  - The list page's expanded panel shows a primary-tinted "Master Training" chip on a flagged
+    model, beside its percentage.
+- **Wire contract**: the form's `package` prop is `{id, name, start_date, end_date,
+  is_current, models: [{id, name_en, name_id, percentage, uses_master_training,
+  description_en, description_id, development_programs_count,
+  individual_development_plans_count}]}` — the DB's own field names, nested, like the
+  competency form's rows. The counts are what let a row that cannot be removed say so before
+  the save is attempted. The list page's props keep their shape (the models are whole
+  `DevelopmentModel` rows, so they carry the new column automatically).
+- **`ClientTable`** gained expandable rows: an `expandedKeys` prop (the parent owns which rows
+  are open) and an `expanded` slot rendered as a full-width row underneath. Fixed in passing:
+  the `numbered` column used the `perPage` **prop** rather than the live page size, so the
+  running number was wrong after changing rows-per-page.
+- **New package defaults to 70-20-10** — three rows pre-weighted, so the common case is
+  naming them rather than building the shape.
+- Locale: new `packageDetails` / `showModels` / `hideModels` / `editModels` / `remaining` /
+  `over` / `mustTotal100` / `modelName` / `untitledModel` / `removeModel` / `inUse` /
+  `modelInUsePlans` / `modelInUsePrograms` / `useMasterTraining` / `useMasterTrainingHint`
+  in `en`/`id`; the four keys the drawers owned (`editModel`, `deleteModel`, `targetPackage`,
+  `adjust`) deleted.
+- Verified against the local DB in a rolled-back transaction: a 100% set saves with its
+  models; 90% and 110% are rejected naming the total; no models at all is rejected; duplicate
+  names flag both rows; a blank row is dropped rather than erroring; an edit that renames,
+  re-weights and drops an unused model keeps the kept rows' ids and soft-deletes the dropped
+  one; dropping a model a development program points at is rejected while dropping its unused
+  sibling passes; and the overlap + active-pin rules still hold. All three page renders
+  (`create`, `edit`, list) were checked for component name and props.
+
+## Phase 5.22 — Unsaved-changes guard on every drawer form ✅ DONE (code)
+Closing a drawer throws its draft away. The IDP plan drawer already asked before doing that;
+no other drawer did — a backdrop click or Escape silently discarded a half-filled form. Every
+drawer that holds a form now raises the same keep/discard prompt, driven by two shared pieces.
+
+- **`Composables/useUnsavedGuard.ts`** — `useUnsavedGuard(form, close)` returns
+  `{ confirming, requestClose, discard }`: `requestClose()` raises the prompt when the form is
+  dirty and closes straight away when it is not. The caller keeps ownership of the drawer's
+  open state and of what closing *means* (reset the form, clear the row id, …); the guard only
+  decides whether the question gets asked. A page with several form drawers calls it once per
+  form (`confirmingEdit` / `confirmingImport`, …).
+- **`seedForm(form, values)`** (same file) — the load half, and the part that is easy to get
+  wrong: `isDirty` measures the distance from the form's **defaults**, so a drawer that loads
+  an existing row must seed those defaults as it opens (`defaults()` → `reset()` →
+  `clearErrors()`). Assigning the fields alone — which is what every screen did — leaves the
+  form dirty from the first render, so it would have prompted on a drawer nobody touched.
+  Seeding also assigns every field in ONE synchronous block, which is why cascade watchers
+  (they flush afterwards) see parents and children already consistent.
+- **`Components/Domain/UnsavedChangesDialog.vue`** — the prompt itself, wrapping
+  `ConfirmDialog` with the shared title / Discard / Keep editing labels and reading its own
+  locale, so a call site is four lines. An optional `message` overrides the generic wording
+  (the plan drawer keeps its "This plan has unsaved changes").
+- **`ConfirmDialog`** gained an optional `icon` prop: a `danger` dialog is not always a
+  deletion, and the unsaved-changes prompt is a warning rather than a trash can.
+- **Locale**: `discardTitle` / `discardMessage` / `discardConfirm` / `keepEditing` moved into
+  the shared `common` block (non-IDP screens use them too); `idp.form` keeps only its own
+  `discardMessage` — its `discardTitle` / `discardConfirm` / `keepEditing` were deleted.
+- **Wired into all 15 form drawers**: IDP plan / Excel upload / approve-reject (`IdpPanel`,
+  three), Master Training, Master Implementation, Master Competency Type, IDP Settings
+  (development program), Review Tools, Roles, Approval Layer (superior chain + import, two),
+  Approvals Inbox, User Guide upload, and the three Facecard profile sections (competency
+  scoring, nine-box add + edit, succession/result summary). Read-only drawers — the activation
+  history, the approval-chain detail, the layer change log — deliberately do **not** prompt.
+- **Fixed in passing**, all consequences of `isDirty` now being load-time accurate:
+  - **Cascade watchers that ran on load.** Master Training's competency-type→competency and
+    business-unit→work-location watchers, and Master Implementation's competency→levels and
+    type→competency watchers, were not covered by their screens' `loadingForm` guard. Harmless
+    while fields were assigned one at a time; with `reset()` driving `isDirty` a stored pair
+    that has since drifted apart — or a work location kpncorp no longer offers — would be
+    silently blanked on open *and* leave the form dirty. All four return early while a row is
+    loading, matching the server rule that what a row already stores is exempt.
+    (Master Implementation's `loadingForm` was declared below the watchers that now read it, so
+    it was hoisted to the top of the form block.)
+  - **Two drawers read their values once, at page load** (the profile's succession form and the
+    Result Summary section) — a save followed by a re-open showed stale data. Both read off the
+    props each time they open now.
+  - `IdpPanel`'s `defineExpose({ openUpload })` is a real function rather than an inline
+    `uploadOpen = true`, so the upload drawer seeds its form like every other.
+- ⚠️ Pressing **Escape** with the prompt open reaches both the prompt and the drawer behind it
+  (each listens on `document`). The net effect is the intended one — the prompt closes and the
+  drawer stays open, i.e. "keep editing" — but it relies on the drawer's listener registering
+  first (template order). Worth knowing before changing either component's key handling.
+- ⚠️ Verified by `npm run build` plus a one-off `vue-tsc --noEmit` (the project ships no
+  tsconfig and no type-check step, so a scratch strict config was used and then removed):
+  nothing in the new or changed code errors. Runtime click-through was NOT done.
+- ⚠️ Noticed, not fixed (out of scope): `idp.settings.searchCompetencyType` is declared twice
+  in both `en.ts` and `id.ts` (same value, so no behavioural difference) — a duplicate-key
+  error under any future type-check.
+
+## Phase 5.23 — A development program's name + description come from its model ✅ DONE (code + runtime-verified)
+The development-program drawer's **Program identity** step carried a two-way switch —
+*Program name* (type it) vs *Master training* (pick one) — introduced in Phase 5.6. That is
+the development model's decision, not the program's: `development_models.uses_master_training`
+(Phase 5.21) already says a model's programs are drawn from the Master Training catalogue. The
+switch is gone; the identity step reads the flag on the model picked in step 2.
+
+- **The rule**: a program filed under a model flagged `uses_master_training` **must** name a
+  training, and its name *and description* are copied off that training. Under any other model
+  — or none at all, since the model is still optional — both are typed in the bilingual fields.
+- **`development_programs.description_en` / `description_id`** (TEXT, nullable;
+  `..._add_description_to_development_programs_table`, reversible, round-trip verified) — a
+  program had no description at all before. TEXT for the same reason the name is: a program
+  reads as an activity description. Flipping `MasterDataType::DevelopmentProgram->hasDescription()`
+  to true is what wires up the write (`IdpMasterService::attributes()`) and the existing
+  `description_en` / `description_id` rules; neither was touched.
+- **`ProgramMasterRules`** gained `requiresTraining(Request)` (reads the posted
+  `development_model_id`) and `prepare()` now branches on it: a typed model forces
+  `training_id` to null **whatever the request carried**, and a master-training model copies
+  the training's `name_en` / `name_id` **and both descriptions** onto the request before the
+  rules run — so a training-sourced program is policed by the same required / length /
+  unique-per-model rules as a typed one. As before, the copy happens on **every** save, so
+  re-saving picks up a training that has since been renamed, and there is deliberately no
+  automatic cascade from a training rename to its programs.
+- **One error, not two.** `MasterDataValidator::rules()` makes `training_id` `required` when
+  the model demands one, and — only in that case, and only while none is picked — relaxes
+  `value_en` to `nullable`. Without that relaxation a master-training program saved with no
+  training reported "the value en field is required" for a field the form does not even show.
+  Nothing can save on that path: `training_id.required` fails first, with a message naming the
+  model's setting.
+- **Wire contract**: each program payload gains `description_en` / `description_id`, and the
+  `trainings` option list gains them too (so the drawer can read back exactly what will be
+  stored — the server copies them again on save, which is what the stored values rely on).
+  The form still posts `training_id` alongside `value_en` / `value_id` / `description_*`; the
+  server is the authority whenever the model says a training supplies them.
+- **Vue** `Pages/Idp/Settings.vue`: the radio cards, `nameSource`, `nameSourceOptions` and
+  `showNameInputs` are gone, replaced by a `usesMasterTraining` computed read off
+  `modelById`. A watcher on it stashes the typed text (`typedText` — name **and**
+  description, replacing `typedName`) when the program moves onto a master-training model and
+  restores it on the way back, so switching models never loses what was written; the
+  `applyingOpen` guard keeps it from firing while a row is being loaded. The training
+  read-back card now shows the description alongside the name, and the typed branch gained a
+  bilingual description block (line breaks kept, unlike the name, which swallows Enter).
+- **Locale**: `nameSource` / `nameSourceProgram` / `nameSourceTraining` deleted; new
+  `nameFromModelTraining` (the note explaining why the step shows a training picker) and
+  `programDescriptionPlaceholderEn` / `programDescriptionPlaceholderId` in `en`/`id`.
+- Verified against the local DB in a rolled-back transaction: a master-training model with no
+  training reports exactly one error (the training, not the name); with a training, the name
+  and both descriptions are taken from it and whatever the wire carried is ignored; a typed
+  model stores the typed values and nulls a posted `training_id`; a typed model with no name
+  still fails on the name; re-saving picks up a renamed training; moving a training-sourced
+  program onto a typed model drops the training and keeps the newly typed text; and both
+  payloads ship the new fields.
+- ⚠️ The program **table** does not show the description — the list is program × model ×
+  competencies × scope. It ships in the payload, so adding a column later needs no server
+  change.
 
 ## Entity map (facecard → kpn-tmp)
 App-owned: CompetencyAssessment, DevelopmentModel, Competency, CompetencyType,
-ProficiencyLevel, KeyBehavior, DevelopmentProgram, ReviewTool, Training,
-CompetencyImplementation, IndividualDevelopmentPlan, ResultSummary, MatrixGradeConfig,
+DevelopmentProgram, ReviewTool, Training, CompetencyImplementation, IndividualDevelopmentPlan, ResultSummary, MatrixGradeConfig,
 JobStatus, PerformanceAppraisal, ImportLog, UserGuide, ImplementationBusinessUnit,
 CompetencyTypeBusinessUnit, SubCompetency, CompetencyProficiencyLevel,
 CompetencyKeyBehavior, User + Spatie Role/Permission.

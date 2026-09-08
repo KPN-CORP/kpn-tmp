@@ -6,10 +6,13 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
 
@@ -76,17 +79,21 @@ const MASTER_TYPE = 'competency_type'
 const masterModal = ref(false)
 const editingMasterId = ref<number | null>(null)
 
-const masterForm = useForm({
-    type: MASTER_TYPE,
-    // Canonical `value` tracks the English name (value_en) server-side.
-    value_en: '',
-    value_id: '',
-    description_en: '',
-    description_id: '',
-    // The business units the type applies to. Raw corporate names, replaced
-    // wholesale on save — the same shape a training's units have.
-    business_units: [] as string[],
-})
+function blankMaster() {
+    return {
+        type: MASTER_TYPE,
+        // Canonical `value` tracks the English name (value_en) server-side.
+        value_en: '',
+        value_id: '',
+        description_en: '',
+        description_id: '',
+        // The business units the type applies to. Raw corporate names, replaced
+        // wholesale on save — the same shape a training's units have.
+        business_units: [] as string[],
+    }
+}
+
+const masterForm = useForm(blankMaster())
 
 const businessUnitOptions = computed<Option[]>(() =>
     (props.businessUnits ?? []).map((unit) => ({ value: unit, label: unit })),
@@ -105,33 +112,44 @@ const unknownUnits = computed<string[]>(() => {
 function openMaster(item?: CompetencyType) {
     editingMasterId.value = item?.id ?? null
 
-    masterForm.clearErrors()
-
-    masterForm.type = MASTER_TYPE
-    masterForm.value_en = item?.value_en ?? item?.value ?? ''
-    masterForm.value_id = item?.value_id ?? ''
-    masterForm.description_en = item?.description_en ?? ''
-    masterForm.description_id = item?.description_id ?? ''
-    masterForm.business_units = [...(item?.business_units ?? [])]
+    // Seeded as both data and defaults, so `isDirty` — which drives the
+    // discard prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(masterForm, {
+        ...blankMaster(),
+        value_en: item?.value_en ?? item?.value ?? '',
+        value_id: item?.value_id ?? '',
+        description_en: item?.description_en ?? '',
+        description_id: item?.description_id ?? '',
+        business_units: [...(item?.business_units ?? [])],
+    })
 
     masterModal.value = true
 }
+
+function closeMaster() {
+    masterModal.value = false
+    seedForm(masterForm, blankMaster())
+}
+
+// Closing the drawer throws the draft away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(masterForm, closeMaster)
 
 function submitMaster() {
     const opts = {
         preserveScroll: true,
         preserveState: true,
         only: reloadOnly,
-        onSuccess: () => (masterModal.value = false),
+        onSuccess: () => closeMaster(),
     }
 
     if (editingMasterId.value) {
         masterForm.put(
-            `/idp-setting/masters/${MASTER_TYPE}/${editingMasterId.value}`,
+            route('idp.setting.masters.update', [MASTER_TYPE, editingMasterId.value]),
             opts,
         )
     } else {
-        masterForm.post('/idp-setting/masters', opts)
+        masterForm.post(route('idp.setting.masters.store'), opts)
     }
 }
 
@@ -153,7 +171,7 @@ const pendingDelete = ref<{ url: string; name?: string } | null>(null)
 const deleting = ref(false)
 
 function deleteMaster(id: number, name?: string) {
-    pendingDelete.value = { url: `/idp-setting/masters/${MASTER_TYPE}/${id}`, name }
+    pendingDelete.value = { url: route('idp.setting.masters.destroy', [MASTER_TYPE, id]), name }
 }
 
 function confirmDelete() {
@@ -334,7 +352,7 @@ const typeColumns = computed<Column[]>(() => [
         <Drawer
             :show="masterModal"
             :title="masterTitle()"
-            @close="masterModal = false"
+            @close="requestClose"
         >
             <form
                 id="master-form"
@@ -496,7 +514,7 @@ const typeColumns = computed<Column[]>(() => [
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                    @click="masterModal = false"
+                    @click="requestClose"
                 >
                     {{ t.idp.form.cancel }}
                 </button>
@@ -511,6 +529,16 @@ const typeColumns = computed<Column[]>(() => [
                 </button>
             </template>
         </Drawer>
+
+        <!-- ================================================================
+             UNSAVED-CHANGES CONFIRMATION
+        ================================================================= -->
+
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
 
         <!-- ================================================================
              DELETE CONFIRMATION

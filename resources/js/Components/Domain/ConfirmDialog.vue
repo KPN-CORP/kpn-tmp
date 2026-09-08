@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 
 /**
  * Reusable confirmation dialog.
@@ -26,6 +26,9 @@ const props = withDefaults(
         cancelLabel?: string
         variant?: 'danger' | 'primary'
         processing?: boolean
+        // Overrides the variant's default glyph — a danger dialog is not always
+        // a deletion (the unsaved-changes prompt is a warning, not a trash can).
+        icon?: string
     }>(),
     {
         variant: 'danger',
@@ -37,6 +40,12 @@ const emit = defineEmits<{
     (e: 'confirm'): void
     (e: 'close'): void
 }>()
+
+const glyph = computed(
+    () =>
+        props.icon ??
+        (props.variant === 'danger' ? 'fa-solid fa-trash-can' : 'fa-solid fa-circle-question'),
+)
 
 function close() {
     if (props.processing) return
@@ -95,13 +104,7 @@ onUnmounted(() => {
                                 : 'bg-primary/10 text-primary'
                         "
                     >
-                        <i
-                            :class="
-                                variant === 'danger'
-                                    ? 'fa-solid fa-trash-can text-xl'
-                                    : 'fa-solid fa-circle-question text-xl'
-                            "
-                        />
+                        <i class="text-xl" :class="glyph" />
                     </div>
 
                     <h3 v-if="title" class="mt-4 text-lg font-bold text-slate-800">

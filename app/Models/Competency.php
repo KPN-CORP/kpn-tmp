@@ -9,9 +9,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
- * A named competency, filed under a competency type, pinned to any number of
- * proficiency levels and (under those levels) key behaviors, and linked to the
- * development programs that build it.
+ * A named competency, filed under a competency type, owning its own proficiency
+ * ladder (and, under each rung, the key behaviors observed there), and linked to
+ * the development programs that build it.
  */
 class Competency extends Model
 {
@@ -58,38 +58,16 @@ class Competency extends Model
     /**
      * This competency's own proficiency ladder: free-typed, sequenced rows it
      * owns, each carrying its own key behaviors. This is what the competency
-     * form edits.
-     *
-     * Not to be confused with {@see masterProficiencyLevels()} below, which is
-     * the older selection of shared master rows.
+     * form edits — and, since the shared proficiency-level master was retired,
+     * the only place a proficiency level comes from. Master Implementation,
+     * Master Training and the development-program form all read it through the
+     * competency they pick.
      */
     public function proficiencyLevels(): HasMany
     {
         return $this->hasMany(CompetencyProficiencyLevel::class)
             ->orderBy('sequence')
             ->orderBy('id');
-    }
-
-    /**
-     * Proficiency levels picked from the shared master, through the
-     * `competency_proficiency_level` pivot.
-     *
-     * Legacy: the competency form owns its levels now and no longer writes this
-     * pivot. Master Implementation and the development-program screen still
-     * read it, so the links that exist are left alone.
-     */
-    public function masterProficiencyLevels(): BelongsToMany
-    {
-        return $this->belongsToMany(ProficiencyLevel::class, 'competency_proficiency_level');
-    }
-
-    /**
-     * Key behaviors picked from the shared master. Legacy, like
-     * {@see masterProficiencyLevels()}.
-     */
-    public function masterKeyBehaviors(): BelongsToMany
-    {
-        return $this->belongsToMany(KeyBehavior::class, 'competency_key_behavior');
     }
 
     /**

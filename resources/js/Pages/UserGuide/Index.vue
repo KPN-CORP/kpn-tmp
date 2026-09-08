@@ -4,8 +4,11 @@ import { Head, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -29,12 +32,18 @@ const drawerOpen = ref(false)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const form = useForm<{ title: string; description: string; target_role: string; file: File | null }>({
-    title: '',
-    description: '',
-    target_role: 'all',
-    file: null,
-})
+type GuideFormData = {
+    title: string
+    description: string
+    target_role: string
+    file: File | null
+}
+
+function blankGuide(): GuideFormData {
+    return { title: '', description: '', target_role: 'all', file: null }
+}
+
+const form = useForm<GuideFormData>(blankGuide())
 
 const fileSizeLabel = computed(() => {
     if (!form.file) return ''
@@ -43,11 +52,22 @@ const fileSizeLabel = computed(() => {
 })
 
 function open() {
-    form.reset()
-    form.clearErrors()
+    // Seeded as both data and defaults, so `isDirty` — which drives the
+    // discard prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(form, blankGuide())
     if (fileInput.value) fileInput.value.value = ''
     drawerOpen.value = true
 }
+
+function close() {
+    drawerOpen.value = false
+    seedForm(form, blankGuide())
+    if (fileInput.value) fileInput.value.value = ''
+}
+
+// The upload is thrown away when the drawer closes, so confirm first when there
+// is something to lose. Backdrop click, Escape and Cancel all route here.
+const { confirming, requestClose, discard } = useUnsavedGuard(form, close)
 
 function onFile(e: Event) {
     form.file = (e.target as HTMLInputElement).files?.[0] ?? null
@@ -65,16 +85,16 @@ function clearFile() {
 }
 
 function submit() {
-    form.post('/user-guide', {
+    form.post(route('user_guide.store'), {
         preserveScroll: true,
         forceFormData: true,
-        onSuccess: () => (drawerOpen.value = false),
+        onSuccess: () => close(),
     })
 }
 
 function remove(guide: Guide) {
     if (confirm(t.value.guide.confirmDelete)) {
-        router.delete(`/user-guide/${guide.id}`, { preserveScroll: true })
+        router.delete(route('user_guide.destroy', guide.id), { preserveScroll: true })
     }
 }
 </script>
@@ -108,7 +128,7 @@ function remove(guide: Guide) {
                 </div>
                 <div class="mt-4 flex items-center gap-2 border-t border-border pt-3">
                     <a
-                        :href="`/user-guide/${guide.id}/download`"
+                        :href="route('user_guide.download', guide.id)"
                         class="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
                     >
                         <i class="fa-solid fa-download" /> {{ t.guide.download }}
@@ -125,7 +145,7 @@ function remove(guide: Guide) {
         </div>
 
         <!-- Upload drawer (slides in from the right) -->
-        <Drawer :show="drawerOpen" :title="t.guide.add" @close="drawerOpen = false">
+        <Drawer :show="drawerOpen" :title="t.guide.add" @close="requestClose">
             <form id="guide-form" class="space-y-6" @submit.prevent="submit">
                 <!-- File dropzone -->
                 <div>
@@ -190,7 +210,7 @@ function remove(guide: Guide) {
             </form>
 
             <template #footer>
-                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="drawerOpen = false">
+                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="requestClose">
                     {{ t.guide.cancel }}
                 </button>
                 <button type="submit" form="guide-form" :disabled="form.processing || !form.file" class="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
@@ -199,5 +219,12 @@ function remove(guide: Guide) {
                 </button>
             </template>
         </Drawer>
+
+        <!-- Unsaved-changes prompt, raised when the drawer is closed dirty. -->
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
     </AppLayout>
 </template>

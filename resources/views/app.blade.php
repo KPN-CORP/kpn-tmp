@@ -17,6 +17,10 @@
             rel="stylesheet"
         />
 
+        {{-- Ziggy: publishes the named route table so the Vue side can build
+             URLs with route('name', params) instead of hard-coding paths. --}}
+        @routes
+
         @vite('resources/js/app.js')
         <x-inertia::head />
     </head>

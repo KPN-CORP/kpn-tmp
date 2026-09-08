@@ -1,4 +1,5 @@
 import type { LocaleMessages } from '@/Config/locales'
+import { route } from '@/Config/route'
 
 /**
  * The sidebar menu, described as plain data. Labels and section headings are
@@ -38,19 +39,19 @@ export const navigation: NavItem[] = [
         section: 'main',
         label: 'facecard',
         icon: 'fa-solid fa-id-card',
-        href: '/facecard',
+        href: route('facecard.list'),
     },
     {
         section: 'main',
         label: 'idp',
         icon: 'fa-solid fa-seedling',
-        href: '/idp',
+        href: route('idp.list'),
     },
     {
         section: 'main',
         label: 'approvals',
         icon: 'fa-solid fa-circle-check',
-        href: '/approvals',
+        href: route('approvals.inbox'),
     },
 
     // --- Talent ---
@@ -58,14 +59,14 @@ export const navigation: NavItem[] = [
         section: 'talent',
         label: 'report',
         icon: 'fa-solid fa-chart-column',
-        href: '/report',
+        href: route('report.show'),
         permission: 'view_report_menu',
     },
     {
         section: 'talent',
         label: 'importCenter',
         icon: 'fa-solid fa-file-import',
-        href: '/import-center',
+        href: route('import.index'),
         permission: 'view_import_center',
     },
 
@@ -78,12 +79,17 @@ export const navigation: NavItem[] = [
         children: [
             {
                 label: 'masterDataCompetencyType',
-                href: '/master-data/competency-type',
+                href: route('master_data.competency_type'),
                 permission: 'view_idp_master',
             },
             {
                 label: 'masterDataCompetency',
-                href: '/master-data/competency',
+                href: route('master_data.competency'),
+                permission: 'view_idp_master',
+            },
+            {
+                label: 'masterDataMasterImplementation',
+                href: route('master_data.master_implementation'),
                 permission: 'view_idp_master',
             },
         ],
@@ -96,32 +102,22 @@ export const navigation: NavItem[] = [
         children: [
             {
                 label: 'idpSettingDevelopmentModel',
-                href: '/idp-setting/development-model',
-                permission: 'view_idp_master',
-            },
-            {
-                label: 'idpSettingProficiencyLevel',
-                href: '/idp-setting/proficiency-level',
-                permission: 'view_idp_master',
-            },
-            {
-                label: 'idpSettingReviewTools',
-                href: '/idp-setting/review-tools',
-                permission: 'view_idp_master',
-            },
-            {
-                label: 'idpSettingMasterImplementation',
-                href: '/idp-setting/master-implementation',
+                href: route('idp.setting.development_model'),
                 permission: 'view_idp_master',
             },
             {
                 label: 'idpSettingMasterTraining',
-                href: '/idp-setting/master-training',
+                href: route('idp.setting.master_training'),
                 permission: 'view_idp_master',
             },
             {
                 label: 'idpSettingMasterData',
-                href: '/idp-setting',
+                href: route('idp.setting.master_development'),
+                permission: 'view_idp_master',
+            },
+            {
+                label: 'idpSettingReviewTools',
+                href: route('idp.setting.review_tools'),
                 permission: 'view_idp_master',
             },
         ],
@@ -130,20 +126,20 @@ export const navigation: NavItem[] = [
         section: 'administration',
         label: 'roles',
         icon: 'fa-solid fa-user-shield',
-        href: '/admin/roles',
+        href: route('roles.index'),
         permission: 'view_admin_setting',
     },
     {
         section: 'administration',
         label: 'approvalSetting',
         icon: 'fa-solid fa-list-check',
-        href: '/approval-setting',
+        href: route('approval.setting.index'),
         permission: 'view_approval_setting',
     },
     {
         section: 'administration',
         label: 'userGuide',
         icon: 'fa-solid fa-book-open',
-        href: '/user-guide',
+        href: route('user_guide.index'),
     },
 ]

@@ -7,6 +7,7 @@ import Pagination from '@/Components/UI/Pagination.vue'
 import DataTable, { type Column, type Sort } from '@/Components/Domain/DataTable.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -106,7 +107,7 @@ function query(extra: Record<string, unknown> = {}) {
 }
 
 function reload(extra: Record<string, unknown> = {}) {
-    router.get('/report', query(extra), {
+    router.get(route('report.show'), query(extra), {
         preserveState: true,
         preserveScroll: true,
         replace: true,
@@ -178,7 +179,7 @@ function exportUrl(reportName: 'talent_report' | 'idp_progress'): string {
     if (state.job_level) params.set('job_level', state.job_level)
     if (state.designation) params.set('designation', state.designation)
     if (state.unit) params.set('unit', state.unit)
-    return `/report/export?${params.toString()}`
+    return `${route('report.export')}?${params.toString()}`
 }
 </script>
 

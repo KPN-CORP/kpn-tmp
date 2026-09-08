@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { Head, Link, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import NineBoxSection from '@/Components/Domain/NineBoxSection.vue'
 import CompetencySection from '@/Components/Domain/CompetencySection.vue'
 import InternalMovementSection from '@/Components/Domain/InternalMovementSection.vue'
@@ -10,7 +11,9 @@ import IdpPanel from '@/Components/Domain/IdpPanel.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDate as fmtDate, formatDateTime } from '@/Composables/useDate'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -103,7 +106,7 @@ const tab = ref<'facecard' | 'idp'>('facecard')
 
 // Download PDF follows the active tab (facecard vs IDP).
 const pdfHref = computed(() =>
-    tab.value === 'idp' ? `/idp/${emp.employee_id}/pdf` : `/employee/${emp.employee_id}/pdf`,
+    tab.value === 'idp' ? route('idp.download_pdf', emp.employee_id) : route('facecard.download_pdf', emp.employee_id),
 )
 // Whether the Download PDF button is allowed for the currently active tab.
 const canDownloadCurrent = computed(() =>
@@ -188,22 +191,43 @@ const employmentRight = computed(() => [
 
 // --- Succession drawer ---
 const successionOpen = ref(false)
-const successionForm = useForm({
-    employee_id: emp.employee_id,
-    critical_position: props.resultSummary?.critical_position ?? '',
-    successor_type: props.resultSummary?.successor_type ?? '',
-    successor_to_position: props.resultSummary?.successor_to_position ?? '',
-})
+
+// Read off the props each time the drawer opens, so it always starts from what
+// is currently stored rather than from whatever the page was first given.
+function storedSuccession() {
+    return {
+        employee_id: emp.employee_id,
+        critical_position: props.resultSummary?.critical_position ?? '',
+        successor_type: props.resultSummary?.successor_type ?? '',
+        successor_to_position: props.resultSummary?.successor_to_position ?? '',
+    }
+}
+
+const successionForm = useForm(storedSuccession())
 
 function openSuccession() {
-    successionForm.clearErrors()
+    // Seeded as both data and defaults, so `isDirty` — which drives the
+    // discard prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(successionForm, storedSuccession())
     successionOpen.value = true
 }
 
+function closeSuccession() {
+    successionOpen.value = false
+    seedForm(successionForm, storedSuccession())
+}
+
+// Closing the drawer throws the draft away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(
+    successionForm,
+    closeSuccession,
+)
+
 function submitSuccession() {
-    successionForm.post('/result-summary', {
+    successionForm.post(route('resultSummary.store'), {
         preserveScroll: true,
-        onSuccess: () => (successionOpen.value = false),
+        onSuccess: () => closeSuccession(),
     })
 }
 
@@ -224,7 +248,7 @@ function onPhotoChange(event: Event) {
     const file = (event.target as HTMLInputElement).files?.[0]
     if (!file) return
     photoForm.photo = file
-    photoForm.post(`/employee/${emp.employee_id}/photo`, {
+    photoForm.post(route('employee.photo.update', emp.employee_id), {
         forceFormData: true,
         preserveScroll: true,
         onFinish: () => {
@@ -235,7 +259,7 @@ function onPhotoChange(event: Event) {
 }
 
 function deletePhoto() {
-    router.delete(`/employee/${emp.employee_id}/photo`, { preserveScroll: true })
+    router.delete(route('employee.photo.delete', emp.employee_id), { preserveScroll: true })
 }
 </script>
 
@@ -245,7 +269,7 @@ function deletePhoto() {
     <AppLayout>
         <!-- Back -->
         <div class="mb-4">
-            <Link href="/facecard" class="text-sm font-medium text-primary hover:underline">
+            <Link :href="route('facecard.list')" class="text-sm font-medium text-primary hover:underline">
                 &laquo; {{ t.facecard.profile.back }}
             </Link>
         </div>
@@ -548,7 +572,7 @@ function deletePhoto() {
         </div>
 
         <!-- Succession drawer -->
-        <Drawer :show="successionOpen" :title="t.facecard.profile.employmentSummary" @close="successionOpen = false">
+        <Drawer :show="successionOpen" :title="t.facecard.profile.employmentSummary" @close="requestClose">
             <form id="succession-form" class="space-y-4" @submit.prevent="submitSuccession">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.facecard.profile.criticalPosition }}</label>
@@ -564,7 +588,7 @@ function deletePhoto() {
                 </div>
             </form>
             <template #footer>
-                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="successionOpen = false">
+                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="requestClose">
                     {{ t.result.cancel }}
                 </button>
                 <button type="submit" form="succession-form" :disabled="successionForm.processing" class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
@@ -572,5 +596,12 @@ function deletePhoto() {
                 </button>
             </template>
         </Drawer>
+
+        <!-- Unsaved-changes prompt, raised when the drawer is closed dirty. -->
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
     </AppLayout>
 </template>

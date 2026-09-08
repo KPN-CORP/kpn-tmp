@@ -5,6 +5,7 @@ import AuthLayout from '@/Layouts/AuthLayout.vue'
 import AuthBrand from '@/Components/UI/AuthBrand.vue'
 import LanguageSwitcher from '@/Components/UI/LanguageSwitcher.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -31,7 +32,7 @@ async function runSearch() {
     searching.value = true
     try {
         const res = await fetch(
-            `/dev-login/employees/search?q=${encodeURIComponent(query.value)}`,
+            `${route('dev.login.search')}?q=${encodeURIComponent(query.value)}`,
             { headers: { Accept: 'application/json' } },
         )
         results.value = res.ok ? await res.json() : []
@@ -45,7 +46,7 @@ async function runSearch() {
 function loginAs(employee: EmployeeResult) {
     submittingId.value = employee.employee_id
     router.post(
-        '/dev-login/employees',
+        route('dev.login.impersonate'),
         { employee_id: employee.employee_id },
         { onFinish: () => (submittingId.value = null) },
     )
@@ -125,7 +126,7 @@ runSearch()
 
         <div class="mt-6 border-t border-border pt-4 text-center">
             <Link
-                href="/login"
+                :href="route('login')"
                 class="text-sm font-medium text-slate-500 hover:text-primary hover:underline"
             >
                 {{ t.auth.backToLogin }}

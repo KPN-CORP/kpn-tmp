@@ -2,9 +2,12 @@
 import { computed, ref, watch } from 'vue'
 import { useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
 
@@ -197,21 +200,17 @@ const fitLevels = [
 // --- Input drawer ---
 const modalOpen = ref(false)
 
-const form = useForm<Record<string, any>>({
-    employee_id: props.employeeId,
-    assessment_date: new Date().toISOString().slice(0, 10),
-    proposed_grade: '',
-    priority_for_development: 'No',
-    synergized_team_score: 0,
-    integrity_score: 0,
-    growth_score: 0,
-    adaptive_score: 0,
-    passion_score: 0,
-    manage_planning_score: 0,
-    decision_making_score: 0,
-    relationship_building_score: 0,
-    developing_others_score: 0,
-})
+function blankAssessment(): Record<string, any> {
+    return {
+        employee_id: props.employeeId,
+        assessment_date: new Date().toISOString().slice(0, 10),
+        proposed_grade: '',
+        priority_for_development: 'No',
+        ...Object.fromEntries(COMP_KEYS.map((key) => [`${key}_score`, 0])),
+    }
+}
+
+const form = useForm<Record<string, any>>(blankAssessment())
 
 const formGrade = computed<string | null>(() => {
     const period = new Date(form.assessment_date).getFullYear()
@@ -225,27 +224,41 @@ const formGrade = computed<string | null>(() => {
 })
 
 function openInput() {
-    form.clearErrors()
-    form.employee_id = props.employeeId
     const existing = assessmentForYear.value
-    if (existing) {
-        form.assessment_date = existing.assessment_date?.slice(0, 10) ?? selectedDate.value
-        form.proposed_grade = existing.proposed_grade ?? ''
-        form.priority_for_development = existing.priority_for_development ?? 'No'
-        for (const key of COMP_KEYS) form[`${key}_score`] = existing[`${key}_score`] ?? 0
-    } else {
-        form.assessment_date = selectedDate.value
-        form.proposed_grade = ''
-        form.priority_for_development = 'No'
-        for (const key of COMP_KEYS) form[`${key}_score`] = 0
-    }
+
+    // Seeded as both data and defaults, so `isDirty` — which drives the
+    // discard prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(form, {
+        ...blankAssessment(),
+        assessment_date: existing
+            ? existing.assessment_date?.slice(0, 10) ?? selectedDate.value
+            : selectedDate.value,
+        proposed_grade: existing?.proposed_grade ?? '',
+        priority_for_development: existing?.priority_for_development ?? 'No',
+        ...Object.fromEntries(
+            COMP_KEYS.map((key) => [
+                `${key}_score`,
+                existing ? existing[`${key}_score`] ?? 0 : 0,
+            ]),
+        ),
+    })
+
     modalOpen.value = true
 }
 
+function closeInput() {
+    modalOpen.value = false
+    seedForm(form, blankAssessment())
+}
+
+// Closing the drawer throws the scoring away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(form, closeInput)
+
 function submit() {
-    form.post('/competency-assessment', {
+    form.post(route('competency.store'), {
         preserveScroll: true,
-        onSuccess: () => (modalOpen.value = false),
+        onSuccess: () => closeInput(),
     })
 }
 </script>
@@ -404,7 +417,7 @@ function submit() {
         </div>
 
         <!-- Input drawer -->
-        <Drawer :show="modalOpen" :title="t.competency.formTitle" max-width="max-w-2xl" @close="modalOpen = false">
+        <Drawer :show="modalOpen" :title="t.competency.formTitle" max-width="max-w-2xl" @close="requestClose">
             <form id="competency-form" class="space-y-6" @submit.prevent="submit">
                 
                 <!-- Section: Result -->
@@ -487,7 +500,7 @@ function submit() {
                 </section>
             </form>
             <template #footer>
-                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="modalOpen = false">
+                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="requestClose">
                     {{ t.competency.cancel }}
                 </button>
                 <button type="submit" form="competency-form" :disabled="form.processing" class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
@@ -495,5 +508,12 @@ function submit() {
                 </button>
             </template>
         </Drawer>
+
+        <!-- Unsaved-changes prompt, raised when the drawer is closed dirty. -->
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
     </section>
 </template>

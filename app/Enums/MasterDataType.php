@@ -5,8 +5,6 @@ namespace App\Enums;
 use App\Models\Competency;
 use App\Models\CompetencyType;
 use App\Models\DevelopmentProgram;
-use App\Models\KeyBehavior;
-use App\Models\ProficiencyLevel;
 use App\Models\ReviewTool;
 use App\Models\Training;
 use Illuminate\Database\Eloquent\Builder;
@@ -24,8 +22,6 @@ enum MasterDataType: string
 {
     case CompetencyType = 'competency_type';
     case CompetencyName = 'competency_name';
-    case ProficiencyLevel = 'proficiency_level';
-    case KeyBehavior = 'key_behavior';
     case DevelopmentProgram = 'development_program';
     case ReviewTools = 'review_tools';
     case Training = 'training';
@@ -40,8 +36,6 @@ enum MasterDataType: string
         return match ($this) {
             self::CompetencyType => CompetencyType::class,
             self::CompetencyName => Competency::class,
-            self::ProficiencyLevel => ProficiencyLevel::class,
-            self::KeyBehavior => KeyBehavior::class,
             self::DevelopmentProgram => DevelopmentProgram::class,
             self::ReviewTools => ReviewTool::class,
             self::Training => Training::class,
@@ -69,10 +63,9 @@ enum MasterDataType: string
         return match ($this) {
             self::CompetencyType,
             self::CompetencyName,
-            self::ProficiencyLevel,
-            self::KeyBehavior,
+            self::DevelopmentProgram,
             self::Training => true,
-            self::DevelopmentProgram, self::ReviewTools => false,
+            self::ReviewTools => false,
         };
     }
 
@@ -83,11 +76,9 @@ enum MasterDataType: string
     {
         return match ($this) {
             self::CompetencyName,
-            self::ProficiencyLevel,
             self::ReviewTools,
             self::Training => true,
             self::CompetencyType,
-            self::KeyBehavior,
             self::DevelopmentProgram => false,
         };
     }
@@ -105,7 +96,7 @@ enum MasterDataType: string
             self::CompetencyName => 'competency_name',
             self::DevelopmentProgram => 'development_program',
             self::ReviewTools => 'review_tools',
-            self::ProficiencyLevel, self::KeyBehavior, self::Training => null,
+            self::Training => null,
         };
     }
 

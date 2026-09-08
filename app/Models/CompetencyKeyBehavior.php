@@ -7,11 +7,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * An observable behavior at one rung of a competency's own proficiency ladder:
- * a bilingual name, nothing else. Typed in on the competency form under its
- * level, and cascades with it.
+ * a bilingual name and where it sits under that rung. Typed in on the
+ * competency form under its level, and cascades with it.
  *
- * Distinct from the shared `key_behaviors` master, which belongs to a
- * `proficiency_levels` row and is still selected by other screens.
+ * `sequence` is the row's position in that list, assigned from the submitted
+ * order rather than typed in, so it is always 1..n with no gaps.
  */
 class CompetencyKeyBehavior extends Model
 {
@@ -21,6 +21,11 @@ class CompetencyKeyBehavior extends Model
         'competency_proficiency_level_id',
         'name_en',
         'name_id',
+        'sequence',
+    ];
+
+    protected $casts = [
+        'sequence' => 'integer',
     ];
 
     public function proficiencyLevel(): BelongsTo

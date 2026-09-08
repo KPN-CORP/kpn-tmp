@@ -7,6 +7,7 @@ import Pagination from '@/Components/UI/Pagination.vue'
 import DataTable, { type Column, type Sort } from '@/Components/Domain/DataTable.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -90,7 +91,7 @@ function toggleAllOnPage() {
 
 function reload(resetPage = true) {
     router.get(
-        '/facecard',
+        route('facecard.list'),
         {
             search: state.search || undefined,
             business_unit: state.business_unit || undefined,
@@ -107,7 +108,7 @@ function reload(resetPage = true) {
 
 function changeSort(sort: Sort) {
     router.get(
-        '/facecard',
+        route('facecard.list'),
         {
             search: state.search || undefined,
             business_unit: state.business_unit || undefined,
@@ -173,7 +174,7 @@ function exportUrl(): string {
     if (state.job_level) params.set('job_level', state.job_level)
     if (state.designation) params.set('designation', state.designation)
     const qs = params.toString()
-    return `/facecard/export${qs ? `?${qs}` : ''}`
+    return `${route('facecard.export')}${qs ? `?${qs}` : ''}`
 }
 
 // --- Bulk PDF zip (background job + polling) ---
@@ -188,7 +189,7 @@ async function startBulkDownload() {
         const xsrf = decodeURIComponent(
             document.cookie.split('; ').find((c) => c.startsWith('XSRF-TOKEN='))?.split('=')[1] ?? '',
         )
-        const res = await fetch('/facecard/bulk-download', {
+        const res = await fetch(route('facecard.bulk_download'), {
             method: 'POST',
             headers: {
                 Accept: 'application/json',
@@ -209,7 +210,7 @@ function pollStatus(jobId: string) {
     clearInterval(poll)
     poll = setInterval(async () => {
         try {
-            const res = await fetch(`/facecard/bulk-download/status/${jobId}`, { headers: { Accept: 'application/json' } })
+            const res = await fetch(route('facecard.bulk_status', jobId), { headers: { Accept: 'application/json' } })
             const data = await res.json()
             bulk.progress = data.progress ?? 0
             if (data.error) {
@@ -217,7 +218,7 @@ function pollStatus(jobId: string) {
                 stopBulk()
             } else if (data.ready) {
                 stopBulk()
-                window.location.href = `/facecard/bulk-download/file/${jobId}`
+                window.location.href = route('facecard.bulk_file', jobId)
             }
         } catch {
             bulk.error = t.value.facecard.exportError
@@ -344,7 +345,7 @@ function stopBulk() {
             </template>
             <template #cell-action="{ row }">
                 <Link
-                    :href="`/employee/${row.employee_id}`"
+                    :href="route('employee.profile', row.employee_id)"
                     class="inline-flex items-center gap-1.5 rounded-md border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
                 >
                     <i class="fa-solid fa-id-card" />

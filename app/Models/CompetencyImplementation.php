@@ -70,10 +70,16 @@ class CompetencyImplementation extends Model
         return $this->hasMany(ImplementationBusinessUnit::class, 'implementation_id');
     }
 
+    /**
+     * The rungs of the mapped competency's own ladder this implementation
+     * covers. There is no shared proficiency-level master any more: a level
+     * belongs to exactly one competency, so these always sit under
+     * `competency_id`.
+     */
     public function proficiencyLevels(): BelongsToMany
     {
         return $this->belongsToMany(
-            ProficiencyLevel::class,
+            CompetencyProficiencyLevel::class,
             'implementation_proficiency_level',
             'implementation_id',
             'proficiency_level_id',

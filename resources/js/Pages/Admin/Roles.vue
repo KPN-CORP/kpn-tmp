@@ -4,9 +4,12 @@ import { Head, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import DataTable, { type Column } from '@/Components/Domain/DataTable.vue'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -78,7 +81,7 @@ const roleModal = ref(false)
 const editingId = ref<number | null>(null)
 const editingDefault = ref(false)
 
-const form = useForm<{
+type RoleFormData = {
     name: string
     business_unit: string[]
     company: string[]
@@ -86,22 +89,28 @@ const form = useForm<{
     is_data_access: boolean
     permissions: string[]
     members: string[]
-}>({
-    name: '',
-    business_unit: [],
-    company: [],
-    location: [],
-    is_data_access: false,
-    permissions: [],
-    members: [],
-})
+}
 
+function blankRole(): RoleFormData {
+    return {
+        name: '',
+        business_unit: [],
+        company: [],
+        location: [],
+        is_data_access: false,
+        permissions: [],
+        members: [],
+    }
+}
+
+const form = useForm<RoleFormData>(blankRole())
+
+// Loads the values as both the form data and its defaults, so `isDirty` — which
+// drives the discard prompt — measures this sitting's edits (see `seedForm`).
 function openCreate() {
     editingId.value = null
     editingDefault.value = false
-    form.reset()
-    form.is_data_access = pageTab.value === 'data'
-    form.clearErrors()
+    seedForm(form, { ...blankRole(), is_data_access: pageTab.value === 'data' })
     permissionSearch.value = ''
     roleModal.value = true
 }
@@ -109,22 +118,32 @@ function openCreate() {
 function openEdit(role: Role) {
     editingId.value = role.id
     editingDefault.value = role.default
-    form.clearErrors()
-    form.name = role.name
-    form.business_unit = [...role.business_unit]
-    form.company = [...role.company]
-    form.location = [...role.location]
-    form.is_data_access = role.is_data_access
-    form.permissions = [...role.permissions]
-    form.members = [...role.members]
+    seedForm(form, {
+        name: role.name,
+        business_unit: [...role.business_unit],
+        company: [...role.company],
+        location: [...role.location],
+        is_data_access: role.is_data_access,
+        permissions: [...role.permissions],
+        members: [...role.members],
+    })
     permissionSearch.value = ''
     roleModal.value = true
 }
 
+function closeRole() {
+    roleModal.value = false
+    seedForm(form, blankRole())
+}
+
+// Closing the drawer throws the draft away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(form, closeRole)
+
 function submitRole() {
-    const opts = { preserveScroll: true, onSuccess: () => (roleModal.value = false) }
-    if (editingId.value) form.put(`/admin/roles/${editingId.value}`, opts)
-    else form.post('/admin/roles', opts)
+    const opts = { preserveScroll: true, onSuccess: () => closeRole() }
+    if (editingId.value) form.put(route('roles.update', editingId.value), opts)
+    else form.post(route('roles.store'), opts)
 }
 
 function togglePermission(name: string) {
@@ -203,7 +222,7 @@ function clearAllPermissions() {
 // --- Delete ---
 function remove(role: Role) {
     if (confirm(t.value.roles.confirmDelete)) {
-        router.delete(`/admin/roles/${role.id}`, { preserveScroll: true })
+        router.delete(route('roles.destroy', role.id), { preserveScroll: true })
     }
 }
 
@@ -338,7 +357,7 @@ function scopeChips(role: Role): string[] {
         </DataTable>
 
         <!-- Create / edit role -->
-        <Drawer :show="roleModal" :title="editingId ? t.roles.edit : (form.is_data_access ? t.roles.addDataRole : t.roles.add)" max-width="max-w-2xl" @close="roleModal = false">
+        <Drawer :show="roleModal" :title="editingId ? t.roles.edit : (form.is_data_access ? t.roles.addDataRole : t.roles.add)" max-width="max-w-2xl" @close="requestClose">
             <form id="role-form" class="space-y-4" @submit.prevent="submitRole">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.roles.name }}</label>
@@ -537,7 +556,7 @@ function scopeChips(role: Role): string[] {
                 </div>
             </form>
             <template #footer>
-                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="roleModal = false">
+                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="requestClose">
                     {{ t.roles.cancel }}
                 </button>
                 <button type="submit" form="role-form" :disabled="form.processing" class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
@@ -545,5 +564,12 @@ function scopeChips(role: Role): string[] {
                 </button>
             </template>
         </Drawer>
+
+        <!-- Unsaved-changes prompt, raised when the role drawer is closed dirty. -->
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
     </AppLayout>
 </template>

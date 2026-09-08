@@ -11,7 +11,7 @@ Route::middleware('guest')->group(function () {
     Route::get('login', [AuthenticatedSessionController::class, 'create'])
         ->name('login');
 
-    Route::post('login', [AuthenticatedSessionController::class, 'store']);
+    Route::post('login', [AuthenticatedSessionController::class, 'store'])->name('login.store');
 
     // SSO (production entry point): external portal posts an encrypted payload.
     Route::get('sso/dbauth', [SsoController::class, 'dbauth'])->name('sso.dbauth');

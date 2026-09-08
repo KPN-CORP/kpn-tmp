@@ -10,6 +10,7 @@ import Pagination from '@/Components/UI/Pagination.vue'
 import { useLocale } from '@/Composables/useLocale'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
+import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
 
@@ -45,12 +46,15 @@ interface KeyBehavior {
     id: number
     name_en: string
     name_id: string | null
+    sequence: number
 }
 
 interface ProficiencyLevel {
     id: number
     name_en: string
     name_id: string | null
+    description_en: string | null
+    description_id: string | null
     sequence: number
     // A rung can be switched off without losing it; the list badges it.
     is_active: boolean
@@ -102,7 +106,7 @@ function competencyDescription(c: Competency): string {
  * --------------------------------------------------------------------------
  * Writes done from the list
  * --------------------------------------------------------------------------
- * Add/edit happens on its own page (/master-data/competency/create and
+ * Add/edit happens on its own page (/master-data/master-competency/create and
  * /{id}/edit), so the list only links to it. What stays here is what belongs
  * to a row rather than to a form: deleting one and switching one on/off. Both
  * post to the shared master endpoints, which redirect back to this list.
@@ -110,11 +114,11 @@ function competencyDescription(c: Competency): string {
 
 const MASTER_TYPE = 'competency_name'
 
-const editUrl = (id: number) => `/master-data/competency/${id}/edit`
+const editUrl = (id: number) => route('master_data.competency.edit', id)
 
 function deleteMaster(id: number, name?: string) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/${MASTER_TYPE}/${id}`,
+        url: route('idp.setting.masters.destroy', [MASTER_TYPE, id]),
         name,
     }
 }
@@ -159,6 +163,18 @@ function competencyTypeName(id: number | null): string {
  * `name_en` / `name_id` (the DB's own field names) rather than the masters'
  * `value` / `value_en`, so they need their own reader.
  */
+// The row's description in the reading language, falling back to the other —
+// same rule as rowName() below.
+function rowDescription(row: {
+    description_en?: string | null
+    description_id?: string | null
+}): string {
+    const preferred = locale.value === 'id' ? row.description_id : row.description_en
+    const fallback = locale.value === 'id' ? row.description_en : row.description_id
+
+    return (preferred || fallback || '').trim()
+}
+
 function rowName(row: { name_en: string; name_id?: string | null }): string {
     const preferred = locale.value === 'id' ? row.name_id : row.name_en
     return (preferred ?? '').trim() !== '' ? (preferred as string) : row.name_en
@@ -253,6 +269,7 @@ interface CompetencyLine {
     // 2 when the competency has no levels at all — the empty level cell then
     // covers the key-behavior column too.
     levelColspan: number
+    levelDescription: string | null
     behaviorName: string | null
 }
 
@@ -268,6 +285,7 @@ function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLi
             levelActive: true,
             levelRowspan: 1,
             levelColspan: 2,
+            levelDescription: null,
             behaviorName: null,
         }]
     }
@@ -286,6 +304,7 @@ function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLi
                 levelActive: level.is_active,
                 levelRowspan: i === 0 ? span : 0,
                 levelColspan: 1,
+                levelDescription: i === 0 ? rowDescription(level) || null : null,
                 behaviorName: behaviors[i] ?? null,
             })
         }
@@ -378,7 +397,7 @@ const togglingId = ref<number | null>(null)
 
 function toggleActive(competency: Competency) {
     router.put(
-        `/idp-setting/masters/competency_name/${competency.id}/active`,
+        route('idp.setting.masters.active', [MASTER_TYPE, competency.id]),
         { is_active: !competency.is_active },
         {
             preserveScroll: true,
@@ -460,7 +479,7 @@ function changeCompetencyPerPage(size: number) {
                 </div>
 
                 <Link
-                    href="/master-data/competency/create"
+                    :href="route('master_data.competency.create')"
                     class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
                 >
                     <i class="fa-solid fa-plus text-xs" />
@@ -635,6 +654,13 @@ function changeCompetencyPerPage(size: number) {
                                     <span v-else class="text-xs italic text-slate-300">
                                         {{ t.idp.settings.noProficiencyLevel }}
                                     </span>
+
+                                    <p
+                                        v-if="line.levelDescription"
+                                        class="mt-1 whitespace-pre-line text-[11px] leading-snug text-slate-400"
+                                    >
+                                        {{ line.levelDescription }}
+                                    </p>
                                 </td>
 
                                 <!-- Key behavior: one per line, unless the
@@ -721,7 +747,7 @@ function changeCompetencyPerPage(size: number) {
             :show="historyCompetency !== null"
             :url="
                 historyCompetency
-                    ? `/idp-setting/masters/competency_name/${historyCompetency.id}/status-history`
+                    ? route('idp.setting.masters.statusHistory', [MASTER_TYPE, historyCompetency.id])
                     : null
             "
             :name="historyCompetency ? masterName(historyCompetency) : ''"

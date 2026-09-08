@@ -9,7 +9,6 @@ use App\Models\CompetencyProficiencyLevel;
 use App\Models\CompetencyType;
 use App\Models\DevelopmentProgram;
 use App\Models\IndividualDevelopmentPlan;
-use App\Models\KeyBehavior;
 use App\Models\Training;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -120,32 +119,25 @@ class IdpMasterService
         $blocked = match ($type) {
             MasterDataType::CompetencyType => $this->firstBlocker([
                 [Competency::where('competency_type_id', $master->id), 'it is assigned to a competency'],
-                [$master->proficiencyLevels(), 'it is assigned to a proficiency level'],
                 [DevelopmentProgram::where('competency_type_id', $master->id), 'it is assigned to a development program'],
                 [CompetencyImplementation::where('competency_type_id', $master->id), 'it is used in a master implementation'],
                 [$master->trainings(), 'it is assigned to a master training'],
             ]),
 
-            MasterDataType::ProficiencyLevel => $this->firstBlocker([
-                [$master->competencies(), 'it is assigned to a competency'],
-                [$master->keyBehaviors(), 'it still has key behaviors'],
-                [DevelopmentProgram::where('proficiency_level_id', $master->id), 'it is assigned to a development program'],
-                [$master->implementations(), 'it is used in a master implementation'],
-                [$master->trainings(), 'it is assigned to a master training'],
-            ]),
-
+            // A competency owns the proficiency levels other screens select,
+            // so deleting one would take those rungs (and everything pointing
+            // at them) with it.
             MasterDataType::CompetencyName => $this->firstBlocker([
                 [$master->implementations(), 'it is used in a master implementation'],
                 [$master->trainings(), 'it is assigned to a master training'],
+                [$master->developmentPrograms(), 'it is developed by a development program'],
             ]),
 
             MasterDataType::Training => $this->firstBlocker([
                 [$master->developmentPrograms(), 'it names a development program'],
             ]),
 
-            MasterDataType::KeyBehavior, MasterDataType::DevelopmentProgram => null,
-
-            MasterDataType::ReviewTools => null,
+            MasterDataType::DevelopmentProgram, MasterDataType::ReviewTools => null,
         };
 
         if ($blocked !== null) {
@@ -192,12 +184,7 @@ class IdpMasterService
         }
 
         return $attributes + match ($type) {
-            MasterDataType::KeyBehavior => [
-                // The level a behavior belongs to. Editing may move it.
-                'proficiency_level_id' => $data['proficiency_level_id'],
-            ],
-
-            MasterDataType::CompetencyName, MasterDataType::ProficiencyLevel => [
+            MasterDataType::CompetencyName => [
                 'competency_type_id' => $data['competency_type_id'] ?? null,
             ],
 
@@ -260,22 +247,6 @@ class IdpMasterService
     {
         if ($type === MasterDataType::CompetencyName) {
             /** @var Competency $master */
-
-            // The competency form owns its proficiency ladder now and does not
-            // send these; only a caller that actually posts the master ids
-            // touches the legacy pivots, so the links that exist stay put.
-            if (in_array('proficiency_level_ids', $presentKeys, true)) {
-                $levelIds = $this->intList($data['proficiency_level_ids'] ?? []);
-                $master->masterProficiencyLevels()->sync($levelIds);
-
-                // A key behavior only counts while one of the chosen levels owns it.
-                $behaviorIds = $levelIds === []
-                    ? []
-                    : KeyBehavior::whereIn('id', $this->intList($data['key_behavior_ids'] ?? []))
-                        ->whereIn('proficiency_level_id', $levelIds)
-                        ->pluck('id')->all();
-                $master->masterKeyBehaviors()->sync($behaviorIds);
-            }
 
             // Program links are also editable from the program side, so only
             // touch them when this form actually sent them.
@@ -344,6 +315,12 @@ class IdpMasterService
      * deleted, taking their behaviors with them. A rung with a blank name is
      * dropped rather than saved.
      *
+     * The rung's `sequence` is NOT taken from the request: the ladder is ordered
+     * by row position on the form (moved with up/down buttons), so the position
+     * in the submitted list is the order. It is counted over the rows actually
+     * kept, since the submitted keys are deliberately not re-indexed after the
+     * blank ones are dropped — using the array key would leave gaps.
+     *
      * Switching a rung on or off is recorded in the same audit log the masters
      * use, so the per-row history reads back the way theirs does.
      */
@@ -351,8 +328,9 @@ class IdpMasterService
     {
         $existing = $competency->proficiencyLevels()->get()->keyBy('id');
         $keep = [];
+        $sequence = 0;
 
-        foreach ((array) $rows as $position => $row) {
+        foreach ((array) $rows as $row) {
             $row = (array) $row;
 
             $name = trim((string) ($row['name_en'] ?? ''));
@@ -364,9 +342,9 @@ class IdpMasterService
             $attributes = [
                 'name_en' => $name,
                 'name_id' => $this->nullIfBlank($row['name_id'] ?? null),
-                // Falls back to the row's position, so a ladder saved without
-                // explicit numbers still comes back in the order it was typed.
-                'sequence' => (int) ($row['sequence'] ?? 0) ?: (int) $position + 1,
+                'description_en' => $this->nullIfBlank($row['description_en'] ?? null),
+                'description_id' => $this->nullIfBlank($row['description_id'] ?? null),
+                'sequence' => ++$sequence,
                 'is_active' => (bool) ($row['is_active'] ?? true),
             ];
 
@@ -414,12 +392,14 @@ class IdpMasterService
 
     /**
      * The key behaviors of one rung, same id-preserving contract as the rungs
-     * themselves.
+     * themselves — and, like them, ordered by their position in the submitted
+     * list rather than by a number the form sends.
      */
     private function syncOwnedKeyBehaviors(CompetencyProficiencyLevel $level, mixed $rows): void
     {
         $existing = $level->keyBehaviors()->get()->keyBy('id');
         $keep = [];
+        $sequence = 0;
 
         foreach ((array) $rows as $row) {
             $row = (array) $row;
@@ -427,11 +407,14 @@ class IdpMasterService
             $attributes = [
                 'name_en' => trim((string) ($row['name_en'] ?? '')),
                 'name_id' => $this->nullIfBlank($row['name_id'] ?? null),
+                'sequence' => $sequence + 1,
             ];
 
             if ($attributes['name_en'] === '') {
                 continue;
             }
+
+            $sequence++;
 
             $behavior = $existing->get((int) ($row['id'] ?? 0));
 

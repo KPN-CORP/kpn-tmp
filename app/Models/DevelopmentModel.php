@@ -20,8 +20,22 @@ class DevelopmentModel extends Model
         'name_en',
         'name_id',
         'percentage',
+        'uses_master_training',
         'description_en',
         'description_id',
+    ];
+
+    protected $casts = [
+        'uses_master_training' => 'boolean',
+    ];
+
+    /**
+     * Without this a model created without the field has no `uses_master_training`
+     * on the in-memory instance at all (it only picks up the column default on
+     * reload), which would read as null rather than false.
+     */
+    protected $attributes = [
+        'uses_master_training' => false,
     ];
 
     /**

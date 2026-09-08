@@ -18,9 +18,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * (`custom_proficiency_level`): that type has no implementation map to draw a
  * level from.
  *
- * The name is either typed here or taken from the Master Training catalogue.
- * `training_id` records which — it is null for a typed name — while `name_en` /
- * `name_id` stay the single place the name is read from, copied off the
+ * The name and description are either typed here or taken from the Master
+ * Training catalogue — which of the two is decided by the development model the
+ * program is filed under (`development_models.uses_master_training`), not by
+ * the program itself. `training_id` records where they came from — it is null
+ * for a typed name — while `name_en` / `name_id` and `description_en` /
+ * `description_id` stay the single place they are read from, copied off the
  * training on save.
  */
 class DevelopmentProgram extends Model
@@ -32,6 +35,8 @@ class DevelopmentProgram extends Model
         'proficiency_level_id',
         'name_en',
         'name_id',
+        'description_en',
+        'description_id',
         'custom_proficiency_level',
     ];
 
@@ -45,9 +50,14 @@ class DevelopmentProgram extends Model
         return $this->belongsTo(CompetencyType::class);
     }
 
+    /**
+     * The rung of its competency's ladder this program targets — reached
+     * through the master-implementation map, which is what says where a
+     * competency is rolled out.
+     */
     public function proficiencyLevel(): BelongsTo
     {
-        return $this->belongsTo(ProficiencyLevel::class);
+        return $this->belongsTo(CompetencyProficiencyLevel::class, 'proficiency_level_id');
     }
 
     /**

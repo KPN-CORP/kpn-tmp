@@ -5,6 +5,7 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { usePermission } from '@/Composables/usePermission'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 const { can } = usePermission()
@@ -14,12 +15,12 @@ const userName = computed(() => (page.props.auth as any)?.user?.name ?? '')
 
 const links = computed(() =>
     [
-        { label: t.value.nav.facecard, href: '/facecard', icon: 'fa-solid fa-id-card', show: true },
-        { label: t.value.nav.idp, href: '/idp', icon: 'fa-solid fa-seedling', show: true },
-        { label: t.value.nav.report, href: '/report', icon: 'fa-solid fa-chart-column', show: can('view_report_menu') },
-        { label: t.value.nav.importCenter, href: '/import-center', icon: 'fa-solid fa-file-import', show: can('view_import_center') },
-        { label: t.value.nav.roles, href: '/admin/roles', icon: 'fa-solid fa-user-shield', show: can('view_admin_setting') },
-        { label: t.value.nav.userGuide, href: '/user-guide', icon: 'fa-solid fa-book-open', show: true },
+        { label: t.value.nav.facecard, href: route('facecard.list'), icon: 'fa-solid fa-id-card', show: true },
+        { label: t.value.nav.idp, href: route('idp.list'), icon: 'fa-solid fa-seedling', show: true },
+        { label: t.value.nav.report, href: route('report.show'), icon: 'fa-solid fa-chart-column', show: can('view_report_menu') },
+        { label: t.value.nav.importCenter, href: route('import.index'), icon: 'fa-solid fa-file-import', show: can('view_import_center') },
+        { label: t.value.nav.roles, href: route('roles.index'), icon: 'fa-solid fa-user-shield', show: can('view_admin_setting') },
+        { label: t.value.nav.userGuide, href: route('user_guide.index'), icon: 'fa-solid fa-book-open', show: true },
     ].filter((l) => l.show),
 )
 </script>

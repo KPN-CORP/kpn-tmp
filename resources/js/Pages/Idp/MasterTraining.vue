@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { Head, router, useForm } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
@@ -15,6 +16,8 @@ import FormSection from '@/Components/UI/FormSection.vue'
 import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
 
@@ -34,9 +37,14 @@ interface Competency extends Localized {
     is_active: boolean
 }
 
+/**
+ * One rung of a competency's own proficiency ladder. There is no shared
+ * proficiency-level master any more, so a level belongs to exactly one
+ * competency and is offered only once that competency is chosen.
+ */
 interface ProficiencyLevel extends Localized {
-    // The type this level is filed under; null = global, fits every type.
-    competency_type_id: number | null
+    competency_id: number
+    sequence: number
     is_active: boolean
 }
 
@@ -116,10 +124,9 @@ const proficiencyLevelById = computed(() => {
  * Dropdown options
  * --------------------------------------------------------------------------
  *
- * A training has no effective period of its own — it applies from now on — so
- * the masters it points at have to be usable from now on too. An inactive
- * competency or proficiency level is off the list; one that is merely
- * scheduled stays on it. The server enforces the same rule on save.
+ * A training applies from now on, so the masters it points at have to be
+ * usable from now on too: an inactive competency or proficiency level is off
+ * the list. The server enforces the same rule on save.
  */
 
 const toStringOptions = (list: string[]): Option[] =>
@@ -133,7 +140,7 @@ const competencyTypeOptions = computed<Option[]>(() =>
     props.competencyTypes.map((c) => ({ value: String(c.id), label: masterName(c) })),
 )
 
-// Competencies of the chosen type, minus the expired ones.
+// Competencies of the chosen type, minus the inactive ones.
 const competencyOptions = computed<Option[]>(() => {
     const typeId = form.competency_type_id
     if (typeId == null) return []
@@ -153,29 +160,26 @@ const competencyOptions = computed<Option[]>(() => {
 })
 
 /**
- * The levels filed under the chosen competency type, plus the untyped (global)
- * ones. No type chosen means no levels to choose — the type is picked first,
- * exactly as on the competency form.
+ * The rungs of the chosen competency's own ladder — a training targets the
+ * levels of the competency it builds, so nothing is on offer until that
+ * competency is picked.
  */
-const typedProficiencyLevels = computed<ProficiencyLevel[]>(() => {
-    const typeId = form.competency_type_id
-    if (typeId == null) return []
+const competencyProficiencyLevels = computed<ProficiencyLevel[]>(() => {
+    const competencyId = form.competency_id
+    if (competencyId == null) return []
 
-    return props.proficiencyLevels.filter(
-        (p) => p.competency_type_id == null || p.competency_type_id === typeId,
-    )
+    return props.proficiencyLevels.filter((p) => p.competency_id === competencyId)
 })
 
-// Of those, the ones whose own effective period has not closed. A level is
-// judged on its own dates here, not through the competency.
+// Of those, the ones still switched on.
 const proficiencyOptions = computed<Option[]>(() => {
     const pinned = new Set(form.proficiency_level_ids)
 
     return (
-        typedProficiencyLevels.value
+        competencyProficiencyLevels.value
             // Levels already pinned to this training stay listed even once they
-            // expire; dropping them would silently unpin them on the next save.
-            // They are flagged below instead.
+            // are switched off; dropping them would silently unpin them on the
+            // next save. They are flagged below instead.
             .filter((p) => !inactive(p) || pinned.has(String(p.id)))
             .map((p) => ({ value: String(p.id), label: masterName(p) }))
     )
@@ -210,23 +214,29 @@ const workLocationOptions = computed<Option[]>(() =>
 
 const modal = ref(false)
 const editingId = ref<number | null>(null)
+// Suppresses the cascade watchers while a row is being loaded into the form.
+const loadingForm = ref(false)
 
-const form = useForm({
-    type: 'training',
-    // Canonical `value` tracks the English name (value_en) server-side.
-    value_en: '',
-    value_id: '',
-    description_en: '',
-    description_id: '',
-    competency_type_id: null as number | null,
-    competency_id: null as number | null,
-    // MultiSelect binds string[]; converted to ints server-side.
-    proficiency_level_ids: [] as string[],
-    business_units: [] as string[],
-    work_locations: [] as string[],
-    // A new training is usable straight away.
-    is_active: true,
-})
+function blankTraining() {
+    return {
+        type: 'training',
+        // Canonical `value` tracks the English name (value_en) server-side.
+        value_en: '',
+        value_id: '',
+        description_en: '',
+        description_id: '',
+        competency_type_id: null as number | null,
+        competency_id: null as number | null,
+        // MultiSelect binds string[]; converted to ints server-side.
+        proficiency_level_ids: [] as string[],
+        business_units: [] as string[],
+        work_locations: [] as string[],
+        // A new training is usable straight away.
+        is_active: true,
+    }
+}
+
+const form = useForm(blankTraining())
 
 const selectedCompetency = computed<Competency | null>(() =>
     form.competency_id == null ? null : competencyById.value.get(form.competency_id) ?? null,
@@ -242,56 +252,90 @@ const competencyInactive = computed(
     () => !!selectedCompetency.value && inactive(selectedCompetency.value),
 )
 
-// Pinned levels whose effective period has since ended.
+// Pinned levels that have since been switched off.
 const inactiveLevelNames = computed(() =>
     selectedLevels.value.filter((p) => inactive(p)).map((p) => masterName(p)),
 )
 
-// Changing the competency type drops the competency and any proficiency level
-// that no longer belongs to it (an untyped level is global, so it survives).
+// Changing the competency type drops a competency that no longer belongs to it.
+// Suppressed while a row is being loaded, so opening a training whose stored
+// pair has since drifted apart neither blanks it nor marks the form dirty.
 watch(
     () => form.competency_type_id,
     (typeId) => {
+        if (loadingForm.value) return
+
         const c = selectedCompetency.value
         if (c && c.competency_type_id !== typeId) {
             form.competency_id = null
         }
+    },
+)
 
-        const fits = new Set(typedProficiencyLevels.value.map((p) => String(p.id)))
+// Levels belong to one competency, so changing the competency drops every
+// level the new one does not own. Suppressed while a row is being loaded, so
+// opening an existing training never blanks what it stores.
+watch(
+    () => form.competency_id,
+    () => {
+        if (loadingForm.value) return
+
+        const fits = new Set(competencyProficiencyLevels.value.map((p) => String(p.id)))
         form.proficiency_level_ids = form.proficiency_level_ids.filter((id) => fits.has(id))
     },
 )
 
-// Dropping a business unit drops the work locations only it offered.
+// Dropping a business unit drops the work locations only it offered. Suppressed
+// while a row is being loaded, so what the training already stores survives
+// opening the drawer even if kpncorp no longer offers it.
 watch(
     () => form.business_units,
     () => {
+        if (loadingForm.value) return
+
         const available = new Set(availableWorkLocations.value)
         form.work_locations = form.work_locations.filter((l) => available.has(l))
     },
     { deep: true },
 )
 
+function loadForm(values: ReturnType<typeof blankTraining>) {
+    loadingForm.value = true
+    seedForm(form, values)
+    modal.value = true
+
+    // Release the cascade guard once Vue has flushed the watchers the reset
+    // queued, so restoring a row never trips them.
+    nextTick(() => {
+        loadingForm.value = false
+    })
+}
+
 function openModal(item?: Training) {
     editingId.value = item?.id ?? null
-    form.clearErrors()
-    form.value_en = item?.value_en ?? item?.value ?? ''
-    form.value_id = item?.value_id ?? ''
-    form.description_en = item?.description_en ?? ''
-    form.description_id = item?.description_id ?? ''
-
-    // Assign the parents before the children so the cascade watchers don't wipe
-    // the child values we're restoring on edit. Vue flushes watchers after this
-    // synchronous block, so the final child assignments below win.
-    form.competency_type_id = item?.competency_type_id ?? null
-    form.competency_id = item?.competency_id ?? null
-    form.proficiency_level_ids = (item?.proficiency_level_ids ?? []).map(String)
-    form.business_units = [...(item?.business_units ?? [])]
-    form.work_locations = [...(item?.work_locations ?? [])]
-    form.is_active = item?.is_active ?? true
-
-    modal.value = true
+    loadForm({
+        ...blankTraining(),
+        value_en: item?.value_en ?? item?.value ?? '',
+        value_id: item?.value_id ?? '',
+        description_en: item?.description_en ?? '',
+        description_id: item?.description_id ?? '',
+        competency_type_id: item?.competency_type_id ?? null,
+        competency_id: item?.competency_id ?? null,
+        proficiency_level_ids: (item?.proficiency_level_ids ?? []).map(String),
+        business_units: [...(item?.business_units ?? [])],
+        work_locations: [...(item?.work_locations ?? [])],
+        is_active: item?.is_active ?? true,
+    })
 }
+
+function closeModal() {
+    modal.value = false
+    seedForm(form, blankTraining())
+}
+
+// Closing the drawer throws the draft away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(form, closeModal)
 
 /**
  * --------------------------------------------------------------------------
@@ -307,7 +351,7 @@ const togglingId = ref<number | null>(null)
 
 function toggleActive(training: Training) {
     router.put(
-        `/idp-setting/masters/training/${training.id}/active`,
+        route('idp.setting.masters.active', ['training', training.id]),
         { is_active: !training.is_active },
         {
             preserveScroll: true,
@@ -330,13 +374,13 @@ function submit() {
         preserveScroll: true,
         preserveState: true,
         only: reloadOnly,
-        onSuccess: () => (modal.value = false),
+        onSuccess: () => closeModal(),
     }
 
     if (editingId.value) {
-        form.put(`/idp-setting/masters/training/${editingId.value}`, opts)
+        form.put(route('idp.setting.masters.update', ['training', editingId.value]), opts)
     } else {
-        form.post('/idp-setting/masters', opts)
+        form.post(route('idp.setting.masters.store'), opts)
     }
 }
 
@@ -436,7 +480,7 @@ const deleting = ref(false)
 
 function deleteTraining(item: Training) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/training/${item.id}`,
+        url: route('idp.setting.masters.destroy', ['training', item.id]),
         name: masterName(item),
     }
 }
@@ -621,7 +665,7 @@ function confirmDelete() {
             :show="modal"
             :title="modalTitle"
             max-width="max-w-3xl"
-            @close="modal = false"
+            @close="requestClose"
         >
             <form id="training-form" class="space-y-4" @submit.prevent="submit">
                 <!-- ========================================================
@@ -717,7 +761,7 @@ function confirmDelete() {
                             </p>
                         </div>
 
-                        <!-- Proficiency levels (filed under the type, or global) -->
+                        <!-- Proficiency levels (rungs of the chosen competency) -->
                         <div class="sm:col-span-2">
                             <label class="mb-1.5 block text-sm font-medium text-slate-700">
                                 {{ t.idp.settings.proficiencyLevel }}
@@ -741,18 +785,18 @@ function confirmDelete() {
                                 <i
                                     class="mt-0.5 text-[10px] text-slate-300"
                                     :class="
-                                        form.competency_type_id == null
+                                        form.competency_id == null
                                             ? 'fa-solid fa-lock'
                                             : 'fa-solid fa-circle-info'
                                     "
                                 />
                                 <span>
                                     {{
-                                        form.competency_type_id == null
-                                            ? t.idp.settings.pickTypeFirst
-                                            : typedProficiencyLevels.length === 0
-                                                ? t.idp.settings.noProficiencyLevelsForType
-                                                : t.idp.settings.noActiveProficiencyLevelsForType
+                                        form.competency_id == null
+                                            ? t.idp.settings.pickCompetencyFirst
+                                            : competencyProficiencyLevels.length === 0
+                                                ? t.idp.settings.noProficiencyForCompetency
+                                                : t.idp.settings.noActiveProficiencyForCompetency
                                     }}
                                 </span>
                             </p>
@@ -983,7 +1027,7 @@ function confirmDelete() {
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                    @click="modal = false"
+                    @click="requestClose"
                 >
                     {{ t.idp.form.cancel }}
                 </button>
@@ -1001,6 +1045,17 @@ function confirmDelete() {
         </Drawer>
 
         <!-- ================================================================
+             UNSAVED-CHANGES CONFIRMATION
+        ================================================================= -->
+        <!-- Shown when the training drawer is closed with a dirty form. -->
+
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
+
+        <!-- ================================================================
              DELETE CONFIRMATION
         ================================================================= -->
         <!-- ================================================================
@@ -1011,7 +1066,7 @@ function confirmDelete() {
             :show="historyTraining !== null"
             :url="
                 historyTraining
-                    ? `/idp-setting/masters/training/${historyTraining.id}/status-history`
+                    ? route('idp.setting.masters.statusHistory', ['training', historyTraining.id])
                     : null
             "
             :name="historyTraining ? masterName(historyTraining) : ''"

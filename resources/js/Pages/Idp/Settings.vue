@@ -6,12 +6,15 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import FormSection from '@/Components/UI/FormSection.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
 
@@ -22,6 +25,9 @@ interface Model {
     name_en: string | null
     name_id: string | null
     percentage: number
+    // The model decides where its programs' name + description come from: this
+    // flag means the Master Training catalogue, otherwise they are typed.
+    uses_master_training: boolean
     description_en: string | null
     description_id: string | null
     development_programs_count: number
@@ -47,6 +53,7 @@ interface Competency {
     description_en: string | null
     description_id: string | null
     competency_type_id: number | null
+    // The rungs of this competency's own ladder.
     proficiency_level_ids: number[]
     related_program: number[]
     linked_programs: string[]
@@ -58,10 +65,12 @@ interface Program {
     value: string
     value_en: string | null
     value_id: string | null
+    description_en: string | null
+    description_id: string | null
     development_model_id: number | null
     model_name: string | null
     competency_type_id: number | null
-    // The training the name was taken from, or null when it was typed.
+    // The training the name + description were taken from, or null when typed.
     training_id: number | null
     proficiency_level_id: number | null
     custom_proficiency_level: string | null
@@ -75,11 +84,19 @@ interface CompetencyType {
     value_id: string | null
 }
 
+/**
+ * One rung of a competency's own proficiency ladder — there is no shared
+ * proficiency-level master any more, so every level belongs to exactly one
+ * competency. Which of them a program may target is narrowed further by the
+ * implementation map below.
+ */
 interface ProficiencyLevel {
     id: number
     value: string
     value_en: string | null
     value_id: string | null
+    competency_id: number
+    sequence: number
 }
 
 /** A training in the Master Training catalogue, as a name option. */
@@ -88,6 +105,10 @@ interface Training {
     value: string
     value_en: string | null
     value_id: string | null
+    // Carried so the form can read back what the program will store; the
+    // server copies both again on save.
+    description_en: string | null
+    description_id: string | null
     // An inactive training is no longer offered as a program's name source.
     is_active: boolean
 }
@@ -175,15 +196,20 @@ const editingMasterId = ref<number | null>(null)
 // For a development program, the model dropdown is scoped to a chosen package.
 const masterPackageId = ref<number | null>(null)
 
-const masterForm = useForm({
+function blankMaster() {
+    return {
     type: 'development_program' as MasterType,
     // Canonical `value` tracks the English name (value_en) server-side.
     value_en: '',
     value_id: '',
+    // Program → what the activity covers, in both languages.
+    description_en: '',
+    description_id: '',
     development_model_id: null as number | null,
-    // Program → the training its name was taken from, or null when typed. The
-    // name itself still travels in value_en / value_id; the server copies it off
-    // the training on save so the two can never disagree.
+    // Program → the training its name + description were taken from, or null
+    // when typed. The values themselves still travel in value_en / value_id and
+    // description_en / description_id; the server copies them off the training
+    // on save so the two can never disagree.
     training_id: null as number | null,
     // Program → competency type (scopes the competency picker below).
     competency_type_id: null as number | null,
@@ -200,19 +226,17 @@ const masterForm = useForm({
     // Program → corporate scope: the grades the implementation covers for the
     // chosen proficiency level (any number of them).
     grades: [] as string[],
-})
+    }
+}
+
+const masterForm = useForm(blankMaster())
 
 /**
- * Where a development program's name comes from: typed into the bilingual
- * fields, or taken from the Master Training catalogue.
+ * The typed name + description, held while a training is supplying them, so
+ * moving the program back onto a model that types its own never loses what was
+ * written.
  */
-type NameSource = 'program' | 'training'
-
-const nameSource = ref<NameSource>('program')
-
-// The typed name, held while a training is driving the name, so switching back
-// restores what was written instead of the training's text.
-const typedName = ref({ en: '', id: '' })
+const typedText = ref({ en: '', id: '', descEn: '', descId: '' })
 
 /**
  * What the program held when the drawer opened. The pickers narrow to what is
@@ -239,37 +263,62 @@ function openMaster(type: MasterType, item?: Program) {
     masterType.value = type
     editingMasterId.value = item?.id ?? null
 
-    masterForm.clearErrors()
-
     // Seed the form without the competency-type watcher reacting (it would wipe
     // the loaded selection); a fresh drawer starts with an empty snapshot cache.
     applyingOpen.value = true
     typeCache.value = {}
 
-    masterForm.type = type
+    const program = item as Partial<Program> | undefined
+    const isProgram = type === 'development_program'
 
-    const localized = item as Partial<Program> | undefined
-    masterForm.value_en = localized?.value_en ?? item?.value ?? ''
-    masterForm.value_id = localized?.value_id ?? ''
+    const values = {
+        ...blankMaster(),
+        type,
+        value_en: program?.value_en ?? item?.value ?? '',
+        value_id: program?.value_id ?? '',
+        description_en: isProgram ? program?.description_en ?? '' : '',
+        description_id: isProgram ? program?.description_id ?? '' : '',
+        development_model_id: (item as Program)?.development_model_id ?? null,
+        // A program that stored a training took its name + description from
+        // there; everything else typed them.
+        training_id: isProgram ? program?.training_id ?? null : null,
+        // Preselect the competency this program is currently linked to. A
+        // handful of legacy programs carry two; the form develops one, so it
+        // opens on the first and saving settles the link on it.
+        related_competencies:
+            isProgram && item
+                ? props.competencies
+                      .filter((c) => c.related_program.includes((item as Program).id))
+                      .map((c) => c.id)
+                      .slice(0, 1)
+                : [],
+        // Program scope fields (competency type / proficiency level / grades).
+        competency_type_id: isProgram ? program?.competency_type_id ?? null : null,
+        proficiency_level_id: isProgram ? program?.proficiency_level_id ?? null : null,
+        custom_proficiency_level: isProgram ? program?.custom_proficiency_level ?? '' : '',
+        grades: isProgram ? [...(program?.grades ?? [])] : [],
+    }
 
-    masterForm.development_model_id =
-        (item as Program)?.development_model_id ?? null
+    // Loaded as both data and defaults, so `isDirty` — which drives the discard
+    // prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(masterForm, values)
 
-    // A program that stored a training took its name from there; everything
-    // else typed it.
-    masterForm.training_id =
-        type === 'development_program' ? (item as Program)?.training_id ?? null : null
-    nameSource.value =
-        masterForm.training_id != null ? 'training' : 'program'
-    typedName.value =
-        nameSource.value === 'training'
-            ? { en: '', id: '' }
-            : { en: masterForm.value_en, id: masterForm.value_id }
+    // Stash what was typed, unless a training supplied it — in which case
+    // there is nothing of the user's own to come back to.
+    typedText.value =
+        values.training_id != null
+            ? { en: '', id: '', descEn: '', descId: '' }
+            : {
+                  en: values.value_en,
+                  id: values.value_id,
+                  descEn: values.description_en,
+                  descId: values.description_id,
+              }
 
     // Resolve the package the model dropdown should be scoped to: from the
     // program's current model when editing, else default to the active package.
-    if (type === 'development_program') {
-        const modelId = (item as Program)?.development_model_id ?? null
+    if (isProgram) {
+        const modelId = values.development_model_id
         const model =
             modelId != null
                 ? props.developmentModels.find((m) => m.id === modelId)
@@ -280,39 +329,15 @@ function openMaster(type: MasterType, item?: Program) {
         masterPackageId.value = null
     }
 
-    // Preselect the competency this program is currently linked to. A handful
-    // of legacy programs carry two; the form develops one, so it opens on the
-    // first and saving settles the link on it.
-    masterForm.related_competencies =
-        type === 'development_program' && item
-            ? props.competencies
-                  .filter((c) =>
-                      c.related_program.includes((item as Program).id),
-                  )
-                  .map((c) => c.id)
-                  .slice(0, 1)
-            : []
-
-    // Program scope fields (competency type / proficiency level / grades).
-    const program = item as Partial<Program> | undefined
-    masterForm.competency_type_id =
-        type === 'development_program' ? program?.competency_type_id ?? null : null
-    masterForm.proficiency_level_id =
-        type === 'development_program' ? program?.proficiency_level_id ?? null : null
-    masterForm.custom_proficiency_level =
-        type === 'development_program' ? program?.custom_proficiency_level ?? '' : ''
-    masterForm.grades =
-        type === 'development_program' ? [...(program?.grades ?? [])] : []
-
-    loadedCompetencyIds.value = [...masterForm.related_competencies]
-    loadedProficiencyLevelId.value = masterForm.proficiency_level_id
-    loadedGrades.value = [...masterForm.grades]
-    loadedTrainingId.value = masterForm.training_id
+    loadedCompetencyIds.value = [...values.related_competencies]
+    loadedProficiencyLevelId.value = values.proficiency_level_id
+    loadedGrades.value = [...values.grades]
+    loadedTrainingId.value = values.training_id
 
     // Seed the cache with the loaded type's selection so that leaving it and
     // coming back restores exactly what was stored.
-    if (type === 'development_program' && masterForm.competency_type_id != null) {
-        typeCache.value[masterForm.competency_type_id] = snapshotType()
+    if (isProgram && values.competency_type_id != null) {
+        typeCache.value[values.competency_type_id] = snapshotType()
     }
 
     // Let the watcher run again once this synchronous seeding has settled.
@@ -321,25 +346,34 @@ function openMaster(type: MasterType, item?: Program) {
     masterModal.value = true
 }
 
+function closeMaster() {
+    masterModal.value = false
+    seedForm(masterForm, blankMaster())
+}
+
+// Closing the drawer throws the draft away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(masterForm, closeMaster)
+
 function submitMaster() {
     const opts = {
         preserveScroll: true,
-        onSuccess: () => (masterModal.value = false),
+        onSuccess: () => closeMaster(),
     }
 
     if (editingMasterId.value) {
         masterForm.put(
-            `/idp-setting/masters/${masterType.value}/${editingMasterId.value}`,
+            route('idp.setting.masters.update', [masterType.value, editingMasterId.value]),
             opts,
         )
     } else {
-        masterForm.post('/idp-setting/masters', opts)
+        masterForm.post(route('idp.setting.masters.store'), opts)
     }
 }
 
 function deleteMaster(type: MasterType, id: number, name?: string) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/${type}/${id}`,
+        url: route('idp.setting.masters.destroy', [type, id]),
         name,
     }
 }
@@ -447,28 +481,29 @@ const selectedCompetencyValue = computed<string>({
 
 /**
  * --------------------------------------------------------------------------
- * Program name: typed, or taken from Master Training
+ * Program name + description: typed, or taken from Master Training
  * --------------------------------------------------------------------------
+ * Which of the two applies is not the program's choice: the development model
+ * it is filed under declares it (`uses_master_training`). A model that draws
+ * from the catalogue asks for a training and copies its name + description; any
+ * other model asks for both to be written out. The server decides the same way.
  */
 
-const nameSourceOptions = computed<
-    { value: NameSource; label: string; icon: string }[]
->(() => [
-    {
-        value: 'program',
-        label: t.value.idp.settings.nameSourceProgram,
-        icon: 'fa-solid fa-keyboard',
-    },
-    {
-        value: 'training',
-        label: t.value.idp.settings.nameSourceTraining,
-        icon: 'fa-solid fa-graduation-cap',
-    },
-])
+// Whether the program's development model takes its programs from Master
+// Training. No model chosen means the text is typed.
+const usesMasterTraining = computed<boolean>(() => {
+    if (masterType.value !== 'development_program') return false
+    if (masterForm.development_model_id == null) return false
+
+    return (
+        modelById.value.get(masterForm.development_model_id)
+            ?.uses_master_training === true
+    )
+})
 
 // Only active trainings can name a new program. One the program was loaded
 // with keeps its place even once switched off, so editing some other field
-// never silently blanks the name source.
+// never silently blanks the name.
 const trainingOptions = computed<Option[]>(() =>
     props.trainings
         .filter((tr) => tr.is_active || tr.id === loadedTrainingId.value)
@@ -486,48 +521,50 @@ const selectedTrainingValue = computed<string>({
     },
 })
 
-// The bilingual name fields are hidden while a training supplies the name;
-// every other master always types it.
-const showNameInputs = computed(
-    () =>
-        masterType.value !== 'development_program' ||
-        nameSource.value === 'program',
-)
-
-// Mirror the chosen training's name into the form, so the drawer shows exactly
-// what will be stored. The server copies it again on save — that is what the
-// saved name actually relies on.
-function applyTrainingName() {
+// Mirror the chosen training's name + description into the form, so the drawer
+// shows exactly what will be stored. The server copies them again on save —
+// that is what the saved values actually rely on.
+function applyTrainingText() {
     const training = props.trainings.find(
         (tr) => tr.id === masterForm.training_id,
     )
 
     masterForm.value_en = training?.value_en ?? training?.value ?? ''
     masterForm.value_id = training?.value_id ?? ''
+    masterForm.description_en = training?.description_en ?? ''
+    masterForm.description_id = training?.description_id ?? ''
 }
 
-// Switching the source stashes the typed name and restores it on the way back,
-// so flipping between the two never loses what was written.
-watch(nameSource, (source) => {
+// Moving the program onto a model that draws from the catalogue stashes the
+// typed text and restores it on the way back, so switching models never loses
+// what was written.
+watch(usesMasterTraining, (uses) => {
     if (applyingOpen.value) return
 
-    if (source === 'training') {
-        typedName.value = { en: masterForm.value_en, id: masterForm.value_id }
-        applyTrainingName()
+    if (uses) {
+        typedText.value = {
+            en: masterForm.value_en,
+            id: masterForm.value_id,
+            descEn: masterForm.description_en,
+            descId: masterForm.description_id,
+        }
+        applyTrainingText()
 
         return
     }
 
     masterForm.training_id = null
-    masterForm.value_en = typedName.value.en
-    masterForm.value_id = typedName.value.id
+    masterForm.value_en = typedText.value.en
+    masterForm.value_id = typedText.value.id
+    masterForm.description_en = typedText.value.descEn
+    masterForm.description_id = typedText.value.descId
 })
 
 watch(
     () => masterForm.training_id,
     () => {
-        if (!applyingOpen.value && nameSource.value === 'training') {
-            applyTrainingName()
+        if (!applyingOpen.value && usesMasterTraining.value) {
+            applyTrainingText()
         }
     },
 )
@@ -862,7 +899,7 @@ const programRows = computed<ProgramRow[]>(() => {
 const isProgram = computed(() => masterType.value === 'development_program')
 
 const identityComplete = computed(() =>
-    nameSource.value === 'training'
+    usesMasterTraining.value
         ? masterForm.training_id != null && masterForm.value_en.trim() !== ''
         : masterForm.value_en.trim() !== '',
 )
@@ -1054,7 +1091,7 @@ const programColumns = computed<Column[]>(() => [
             :show="masterModal"
             :title="masterTitle()"
             max-width="max-w-3xl"
-            @close="masterModal = false"
+            @close="requestClose"
         >
             <form
                 id="master-form"
@@ -1330,7 +1367,9 @@ const programColumns = computed<Column[]>(() => [
                 </FormSection>
 
                 <!-- ========================================================
-                     3. Identity — what the program is called
+                     3. Identity — what the program is called. Where the name
+                     and description come from is the development model's call
+                     (`uses_master_training`), not a choice made here.
                 ========================================================= -->
                 <FormSection
                     :step="3"
@@ -1338,52 +1377,17 @@ const programColumns = computed<Column[]>(() => [
                     icon="fa-solid fa-tag"
                     :complete="identityComplete"
                 >
-                    <!-- Where the name comes from: typed, or a master training -->
-                    <div
-                        v-if="isProgram"
-                        class="grid gap-2 sm:grid-cols-2"
-                        role="radiogroup"
-                        :aria-label="t.idp.settings.nameSource"
+                    <!-- Says why the fields below look the way they do -->
+                    <p
+                        v-if="usesMasterTraining"
+                        class="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-slate-600"
                     >
-                        <button
-                            v-for="option in nameSourceOptions"
-                            :key="option.value"
-                            type="button"
-                            role="radio"
-                            :aria-checked="nameSource === option.value"
-                            class="flex items-center gap-2.5 rounded-lg border p-3 text-left transition"
-                            :class="
-                                nameSource === option.value
-                                    ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
-                                    : 'border-border bg-white hover:border-slate-300 hover:bg-slate-50'
-                            "
-                            @click="nameSource = option.value"
-                        >
-                            <span
-                                class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition"
-                                :class="
-                                    nameSource === option.value
-                                        ? 'border-primary'
-                                        : 'border-slate-300'
-                                "
-                            >
-                                <span
-                                    v-if="nameSource === option.value"
-                                    class="h-2 w-2 rounded-full bg-primary"
-                                />
-                            </span>
+                        <i class="fa-solid fa-graduation-cap mt-0.5 text-[10px] text-primary" />
+                        <span>{{ t.idp.settings.nameFromModelTraining }}</span>
+                    </p>
 
-                            <span
-                                class="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-800"
-                            >
-                                <i :class="option.icon" class="text-xs text-slate-400" />
-                                {{ option.label }}
-                            </span>
-                        </button>
-                    </div>
-
-                    <!-- 3a. Name taken from the Master Training catalogue -->
-                    <div v-if="isProgram && nameSource === 'training'">
+                    <!-- 3a. Name + description taken from Master Training -->
+                    <div v-if="usesMasterTraining">
                         <label class="mb-1.5 block text-sm font-medium text-slate-700">
                             {{ t.idp.settings.training }}
                             <span class="text-red-500">*</span>
@@ -1414,37 +1418,71 @@ const programColumns = computed<Column[]>(() => [
                             {{ masterForm.errors.training_id || masterForm.errors.value_en }}
                         </p>
 
-                        <!-- The name the training resolves to, in both languages -->
+                        <!-- What the training resolves to — the name and the
+                             description, in both languages, exactly as they
+                             will be stored on the program. -->
                         <div
                             v-if="masterForm.training_id !== null"
-                            class="mt-3 rounded-lg border border-border bg-slate-50/60 px-3 py-2.5"
+                            class="mt-3 space-y-3 rounded-lg border border-border bg-slate-50/60 px-3 py-2.5"
                         >
-                            <p
-                                class="text-[10px] font-semibold uppercase tracking-wide text-slate-400"
-                            >
-                                {{ t.idp.settings.savedName }}
-                            </p>
-                            <div class="mt-1.5 space-y-1.5">
-                                <p class="flex items-start gap-2 text-sm text-slate-700">
-                                    <span
-                                        class="mt-0.5 inline-flex shrink-0 items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
-                                    >
-                                        EN
-                                    </span>
-                                    <span class="min-w-0 break-words">
-                                        {{ masterForm.value_en || '—' }}
-                                    </span>
+                            <div>
+                                <p
+                                    class="text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+                                >
+                                    {{ t.idp.settings.savedName }}
                                 </p>
-                                <p class="flex items-start gap-2 text-sm text-slate-700">
-                                    <span
-                                        class="mt-0.5 inline-flex shrink-0 items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
-                                    >
-                                        ID
-                                    </span>
-                                    <span class="min-w-0 break-words">
-                                        {{ masterForm.value_id || '—' }}
-                                    </span>
+                                <div class="mt-1.5 space-y-1.5">
+                                    <p class="flex items-start gap-2 text-sm text-slate-700">
+                                        <span
+                                            class="mt-0.5 inline-flex shrink-0 items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                        >
+                                            EN
+                                        </span>
+                                        <span class="min-w-0 break-words">
+                                            {{ masterForm.value_en || '—' }}
+                                        </span>
+                                    </p>
+                                    <p class="flex items-start gap-2 text-sm text-slate-700">
+                                        <span
+                                            class="mt-0.5 inline-flex shrink-0 items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                        >
+                                            ID
+                                        </span>
+                                        <span class="min-w-0 break-words">
+                                            {{ masterForm.value_id || '—' }}
+                                        </span>
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div class="border-t border-border/60 pt-2.5">
+                                <p
+                                    class="text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+                                >
+                                    {{ t.idp.settings.description }}
                                 </p>
+                                <div class="mt-1.5 space-y-1.5">
+                                    <p class="flex items-start gap-2 text-sm text-slate-700">
+                                        <span
+                                            class="mt-0.5 inline-flex shrink-0 items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                        >
+                                            EN
+                                        </span>
+                                        <span class="min-w-0 break-words">
+                                            {{ masterForm.description_en || '—' }}
+                                        </span>
+                                    </p>
+                                    <p class="flex items-start gap-2 text-sm text-slate-700">
+                                        <span
+                                            class="mt-0.5 inline-flex shrink-0 items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                        >
+                                            ID
+                                        </span>
+                                        <span class="min-w-0 break-words">
+                                            {{ masterForm.description_id || '—' }}
+                                        </span>
+                                    </p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1454,7 +1492,7 @@ const programColumns = computed<Column[]>(() => [
                          in a textarea instead of scrolling sideways in a one-line
                          input. Enter is swallowed: the name is stored verbatim in
                          lists, exports and PDFs, where a line break has no meaning. -->
-                    <div v-if="showNameInputs" class="grid gap-4 sm:grid-cols-2">
+                    <div v-if="!usesMasterTraining" class="grid gap-4 sm:grid-cols-2">
                         <div>
                             <label
                                 class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
@@ -1521,6 +1559,81 @@ const programColumns = computed<Column[]>(() => [
                             </p>
                         </div>
                     </div>
+
+                    <!-- 3c. Bilingual description — what the activity covers.
+                         Only a program carries one; a review tool is a bare
+                         label. Line breaks are kept here: unlike the name, a
+                         description is only ever read as a block of text. -->
+                    <div
+                        v-if="isProgram && !usesMasterTraining"
+                        class="grid gap-4 sm:grid-cols-2"
+                    >
+                        <div>
+                            <label
+                                class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                            >
+                                <span
+                                    class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                >
+                                    EN
+                                </span>
+                                {{ t.idp.settings.description }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+                            <textarea
+                                v-model="masterForm.description_en"
+                                rows="3"
+                                :placeholder="t.idp.settings.programDescriptionPlaceholderEn"
+                                class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="
+                                    masterForm.errors.description_en
+                                        ? 'border-red-500'
+                                        : 'border-border'
+                                "
+                            />
+                            <p
+                                v-if="masterForm.errors.description_en"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ masterForm.errors.description_en }}
+                            </p>
+                        </div>
+
+                        <div>
+                            <label
+                                class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                            >
+                                <span
+                                    class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                >
+                                    ID
+                                </span>
+                                {{ t.idp.settings.description }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+                            <textarea
+                                v-model="masterForm.description_id"
+                                rows="3"
+                                :placeholder="t.idp.settings.programDescriptionPlaceholderId"
+                                class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="
+                                    masterForm.errors.description_id
+                                        ? 'border-red-500'
+                                        : 'border-border'
+                                "
+                            />
+                            <p
+                                v-if="masterForm.errors.description_id"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ masterForm.errors.description_id }}
+                            </p>
+                        </div>
+                    </div>
                 </FormSection>
             </form>
 
@@ -1528,7 +1641,7 @@ const programColumns = computed<Column[]>(() => [
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                    @click="masterModal = false"
+                    @click="requestClose"
                 >
                     {{ t.idp.form.cancel }}
                 </button>
@@ -1547,6 +1660,16 @@ const programColumns = computed<Column[]>(() => [
                 </button>
             </template>
         </Drawer>
+
+        <!-- ================================================================
+             UNSAVED-CHANGES CONFIRMATION
+        ================================================================= -->
+
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
 
         <!-- ================================================================
              DELETE CONFIRMATION

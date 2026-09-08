@@ -28,15 +28,6 @@ class CompetencyType extends Model
         return $this->hasMany(CompetencyTypeBusinessUnit::class);
     }
 
-    /**
-     * The proficiency levels filed under this type. Levels with no type are
-     * global and belong to none.
-     */
-    public function proficiencyLevels(): HasMany
-    {
-        return $this->hasMany(ProficiencyLevel::class);
-    }
-
     public function developmentPrograms(): HasMany
     {
         return $this->hasMany(DevelopmentProgram::class);

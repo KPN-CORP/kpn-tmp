@@ -6,12 +6,15 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
 
@@ -82,36 +85,55 @@ const columns = computed<Column[]>(() => [
 const modal = ref(false)
 const editingId = ref<number | null>(null)
 
-const form = useForm({
-    type: 'review_tools',
-    // Canonical `value` tracks the English name (value_en) server-side.
-    value_en: '',
-    value_id: '',
-    // New tools are usable straight away.
-    is_active: true,
-})
+function blankTool() {
+    return {
+        type: 'review_tools',
+        // Canonical `value` tracks the English name (value_en) server-side.
+        value_en: '',
+        value_id: '',
+        // New tools are usable straight away.
+        is_active: true,
+    }
+}
+
+const form = useForm(blankTool())
 
 function openModal(tool?: ReviewTool) {
     editingId.value = tool?.id ?? null
-    form.clearErrors()
-    form.value_en = tool?.value_en ?? tool?.value ?? ''
-    form.value_id = tool?.value_id ?? ''
-    form.is_active = tool?.is_active ?? true
+
+    // Seeded as both data and defaults, so `isDirty` — which drives the
+    // discard prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(form, {
+        ...blankTool(),
+        value_en: tool?.value_en ?? tool?.value ?? '',
+        value_id: tool?.value_id ?? '',
+        is_active: tool?.is_active ?? true,
+    })
+
     modal.value = true
 }
+
+function closeModal() {
+    modal.value = false
+    seedForm(form, blankTool())
+}
+
+// Closing the drawer throws the draft away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(form, closeModal)
 
 function submit() {
     const opts = {
         preserveScroll: true,
         preserveState: true,
         only: reloadOnly,
-        onSuccess: () => (modal.value = false),
+        onSuccess: () => closeModal(),
     }
 
     if (editingId.value) {
-        form.put(`/idp-setting/masters/review_tools/${editingId.value}`, opts)
+        form.put(route('idp.setting.masters.update', ['review_tools', editingId.value]), opts)
     } else {
-        form.post('/idp-setting/masters', opts)
+        form.post(route('idp.setting.masters.store'), opts)
     }
 }
 
@@ -134,7 +156,7 @@ const togglingId = ref<number | null>(null)
 
 function toggleActive(tool: ReviewTool) {
     router.put(
-        `/idp-setting/masters/review_tools/${tool.id}/active`,
+        route('idp.setting.masters.active', ['review_tools', tool.id]),
         { is_active: !tool.is_active },
         {
             preserveScroll: true,
@@ -163,7 +185,7 @@ const deleting = ref(false)
 
 function deleteTool(tool: ReviewTool) {
     pendingDelete.value = {
-        url: `/idp-setting/masters/review_tools/${tool.id}`,
+        url: route('idp.setting.masters.destroy', ['review_tools', tool.id]),
         name: toolName(tool),
     }
 }
@@ -279,7 +301,7 @@ function confirmDelete() {
              REVIEW TOOL MODAL
         ================================================================= -->
 
-        <Drawer :show="modal" :title="modalTitle" @close="modal = false">
+        <Drawer :show="modal" :title="modalTitle" @close="requestClose">
             <form id="review-tool-form" class="space-y-4" @submit.prevent="submit">
                 <!-- English section -->
                 <div class="rounded-lg border border-border bg-slate-50/60 p-4">
@@ -344,7 +366,7 @@ function confirmDelete() {
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                    @click="modal = false"
+                    @click="requestClose"
                 >
                     {{ t.idp.form.cancel }}
                 </button>
@@ -368,11 +390,21 @@ function confirmDelete() {
             :show="historyTool !== null"
             :url="
                 historyTool
-                    ? `/idp-setting/masters/review_tools/${historyTool.id}/status-history`
+                    ? route('idp.setting.masters.statusHistory', ['review_tools', historyTool.id])
                     : null
             "
             :name="historyTool ? toolName(historyTool) : ''"
             @close="historyTool = null"
+        />
+
+        <!-- ================================================================
+             UNSAVED-CHANGES CONFIRMATION
+        ================================================================= -->
+
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
         />
 
         <!-- ================================================================

@@ -5,6 +5,7 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import IdpPanel from '@/Components/Domain/IdpPanel.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -61,21 +62,21 @@ const emp = props.employee.data
                     {{ t.idp.upload.button }}
                 </button>
                 <a
-                    :href="`/idp/${emp.employee_id}/pdf`"
+                    :href="route('idp.download_pdf', emp.employee_id)"
                     class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
                 >
                     <i class="fa-solid fa-file-pdf text-xs" />
                     {{ t.idp.downloadPdf }}
                 </a>
                 <a
-                    :href="`/idp/${emp.employee_id}/export`"
+                    :href="route('idp.export', emp.employee_id)"
                     class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
                 >
                     <i class="fa-solid fa-file-excel text-xs" />
                     {{ t.idp.exportExcel }}
                 </a>
                 <Link
-                    href="/idp"
+                    :href="route('idp.list')"
                     class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
                 >
                     <i class="fa-solid fa-arrow-left text-xs" />

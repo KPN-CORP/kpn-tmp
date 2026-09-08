@@ -2,7 +2,10 @@
 import { ref } from 'vue'
 import { useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -20,22 +23,39 @@ const props = defineProps<{
 
 const modalOpen = ref(false)
 
-const form = useForm({
-    employee_id: props.employeeId,
-    critical_position: props.resultSummary?.critical_position ?? '',
-    successor_type: props.resultSummary?.successor_type ?? '',
-    successor_to_position: props.resultSummary?.successor_to_position ?? '',
-})
+// Read off the props each time the drawer opens, so it always starts from what
+// is currently stored rather than from whatever the page was first given.
+function storedSummary() {
+    return {
+        employee_id: props.employeeId,
+        critical_position: props.resultSummary?.critical_position ?? '',
+        successor_type: props.resultSummary?.successor_type ?? '',
+        successor_to_position: props.resultSummary?.successor_to_position ?? '',
+    }
+}
+
+const form = useForm(storedSummary())
 
 function open() {
-    form.clearErrors()
+    // Seeded as both data and defaults, so `isDirty` — which drives the
+    // discard prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(form, storedSummary())
     modalOpen.value = true
 }
 
+function close() {
+    modalOpen.value = false
+    seedForm(form, storedSummary())
+}
+
+// Closing the drawer throws the draft away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(form, close)
+
 function submit() {
-    form.post('/result-summary', {
+    form.post(route('resultSummary.store'), {
         preserveScroll: true,
-        onSuccess: () => (modalOpen.value = false),
+        onSuccess: () => close(),
     })
 }
 
@@ -69,7 +89,7 @@ const items = () => [
             </div>
         </dl>
 
-        <Drawer :show="modalOpen" :title="t.result.title" @close="modalOpen = false">
+        <Drawer :show="modalOpen" :title="t.result.title" @close="requestClose">
             <form id="result-form" class="space-y-4" @submit.prevent="submit">
                 <div>
                     <label class="mb-1 block text-sm font-medium text-slate-700">{{ t.result.criticalPosition }}</label>
@@ -85,7 +105,7 @@ const items = () => [
                 </div>
             </form>
             <template #footer>
-                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="modalOpen = false">
+                <button class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50" @click="requestClose">
                     {{ t.result.cancel }}
                 </button>
                 <button type="submit" form="result-form" :disabled="form.processing" class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover disabled:opacity-60">
@@ -93,5 +113,12 @@ const items = () => [
                 </button>
             </template>
         </Drawer>
+
+        <!-- Unsaved-changes prompt, raised when the drawer is closed dirty. -->
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
     </section>
 </template>

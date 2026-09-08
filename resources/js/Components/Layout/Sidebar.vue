@@ -3,6 +3,7 @@ import { Link, router, usePage } from '@inertiajs/vue3'
 import { computed, reactive } from 'vue'
 import { useNavigation } from '@/Composables/useNavigation'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 const page = usePage()
@@ -29,8 +30,8 @@ const groupedMenus = computed(() =>
 )
 
 // Active when the current path matches the item exactly, or sits beneath it
-// (so `/users/5` still highlights `Users`). No ziggy — Inertia's `page.url`
-// is the current path.
+// (so `/users/5` still highlights `Users`). Inertia's `page.url` is the current
+// path, and nav hrefs come from `route()`, which is relative for this reason.
 function isActive(href: string) {
     const url = page.url
     return url === href || url.startsWith(href + '/')
@@ -164,7 +165,7 @@ function toggle(menu: (typeof menus.value)[number]) {
             <button
                 type="button"
                 class="flex w-full items-center gap-3 border-t border-l-4 border-transparent px-6 py-3 text-sm text-text transition-all hover:bg-red-50 hover:font-bold hover:text-primary"
-                @click="router.post('/logout')"
+                @click="router.post(route('logout'))"
             >
                 <i class="fa-solid fa-arrow-right-from-bracket w-5 text-center" />
                 <span>{{ t.nav.logout }}</span>

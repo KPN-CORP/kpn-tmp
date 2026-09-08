@@ -5,6 +5,7 @@ import AuthLayout from '@/Layouts/AuthLayout.vue'
 import AuthBrand from '@/Components/UI/AuthBrand.vue'
 import LanguageSwitcher from '@/Components/UI/LanguageSwitcher.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const props = defineProps<{
     email: string
@@ -23,7 +24,7 @@ const form = useForm({
 })
 
 function submit() {
-    form.post('/reset-password', {
+    form.post(route('password.store'), {
         onFinish: () => form.reset('password', 'password_confirmation'),
     })
 }

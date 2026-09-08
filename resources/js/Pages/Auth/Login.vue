@@ -5,6 +5,7 @@ import AuthLayout from '@/Layouts/AuthLayout.vue'
 import AuthBrand from '@/Components/UI/AuthBrand.vue'
 import LanguageSwitcher from '@/Components/UI/LanguageSwitcher.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 defineProps<{
     canResetPassword?: boolean
@@ -23,7 +24,7 @@ const form = useForm({
 })
 
 function submit() {
-    form.post('/login', {
+    form.post(route('login.store'), {
         // Never leave a typed password sitting in memory after a failure.
         onFinish: () => form.reset('password'),
     })
@@ -154,7 +155,7 @@ function submit() {
 
                 <Link
                     v-if="canResetPassword"
-                    href="/forgot-password"
+                    :href="route('password.request')"
                     class="text-sm font-medium text-primary hover:underline"
                 >
                     {{ t.auth.forgotPassword }}
@@ -181,7 +182,7 @@ function submit() {
             class="mt-6 border-t border-border pt-4 text-center"
         >
             <Link
-                href="/dev-login"
+                :href="route('dev.login')"
                 class="text-sm font-medium text-slate-500 hover:text-primary hover:underline"
             >
                 <i class="fa-solid fa-user-gear mr-1" />

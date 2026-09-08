@@ -28,6 +28,10 @@ const props = withDefaults(
         // the row whose `rowKey` matches `selectedKey` is highlighted.
         selectable?: boolean
         selectedKey?: string | number | null
+        // Row keys whose `expanded` slot is rendered as a full-width row
+        // underneath. The parent owns which rows are open, so it can allow one
+        // at a time or several.
+        expandedKeys?: (string | number)[]
         // Options for the "rows per page" selector in the pager.
         perPageOptions?: number[]
     }>(),
@@ -38,6 +42,7 @@ const props = withDefaults(
         numbered: false,
         selectable: false,
         selectedKey: null,
+        expandedKeys: () => [],
         perPageOptions: () => [10, 20, 50, 100],
     },
 )
@@ -131,6 +136,13 @@ function alignClass(align?: string) {
 function isActive(col: Column) {
     return (col.sortKey ?? col.key) === sortKey.value
 }
+
+// Total column count, so an expanded row can span the full table width.
+const colSpan = computed(() => props.columns.length + (props.numbered ? 1 : 0))
+
+function isExpanded(row: Record<string, any>, i: number) {
+    return props.expandedKeys.includes(rowKeyVal(row, i))
+}
 </script>
 
 <template>
@@ -166,34 +178,42 @@ function isActive(col: Column) {
                     </tr>
                 </thead>
                 <tbody>
-                    <tr
-                        v-for="(row, i) in pageRows"
-                        :key="rowKeyVal(row, i)"
-                        class="group border-b border-border/60 transition last:border-0"
-                        :class="[
-                            selectable ? 'cursor-pointer' : '',
-                            selectable && rowKeyVal(row, i) === selectedKey
-                                ? 'bg-primary/5 hover:bg-primary/10'
-                                : 'hover:bg-slate-50/70',
-                        ]"
-                        @click="selectable && emit('row-click', row)"
-                    >
-                        <td v-if="numbered" class="px-4 py-3 text-center text-slate-400">
-                            {{ (page - 1) * perPage + i + 1 }}
-                        </td>
-                        <td
-                            v-for="col in columns"
-                            :key="col.key"
-                            class="px-4 py-3 text-slate-700"
-                            :class="[alignClass(col.align), col.tdClass]"
+                    <template v-for="(row, i) in pageRows" :key="rowKeyVal(row, i)">
+                        <tr
+                            class="group border-b border-border/60 transition last:border-0"
+                            :class="[
+                                selectable ? 'cursor-pointer' : '',
+                                selectable && rowKeyVal(row, i) === selectedKey
+                                    ? 'bg-primary/5 hover:bg-primary/10'
+                                    : 'hover:bg-slate-50/70',
+                                isExpanded(row, i) ? 'border-b-0' : '',
+                            ]"
+                            @click="selectable && emit('row-click', row)"
                         >
-                            <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                                {{ row[col.key] ?? '—' }}
-                            </slot>
-                        </td>
-                    </tr>
+                            <td v-if="numbered" class="px-4 py-3 text-center text-slate-400">
+                                {{ (page - 1) * perPageState + i + 1 }}
+                            </td>
+                            <td
+                                v-for="col in columns"
+                                :key="col.key"
+                                class="px-4 py-3 text-slate-700"
+                                :class="[alignClass(col.align), col.tdClass]"
+                            >
+                                <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
+                                    {{ row[col.key] ?? '—' }}
+                                </slot>
+                            </td>
+                        </tr>
+
+                        <!-- Detail panel for this row, spanning the full width. -->
+                        <tr v-if="isExpanded(row, i)" class="border-b border-border/60 last:border-0">
+                            <td :colspan="colSpan" class="bg-slate-50/60 p-0">
+                                <slot name="expanded" :row="row" />
+                            </td>
+                        </tr>
+                    </template>
                     <tr v-if="pageRows.length === 0">
-                        <td :colspan="columns.length + (numbered ? 1 : 0)" class="px-4 py-8 text-center text-slate-400">
+                        <td :colspan="colSpan" class="px-4 py-8 text-center text-slate-400">
                             <slot name="empty">{{ emptyText }}</slot>
                         </td>
                     </tr>

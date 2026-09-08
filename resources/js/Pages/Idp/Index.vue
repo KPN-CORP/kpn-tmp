@@ -7,6 +7,7 @@ import Pagination from '@/Components/UI/Pagination.vue'
 import DataTable, { type Column, type Sort } from '@/Components/Domain/DataTable.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -90,7 +91,7 @@ function toggleAllOnPage() {
 
 function reload() {
     router.get(
-        '/idp',
+        route('idp.list'),
         {
             search: state.search || undefined,
             business_unit: state.business_unit || undefined,
@@ -106,7 +107,7 @@ function reload() {
 
 function changeSort(sort: Sort) {
     router.get(
-        '/idp',
+        route('idp.list'),
         {
             search: state.search || undefined,
             business_unit: state.business_unit || undefined,
@@ -172,7 +173,7 @@ async function startBulkDownload() {
         const xsrf = decodeURIComponent(
             document.cookie.split('; ').find((c) => c.startsWith('XSRF-TOKEN='))?.split('=')[1] ?? '',
         )
-        const res = await fetch('/idp/bulk-download', {
+        const res = await fetch(route('idp.bulk_download'), {
             method: 'POST',
             headers: {
                 Accept: 'application/json',
@@ -193,7 +194,7 @@ function pollStatus(jobId: string) {
     clearInterval(poll)
     poll = setInterval(async () => {
         try {
-            const res = await fetch(`/idp/bulk-download/status/${jobId}`, { headers: { Accept: 'application/json' } })
+            const res = await fetch(route('idp.bulk_status', jobId), { headers: { Accept: 'application/json' } })
             const data = await res.json()
             bulk.progress = data.progress ?? 0
             if (data.error) {
@@ -201,7 +202,7 @@ function pollStatus(jobId: string) {
                 stopBulk()
             } else if (data.ready) {
                 stopBulk()
-                window.location.href = `/idp/bulk-download/file/${jobId}`
+                window.location.href = route('idp.bulk_file', jobId)
             }
         } catch {
             bulk.error = 'Lost connection to the job.'
@@ -320,7 +321,7 @@ function stopBulk() {
             </template>
             <template #cell-action="{ row }">
                 <Link
-                    :href="`/idp/${row.employee_id}`"
+                    :href="route('idp.show', row.employee_id)"
                     class="inline-flex items-center gap-1.5 rounded-md border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
                 >
                     <i class="fa-solid fa-seedling" />

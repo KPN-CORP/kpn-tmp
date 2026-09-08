@@ -6,9 +6,12 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDate as fmt, formatDateTime as fmtDateTime } from '@/Composables/useDate'
+import { route } from '@/Config/route'
 
 const { t } = useLocale()
 
@@ -68,7 +71,7 @@ const state = reactive({
 
 function reload(sort: Sort = props.sort) {
     router.get(
-        '/approvals',
+        route('approvals.inbox'),
         {
             search: state.search || undefined,
             type: state.type || undefined,
@@ -144,19 +147,26 @@ const actForm = useForm({ note: '' })
 function openAct(item: InboxItem, decision: 'approve' | 'reject') {
     actDecision.value = decision
     actItem.value = item
-    actForm.reset()
-    actForm.clearErrors()
+    // Seeded as both data and defaults, so `isDirty` — which drives the
+    // discard prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(actForm, { note: '' })
     actOpen.value = true
 }
 
+function closeAct() {
+    actOpen.value = false
+    seedForm(actForm, { note: '' })
+}
+
+// A typed-but-unsent note is lost on close, so ask before throwing it away.
+// Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(actForm, closeAct)
+
 function submitAct() {
     if (!actItem.value) return
-    actForm.post(`/idp-approvals/${actItem.value.approval_id}/${actDecision.value}`, {
+    actForm.post(route(`idp.approval.${actDecision.value}`, actItem.value.approval_id), {
         preserveScroll: true,
-        onSuccess: () => {
-            actOpen.value = false
-            actForm.reset()
-        },
+        onSuccess: () => closeAct(),
     })
 }
 </script>
@@ -328,7 +338,7 @@ function submitAct() {
                             <td class="px-5 py-4">
                                 <div class="flex items-center justify-center gap-1">
                                     <Link
-                                        :href="`/idp/${item.owner_id}`"
+                                        :href="route('idp.show', item.owner_id)"
                                         class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
                                         :title="t.approvalFlow.openIdp"
                                     >
@@ -376,7 +386,7 @@ function submitAct() {
         </template>
 
         <!-- Approve / reject drawer -->
-        <Drawer :show="actOpen" max-width="max-w-lg" @close="actOpen = false">
+        <Drawer :show="actOpen" max-width="max-w-lg" @close="requestClose">
             <template #header>
                 <div class="min-w-0">
                     <h3 class="font-bold text-slate-800">
@@ -422,7 +432,7 @@ function submitAct() {
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-                    @click="actOpen = false"
+                    @click="requestClose"
                 >
                     {{ t.approvalFlow.cancel }}
                 </button>
@@ -438,5 +448,12 @@ function submitAct() {
                 </button>
             </template>
         </Drawer>
+
+        <!-- Unsaved-note prompt, raised when the drawer is closed dirty. -->
+        <UnsavedChangesDialog
+            :show="confirming"
+            @confirm="discard"
+            @close="confirming = false"
+        />
     </AppLayout>
 </template>

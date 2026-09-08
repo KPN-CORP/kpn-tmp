@@ -10,6 +10,7 @@ import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import { type Option } from '@/Components/UI/MultiSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
 
@@ -30,16 +31,24 @@ interface SubCompetency {
     description_id: string | null
 }
 
+/**
+ * Both `sequence` fields are read-only here: the server assigns them from the
+ * row's position in the submitted list, so the form orders by position and
+ * never posts a number.
+ */
 interface KeyBehavior {
     id?: number
     name_en: string
     name_id: string | null
+    sequence: number
 }
 
 interface ProficiencyLevel {
     id?: number
     name_en: string
     name_id: string | null
+    description_en: string | null
+    description_id: string | null
     sequence: number
     is_active: boolean
     key_behaviors: KeyBehavior[]
@@ -71,7 +80,7 @@ const props = defineProps<{
     competencyTypes: CompetencyType[]
 }>()
 
-const listUrl = '/master-data/competency'
+const listUrl = route('master_data.competency')
 
 const editing = computed(() => props.competency !== null)
 
@@ -183,17 +192,21 @@ const namedSubCount = computed(
  * --------------------------------------------------------------------------
  * The proficiency ladder
  * --------------------------------------------------------------------------
- * Free-typed rungs the competency owns: a sequence number, a bilingual name, an
+ * Free-typed rungs the competency owns: a bilingual name and description, an
  * active flag (audited, so a stored rung has a history to read back), and under
  * each one any number of free-typed key behaviors. Both lists are dynamic — the
  * same uid/id contract as the sub-competencies, one level deeper.
+ *
+ * Both are ordered by row position, moved with the up/down buttons; the stored
+ * `sequence` is dropped on the way in and assigned server-side on the way out,
+ * so the list order is the only thing that says where a row sits.
  */
 
-interface BehaviorRow extends KeyBehavior {
+interface BehaviorRow extends Omit<KeyBehavior, 'sequence'> {
     uid: number
 }
 
-interface LadderRow extends Omit<ProficiencyLevel, 'key_behaviors'> {
+interface LadderRow extends Omit<ProficiencyLevel, 'key_behaviors' | 'sequence'> {
     uid: number
     key_behaviors: BehaviorRow[]
 }
@@ -211,27 +224,29 @@ function newBehaviorRow(behavior?: KeyBehavior): BehaviorRow {
 
 const ladderRows = ref<LadderRow[]>([])
 
-// The first free number, so adding rungs numbers them 1, 2, 3 … without the
-// user having to type it (they still can — it is an input).
-function nextSequence(): number {
-    const used = new Set(ladderRows.value.map((r) => r.sequence))
-    let next = 1
-    while (used.has(next)) next++
-
-    return next
-}
-
 function newLadderRow(level?: ProficiencyLevel): LadderRow {
     return {
         uid: ++ladderUid,
         id: level?.id,
         name_en: level?.name_en ?? '',
         name_id: level?.name_id ?? '',
-        // A new rung lands at the bottom of the ladder.
-        sequence: level?.sequence ?? nextSequence(),
+        description_en: level?.description_en ?? '',
+        description_id: level?.description_id ?? '',
         is_active: level?.is_active ?? true,
         key_behaviors: (level?.key_behaviors ?? []).map((b) => newBehaviorRow(b)),
     }
+}
+
+/**
+ * Move a row one place up or down in its list. Returns silently at either end,
+ * so the buttons can stay rendered (disabled) rather than jumping about.
+ */
+function moveRow<T>(rows: T[], index: number, delta: number): void {
+    const target = index + delta
+    if (target < 0 || target >= rows.length) return
+
+    const [row] = rows.splice(index, 1)
+    rows.splice(target, 0, row)
 }
 
 ladderRows.value = (props.competency?.proficiency_levels ?? []).map((level) =>
@@ -258,6 +273,10 @@ function removeLadderRow(uid: number) {
     ladderRows.value = ladderRows.value.filter((r) => r.uid !== uid)
 }
 
+function moveLadderRow(index: number, delta: number) {
+    moveRow(ladderRows.value, index, delta)
+}
+
 function addBehaviorRow(row: LadderRow) {
     row.key_behaviors.push(newBehaviorRow())
 }
@@ -266,9 +285,13 @@ function removeBehaviorRow(row: LadderRow, uid: number) {
     row.key_behaviors = row.key_behaviors.filter((b) => b.uid !== uid)
 }
 
+function moveBehaviorRow(row: LadderRow, index: number, delta: number) {
+    moveRow(row.key_behaviors, index, delta)
+}
+
 function levelError(
     index: number,
-    field: 'name_en' | 'name_id' | 'sequence',
+    field: 'name_en' | 'name_id',
 ): string | undefined {
     return flatError(`proficiency_levels.${index}.${field}`)
 }
@@ -293,7 +316,7 @@ const historyLevel = ref<LadderRow | null>(null)
 
 const historyUrl = computed(() =>
     historyLevel.value?.id
-        ? `/master-data/competency/levels/${historyLevel.value.id}/status-history`
+        ? route('master_data.competency.levels.statusHistory', historyLevel.value.id)
         : null,
 )
 
@@ -310,9 +333,9 @@ const title = computed(
 
 function submit() {
     if (editing.value) {
-        form.put(`${listUrl}/${props.competency?.id}`)
+        form.put(route('master_data.competency.update', props.competency?.id))
     } else {
-        form.post(listUrl)
+        form.post(route('master_data.competency.store'))
     }
 }
 </script>
@@ -674,24 +697,38 @@ function submit() {
                     class="rounded-lg border border-border bg-slate-50/60 p-3"
                     :class="row.is_active ? '' : 'opacity-75'"
                 >
-                    <!-- Rung header: sequence, status, history, remove. -->
+                    <!-- Rung header: position, reorder, status, history, remove.
+                         The sequence is the row's place in this list, so it is
+                         shown rather than typed and moved with the arrows. -->
                     <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
                         <div class="flex items-center gap-2">
-                            <label class="text-xs font-medium text-slate-500">
-                                {{ t.idp.settings.sequence }}
-                            </label>
-                            <input
-                                v-model.number="row.sequence"
-                                type="number"
-                                min="1"
-                                max="999"
-                                class="w-16 rounded-md border bg-white px-2 py-1.5 text-center text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                                :class="
-                                    levelError(i, 'sequence')
-                                        ? 'border-red-500'
-                                        : 'border-border'
-                                "
+                            <span
+                                class="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-[11px] font-semibold text-slate-600"
+                                :title="t.idp.settings.sequence"
                             >
+                                {{ i + 1 }}
+                            </span>
+
+                            <div class="flex items-center rounded-md border border-border bg-white">
+                                <button
+                                    type="button"
+                                    class="rounded-l-md px-2 py-1.5 text-slate-400 transition hover:bg-slate-50 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                                    :disabled="i === 0"
+                                    :title="t.idp.settings.moveUp"
+                                    @click="moveLadderRow(i, -1)"
+                                >
+                                    <i class="fa-solid fa-chevron-up text-[10px]" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="rounded-r-md border-l border-border px-2 py-1.5 text-slate-400 transition hover:bg-slate-50 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                                    :disabled="i === ladderRows.length - 1"
+                                    :title="t.idp.settings.moveDown"
+                                    @click="moveLadderRow(i, 1)"
+                                >
+                                    <i class="fa-solid fa-chevron-down text-[10px]" />
+                                </button>
+                            </div>
                         </div>
 
                         <div class="flex items-center gap-2">
@@ -795,6 +832,49 @@ function submit() {
                         </div>
                     </div>
 
+                    <!-- What the rung means, both languages. -->
+                    <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                        <div>
+                            <label class="mb-1 block text-xs font-medium text-slate-500">
+                                <span
+                                    class="mr-1 inline-flex items-center rounded bg-sky-100 px-1 py-0.5 text-[9px] font-bold uppercase text-sky-700"
+                                >
+                                    EN
+                                </span>
+                                {{ t.idp.settings.description }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+                            <textarea
+                                v-model="row.description_en"
+                                rows="2"
+                                :placeholder="t.idp.settings.descriptionHint"
+                                class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                        </div>
+
+                        <div>
+                            <label class="mb-1 block text-xs font-medium text-slate-500">
+                                <span
+                                    class="mr-1 inline-flex items-center rounded bg-rose-100 px-1 py-0.5 text-[9px] font-bold uppercase text-rose-700"
+                                >
+                                    ID
+                                </span>
+                                {{ t.idp.settings.description }}
+                                <span class="font-normal text-slate-400">
+                                    ({{ t.idp.settings.optional }})
+                                </span>
+                            </label>
+                            <textarea
+                                v-model="row.description_id"
+                                rows="2"
+                                :placeholder="t.idp.settings.descriptionHint"
+                                class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                        </div>
+                    </div>
+
                     <!-- Key behaviors observed at this rung. -->
                     <div class="mt-3 rounded-md border border-border bg-white p-3">
                         <div class="mb-2 flex items-center gap-2">
@@ -868,14 +948,37 @@ function submit() {
                                 </div>
                             </div>
 
-                            <button
-                                type="button"
-                                class="mt-1 rounded p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                                :title="t.idp.settings.removeKeyBehavior"
-                                @click="removeBehaviorRow(row, behavior.uid)"
-                            >
-                                <i class="fa-solid fa-xmark text-xs" />
-                            </button>
+                            <div class="mt-1 flex shrink-0 items-center">
+                                <div class="flex items-center rounded-md border border-border bg-white">
+                                    <button
+                                        type="button"
+                                        class="rounded-l-md px-1.5 py-1.5 text-slate-400 transition hover:bg-slate-50 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                                        :disabled="b === 0"
+                                        :title="t.idp.settings.moveUp"
+                                        @click="moveBehaviorRow(row, b, -1)"
+                                    >
+                                        <i class="fa-solid fa-chevron-up text-[10px]" />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="rounded-r-md border-l border-border px-1.5 py-1.5 text-slate-400 transition hover:bg-slate-50 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                                        :disabled="b === row.key_behaviors.length - 1"
+                                        :title="t.idp.settings.moveDown"
+                                        @click="moveBehaviorRow(row, b, 1)"
+                                    >
+                                        <i class="fa-solid fa-chevron-down text-[10px]" />
+                                    </button>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    class="rounded p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                                    :title="t.idp.settings.removeKeyBehavior"
+                                    @click="removeBehaviorRow(row, behavior.uid)"
+                                >
+                                    <i class="fa-solid fa-xmark text-xs" />
+                                </button>
+                            </div>
                         </div>
 
                         <button
@@ -898,8 +1001,8 @@ function submit() {
                     {{ t.idp.settings.addProficiencyLevel }}
                 </button>
 
-                <!-- Duplicate name or sequence across rungs, or a duplicate
-                     behavior name inside one. -->
+                <!-- A duplicate name across rungs, or inside one rung's
+                     behaviors. -->
                 <p
                     v-if="form.errors.proficiency_levels"
                     class="text-xs text-red-600"

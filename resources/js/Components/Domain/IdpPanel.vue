@@ -3,11 +3,14 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { router, useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import FormSection from '@/Components/UI/FormSection.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDate as fmt, formatDateTime as fmtDateTime } from '@/Composables/useDate'
+import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
 
@@ -534,14 +537,11 @@ const modelsView = computed(() =>
 // would otherwise clear the values they had just restored.
 const loadingForm = ref(false)
 
-// Load a set of values as BOTH the form data and its defaults, so the drawer
-// starts clean: `isDirty` (which drives the discard prompt) then measures edits
-// made in this sitting rather than the distance from a stale default.
+// Seeds the values as BOTH the form data and its defaults, so the drawer starts
+// clean and `isDirty` measures this sitting's edits (see `seedForm`).
 function loadForm(values: ReturnType<typeof blankPlan>) {
     loadingForm.value = true
-    form.defaults(values)
-    form.reset()
-    form.clearErrors()
+    seedForm(form, values)
     modalOpen.value = true
     nextTick(() => (loadingForm.value = false))
 }
@@ -607,38 +607,28 @@ function submit() {
     const opts = {
         preserveScroll: true,
         preserveState: true,
-        onSuccess: () => {
-            modalOpen.value = false
-            form.defaults(blankPlan())
-            form.reset()
-        },
+        onSuccess: () => closeModal(),
     }
     if (editingId.value) {
-        form.put(`/idp/${editingId.value}`, opts)
+        form.put(route('idp.update', editingId.value), opts)
     } else {
-        form.post('/idp', opts)
+        form.post(route('idp.store'), opts)
     }
 }
 
-// Closing the drawer throws the draft away, so confirm first when there is
-// something to lose. Backdrop click and Escape both route through here.
-const confirmDiscard = ref(false)
-
-function requestClose() {
-    if (form.isDirty) {
-        confirmDiscard.value = true
-        return
-    }
+function closeModal() {
     modalOpen.value = false
+    seedForm(form, blankPlan())
 }
 
-function discardChanges() {
-    confirmDiscard.value = false
-    modalOpen.value = false
-    form.defaults(blankPlan())
-    form.reset()
-    form.clearErrors()
-}
+// Closing a drawer throws its draft away, so each of this component's three
+// forms confirms first when there is something to lose. Backdrop click, Escape
+// and Cancel all route through the guard.
+const {
+    confirming: confirmingPlan,
+    requestClose: requestClosePlan,
+    discard: discardPlan,
+} = useUnsavedGuard(form, closeModal)
 
 const pendingDelete = ref<Plan | null>(null)
 const deleting = ref(false)
@@ -650,7 +640,7 @@ function askDelete(plan: Plan) {
 function doDelete() {
     if (!pendingDelete.value) return
     deleting.value = true
-    router.delete(`/idp/${pendingDelete.value.id}`, {
+    router.delete(route('idp.destroy', pendingDelete.value.id), {
         preserveScroll: true,
         preserveState: true,
         onFinish: () => {
@@ -668,15 +658,29 @@ function onFileChange(event: Event) {
     uploadForm.idp_file = (event.target as HTMLInputElement).files?.[0] ?? null
 }
 
+function openUpload() {
+    seedForm(uploadForm, { idp_file: null })
+    uploadOpen.value = true
+}
+
+function closeUpload() {
+    uploadOpen.value = false
+    seedForm(uploadForm, { idp_file: null })
+}
+
+// A picked-but-unsent file is lost on close, so ask before throwing it away.
+const {
+    confirming: confirmingUpload,
+    requestClose: requestCloseUpload,
+    discard: discardUpload,
+} = useUnsavedGuard(uploadForm, closeUpload)
+
 function submitUpload() {
-    uploadForm.post(`/idp/${emp.employee_id}/import`, {
+    uploadForm.post(route('idp.import.single', emp.employee_id), {
         forceFormData: true,
         preserveScroll: true,
         preserveState: true,
-        onSuccess: () => {
-            uploadOpen.value = false
-            uploadForm.reset()
-        },
+        onSuccess: () => closeUpload(),
     })
 }
 
@@ -713,7 +717,7 @@ function approvalBadge(approval?: ApprovalInfo): { label: string; cls: string; d
 const submittingId = ref<number | null>(null)
 function submitItem(plan: Plan) {
     submittingId.value = plan.id
-    router.post(`/idp/${plan.id}/submit-approval`, {}, {
+    router.post(route('idp.approval.submit', plan.id), {}, {
         preserveScroll: true,
         preserveState: true,
         onFinish: () => (submittingId.value = null),
@@ -724,7 +728,7 @@ function submitItem(plan: Plan) {
 const submittingAll = ref(false)
 function submitAllApprovals() {
     submittingAll.value = true
-    router.post(`/idp/${emp.employee_id}/submit-all-approval`, {}, {
+    router.post(route('idp.approval.submit_all', emp.employee_id), {}, {
         preserveScroll: true,
         preserveState: true,
         onFinish: () => (submittingAll.value = false),
@@ -742,20 +746,28 @@ function openAct(plan: Plan, decision: 'approve' | 'reject') {
     actDecision.value = decision
     actApprovalId.value = plan.approval?.id ?? null
     actPlan.value = plan
-    actForm.reset()
-    actForm.clearErrors()
+    seedForm(actForm, { note: '' })
     actOpen.value = true
 }
 
+function closeAct() {
+    actOpen.value = false
+    seedForm(actForm, { note: '' })
+}
+
+// A typed-but-unsent note is lost on close, so ask before throwing it away.
+const {
+    confirming: confirmingAct,
+    requestClose: requestCloseAct,
+    discard: discardAct,
+} = useUnsavedGuard(actForm, closeAct)
+
 function submitAct() {
     if (!actApprovalId.value) return
-    actForm.post(`/idp-approvals/${actApprovalId.value}/${actDecision.value}`, {
+    actForm.post(route(`idp.approval.${actDecision.value}`, actApprovalId.value), {
         preserveScroll: true,
         preserveState: true,
-        onSuccess: () => {
-            actOpen.value = false
-            actForm.reset()
-        },
+        onSuccess: () => closeAct(),
     })
 }
 
@@ -774,7 +786,7 @@ function stepIcon(status: string): { icon: string; color: string } {
 }
 
 // Let the page header open the upload drawer (the drawer lives here).
-defineExpose({ openUpload: () => (uploadOpen.value = true) })
+defineExpose({ openUpload })
 </script>
 
 <template>
@@ -1116,7 +1128,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
         <Drawer
             :show="modalOpen"
             max-width="max-w-3xl"
-            @close="requestClose"
+            @close="requestClosePlan"
         >
             <template #header>
                 <div class="min-w-0">
@@ -1573,7 +1585,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-                    @click="requestClose"
+                    @click="requestClosePlan"
                 >
                     {{ t.idp.form.cancel }}
                 </button>
@@ -1591,15 +1603,23 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
 
         <!-- Unsaved-changes confirmation, shown when the plan drawer is
              closed with a dirty form. -->
-        <ConfirmDialog
-            :show="confirmDiscard"
-            :title="t.idp.form.discardTitle"
+        <UnsavedChangesDialog
+            :show="confirmingPlan"
             :message="t.idp.form.discardMessage"
-            :confirm-label="t.idp.form.discardConfirm"
-            :cancel-label="t.idp.form.keepEditing"
-            variant="danger"
-            @confirm="discardChanges"
-            @close="confirmDiscard = false"
+            @confirm="discardPlan"
+            @close="confirmingPlan = false"
+        />
+
+        <UnsavedChangesDialog
+            :show="confirmingUpload"
+            @confirm="discardUpload"
+            @close="confirmingUpload = false"
+        />
+
+        <UnsavedChangesDialog
+            :show="confirmingAct"
+            @confirm="discardAct"
+            @close="confirmingAct = false"
         />
 
         <!-- Delete confirmation -->
@@ -1627,7 +1647,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
             :show="uploadOpen"
             :title="t.idp.upload.title"
             max-width="max-w-lg"
-            @close="uploadOpen = false"
+            @close="requestCloseUpload"
         >
             <form id="idp-upload-form" class="space-y-5" @submit.prevent="submitUpload">
                 <!-- Step 1: download template + master data -->
@@ -1635,14 +1655,14 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                     <p class="text-sm font-semibold text-slate-700">{{ t.idp.upload.step1 }}</p>
                     <div class="flex flex-wrap gap-2">
                         <a
-                            :href="`/idp/${emp.employee_id}/template`"
+                            :href="route('idp.template.download', emp.employee_id)"
                             class="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-emerald-700 shadow-sm transition hover:bg-slate-50"
                         >
                             <i class="fa-solid fa-file-excel" />
                             {{ t.idp.upload.downloadTemplate }}
                         </a>
                         <a
-                            href="/idp/master-pdf"
+                            :href="route('idp.master_pdf')"
                             target="_blank"
                             rel="noopener"
                             class="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-primary shadow-sm transition hover:bg-slate-50"
@@ -1689,7 +1709,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-                    @click="uploadOpen = false"
+                    @click="requestCloseUpload"
                 >
                     {{ t.idp.upload.close }}
                 </button>
@@ -1709,7 +1729,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
         <Drawer
             :show="actOpen"
             max-width="max-w-lg"
-            @close="actOpen = false"
+            @close="requestCloseAct"
         >
             <template #header>
                 <div class="min-w-0">
@@ -1755,7 +1775,7 @@ defineExpose({ openUpload: () => (uploadOpen.value = true) })
                 <button
                     type="button"
                     class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-                    @click="actOpen = false"
+                    @click="requestCloseAct"
                 >
                     {{ t.approvalFlow.cancel }}
                 </button>
