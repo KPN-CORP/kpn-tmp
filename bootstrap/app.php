@@ -11,6 +11,20 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // The app is served behind a TLS-terminating reverse proxy (staging and
+        // production both), so without this Laravel sees a plain http request
+        // and generates http:// URLs for an https:// page. That breaks every
+        // absolute URL it builds — most visibly a redirect after a POST/PUT:
+        // the browser refuses to follow an https -> http redirect from an XHR,
+        // so an Inertia save fails with "Network error" even though the write
+        // succeeded. It also makes $request->ip() the proxy's address and
+        // isSecure() false, which the `secure` cookie flag keys off.
+        //
+        // '*' trusts whatever proxy forwarded the request, which is right while
+        // the app is only reachable *through* the balancer. Narrow it to the
+        // balancer's addresses if the origin ever becomes directly reachable.
+        $middleware->trustProxies(at: '*');
+
         $middleware->web(append: [
             \App\Http\Middleware\HandleInertiaRequests::class,
             \Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets::class,

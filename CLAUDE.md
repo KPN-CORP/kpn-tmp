@@ -1505,6 +1505,27 @@ switch is gone; the identity step reads the flag on the model picked in step 2.
   competencies × scope. It ships in the payload, so adding a column later needs no server
   change.
 
+## Deployment — the app sits behind a TLS-terminating proxy
+Staging and production serve the app over https through a reverse proxy that talks plain
+http to PHP. Two things make Laravel aware of that, and **both** matter:
+
+- **`bootstrap/app.php` trusts the proxy** (`$middleware->trustProxies(at: '*')`). Without it
+  `$request->isSecure()` is false, `$request->ip()` is the proxy's address, and every
+  absolute URL the framework builds is `http://` on an `https://` page.
+- **`APP_URL` must carry the real scheme + host.** `AppServiceProvider::boot()` calls
+  `URL::forceScheme('https')` when it starts with `https://`, as a backstop for a proxy that
+  does not send `X-Forwarded-Proto`. It reads `config('app.url')`, not `env()`, so it
+  survives `config:cache`.
+
+⚠️ **The symptom when this is wrong is misleading.** Most writes here return `back()`, which
+builds its `Location` from the `Referer` header — already https — so nothing surfaces the
+problem. A handler that redirects to a **named route** instead (the development-model package
+form and the competency form both do, so a save lands on the list) emits
+`Location: http://…`; the browser refuses to follow an https → http redirect from an XHR, and
+Inertia reports it as `HttpNetworkError: Network error` with no status code. **The write itself
+already succeeded** — only the redirect is blocked, so the screen looks broken while the data
+is saved.
+
 ## Entity map (facecard → kpn-tmp)
 App-owned: CompetencyAssessment, DevelopmentModel, Competency, CompetencyType,
 DevelopmentProgram, ReviewTool, Training, CompetencyImplementation, IndividualDevelopmentPlan, ResultSummary, MatrixGradeConfig,
