@@ -77,6 +77,9 @@ class MasterOptionService
             ->orderBy('name_en')
             ->get()
             ->map(fn (CompetencyType $ct) => $this->option($ct) + [
+                // The type's short identifier. Null on the types that predate
+                // the column — the form requires one from now on.
+                'code' => $ct->code,
                 'description_en' => $ct->description_en,
                 'description_id' => $ct->description_id,
                 'competencies_count' => (int) $ct->competencies_count,
@@ -155,6 +158,9 @@ class MasterOptionService
     public function competencyPayload(Competency $competency): array
     {
         return $this->option($competency) + [
+            // The competency's short identifier. Null on the rows that predate
+            // the column — the form requires one from now on.
+            'code' => $competency->code,
             'description_en' => $competency->description_en,
             'description_id' => $competency->description_id,
             'competency_type_id' => $competency->competency_type_id,

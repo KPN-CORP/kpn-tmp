@@ -21,6 +21,7 @@ class Competency extends Model
 
     protected $fillable = [
         'competency_type_id',
+        'code',
         'name_en',
         'name_id',
         'description_en',

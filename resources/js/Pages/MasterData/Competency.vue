@@ -17,6 +17,8 @@ const { t, locale } = useLocale()
 interface Competency {
     id: number
     value: string
+    // The competency's short identifier. Null on rows that predate the column.
+    code: string | null
     value_en: string | null
     value_id: string | null
     description_en: string | null
@@ -238,7 +240,8 @@ const competencyRows = computed(() => {
             if (!q) return true
             return (
                 masterName(c).toLowerCase().includes(q) ||
-                c.value.toLowerCase().includes(q)
+                c.value.toLowerCase().includes(q) ||
+                (c.code ?? '').toLowerCase().includes(q)
             )
         })
         .map((c) => ({
@@ -315,12 +318,12 @@ function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLi
 
 // --- sorting (competency / type) ---
 
-const competencySort = ref<{ key: 'name' | 'type_name'; dir: 'asc' | 'desc' }>({
+const competencySort = ref<{ key: 'code' | 'name' | 'type_name'; dir: 'asc' | 'desc' }>({
     key: 'name',
     dir: 'asc',
 })
 
-function toggleCompetencySort(key: 'name' | 'type_name') {
+function toggleCompetencySort(key: 'code' | 'name' | 'type_name') {
     const s = competencySort.value
     competencySort.value =
         s.key === key
@@ -500,6 +503,20 @@ function changeCompetencyPerPage(size: number) {
                                 #
                             </th>
                             <th
+                                class="w-28 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
+                                @click="toggleCompetencySort('code')"
+                            >
+                                <span class="inline-flex items-center gap-1">
+                                    {{ t.idp.settings.code }}
+                                    <i
+                                        class="fa-solid text-[10px]"
+                                        :class="competencySort.key === 'code'
+                                            ? (competencySort.dir === 'asc' ? 'fa-sort-up text-primary' : 'fa-sort-down text-primary')
+                                            : 'fa-sort text-slate-300'"
+                                    />
+                                </span>
+                            </th>
+                            <th
                                 class="w-64 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
                                 @click="toggleCompetencySort('name')"
                             >
@@ -562,6 +579,20 @@ function changeCompetencyPerPage(size: number) {
                                     class="border-r border-border/40 px-4 py-3 text-center align-top text-slate-400"
                                 >
                                     {{ block.index }}
+                                </td>
+
+                                <td
+                                    v-if="i === 0"
+                                    :rowspan="block.rowspan"
+                                    class="border-r border-border/40 px-4 py-3 align-top"
+                                >
+                                    <span
+                                        v-if="block.code"
+                                        class="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
+                                    >
+                                        {{ block.code }}
+                                    </span>
+                                    <span v-else class="text-xs italic text-slate-300">—</span>
                                 </td>
 
                                 <td
@@ -710,7 +741,7 @@ function changeCompetencyPerPage(size: number) {
                         </template>
 
                         <tr v-if="competencyBlocks.length === 0">
-                            <td colspan="8" class="px-4 py-8 text-center text-slate-400">
+                            <td colspan="9" class="px-4 py-8 text-center text-slate-400">
                                 {{
                                     competencySearch || selectedTypeFilter !== null
                                         ? t.idp.settings.noMatch

@@ -58,7 +58,7 @@ class MasterDataValidator
 
         $data = $request->validate(
             $this->rules($request, $type, $master),
-            $this->messages(),
+            $this->messages($type),
         );
 
         if ($isCompetency) {
@@ -119,6 +119,16 @@ class MasterDataValidator
 
         return [
             'type' => [$master ? 'sometimes' : 'required', 'string', 'in:'.MasterDataType::validationList()],
+            // The short identifier a competency and a competency type each
+            // carry. The rules — and the unique index behind them — are per
+            // table, so the two namespaces are independent; every other kind
+            // must not send the field at all.
+            'code' => $type->hasCode()
+                ? [
+                    'required', 'string', 'max:50',
+                    Rule::unique($type->table(), 'code')->ignore($master?->id),
+                ]
+                : ['prohibited'],
             // The name is required, except when it was to come from a training
             // that has not been picked: the missing training is then the single
             // error worth reporting, since the form shows no name field at all.
@@ -217,9 +227,16 @@ class MasterDataValidator
      *
      * @return array<string, string>
      */
-    private function messages(): array
+    private function messages(MasterDataType $type): array
     {
+        // Both coded kinds share these rules, so the noun follows the kind
+        // being saved rather than naming one of them.
+        $coded = $type === MasterDataType::CompetencyType ? 'competency type' : 'competency';
+
         return [
+            'code.required' => "A {$coded} needs a code.",
+            'code.unique' => "Another {$coded} already uses this code.",
+            'code.prohibited' => 'Only a competency or a competency type carries a code.',
             'training_id.required' => 'The selected development model takes its programs from Master Training, so a training must be chosen.',
             'sub_competencies.*.name_en.required' => 'Every sub competency needs an English name.',
             'sub_competencies.*.name_en.max' => 'A sub competency name may not be longer than 255 characters.',

@@ -393,6 +393,8 @@ const id: LocaleMessages = {
             removeSubCompetency: 'Hapus sub kompetensi ini',
             noSubCompetenciesYet: 'Belum ada sub kompetensi. Tambahkan untuk merinci kompetensi ini.',
             competencyTypeTitle: 'Tipe Kompetensi',
+            // Tipe kompetensi → kode singkat yang unik.
+            code: 'Kode',
             competencyTypeSubtitle: 'Kategori untuk mengelompokkan kompetensi',
             searchCompetencyType: 'Cari tipe kompetensi…',
             trainingTitle: 'Master Training',
@@ -796,6 +798,8 @@ const id: LocaleMessages = {
         noLogs: 'Belum ada impor.',
         confirmDelete: 'Hapus log impor ini?',
         confirmClear: 'Hapus semua log impor?',
+        templateHint: 'Templat memuat format kolom yang diperlukan, data referensi, dan contoh baris.',
+        downloadTemplate: 'Unduh templat',
     },
 
     competency: {

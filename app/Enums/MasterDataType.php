@@ -70,6 +70,23 @@ enum MasterDataType: string
     }
 
     /**
+     * Whether rows of this kind carry a short `code` alongside their name.
+     *
+     * Only these two have the column, and the uniqueness behind it is per
+     * table — a competency and a competency type may share a code.
+     */
+    public function hasCode(): bool
+    {
+        return match ($this) {
+            self::CompetencyType,
+            self::CompetencyName => true,
+            self::DevelopmentProgram,
+            self::ReviewTools,
+            self::Training => false,
+        };
+    }
+
+    /**
      * Whether rows of this kind carry an `is_active` flag.
      */
     public function hasActiveState(): bool

@@ -2,6 +2,7 @@
 
 namespace App\Imports;
 
+use App\Imports\Contracts\ReportsImportOutcome;
 use App\Models\CompetencyAssessment;
 use App\Services\MatrixGradeService;
 use Illuminate\Support\Carbon;
@@ -14,7 +15,7 @@ use Maatwebsite\Excel\Concerns\WithHeadingRow;
  * (employee_id, assessment_date, <competency>_score…, proposed_grade,
  * priority_for_development). The matrix grade is derived, not imported.
  */
-class CompetencyAssessmentImport implements ToCollection, WithHeadingRow
+class CompetencyAssessmentImport implements ReportsImportOutcome, ToCollection, WithHeadingRow
 {
     private const SCORE_FIELDS = [
         'synergized_team_score', 'integrity_score', 'growth_score', 'adaptive_score',
@@ -27,9 +28,7 @@ class CompetencyAssessmentImport implements ToCollection, WithHeadingRow
     /** @var array<int, string> */
     private array $errors = [];
 
-    public function __construct(private readonly MatrixGradeService $matrix)
-    {
-    }
+    public function __construct(private readonly MatrixGradeService $matrix) {}
 
     public function collection(Collection $rows): void
     {
@@ -41,6 +40,7 @@ class CompetencyAssessmentImport implements ToCollection, WithHeadingRow
 
             if ($employeeId === '' || ! $rawDate) {
                 $this->errors[] = "Row {$line}: missing employee_id or assessment_date.";
+
                 continue;
             }
 
@@ -48,6 +48,7 @@ class CompetencyAssessmentImport implements ToCollection, WithHeadingRow
                 $date = Carbon::parse($rawDate);
             } catch (\Throwable) {
                 $this->errors[] = "Row {$line}: invalid assessment_date.";
+
                 continue;
             }
 
@@ -71,6 +72,11 @@ class CompetencyAssessmentImport implements ToCollection, WithHeadingRow
 
             $this->imported++;
         }
+    }
+
+    public function summary(): string
+    {
+        return "Imported {$this->imported} row(s).";
     }
 
     public function imported(): int

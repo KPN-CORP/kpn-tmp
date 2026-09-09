@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Head, router, useForm } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -30,8 +30,15 @@ interface Paginator {
     per_page: number
 }
 
+interface DataType {
+    value: string
+    label: string
+    /** Whether a starter workbook can be downloaded for this data type. */
+    template: boolean
+}
+
 const props = defineProps<{
-    dataTypes: { value: string; label: string }[]
+    dataTypes: DataType[]
     logs: Paginator
     sort: Sort
 }>()
@@ -54,6 +61,9 @@ const form = useForm<{ data_type: string; file: File | null }>({
     data_type: props.dataTypes[0]?.value ?? '',
     file: null,
 })
+
+// The template link only makes sense for the type currently selected.
+const selected = computed(() => props.dataTypes.find((type) => type.value === form.data_type))
 
 function onFile(e: Event) {
     form.file = (e.target as HTMLInputElement).files?.[0] ?? null
@@ -128,6 +138,18 @@ const statusTone: Record<string, string> = {
                 <i :class="form.processing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-upload'" />
                 {{ t.import.upload }}
             </button>
+
+            <!-- Starter workbook, for the data types that have one. -->
+            <p v-if="selected?.template" class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 sm:col-span-3">
+                <i class="fa-regular fa-file-excel text-green-600" />
+                <span>{{ t.import.templateHint }}</span>
+                <a
+                    :href="route('import.template', form.data_type)"
+                    class="font-medium text-primary hover:underline"
+                >
+                    {{ t.import.downloadTemplate }}
+                </a>
+            </p>
         </form>
 
         <!-- Logs -->

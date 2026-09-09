@@ -179,11 +179,6 @@ class CompetencyMasterRules
      * competency's ladder: the row would go, taking the implementation /
      * training link with it and blanking the program that targeted it.
      *
-     * Only rungs the form actually removes are checked — everything it keeps,
-     * renames or renumbers is untouched. The three usages are read as exists
-     * subqueries on the one query that fetches the removed rungs, so a ladder
-     * losing several rows still costs a single round trip.
-     *
      * @param  array<string, mixed>  $data
      */
     private function assertRemovedLevelsUnused(array $data, ?Model $master): void
@@ -197,8 +192,31 @@ class CompetencyMasterRules
             ->filter()
             ->all();
 
-        $removed = $master->proficiencyLevels()
-            ->when($kept !== [], fn ($q) => $q->whereNotIn('id', $kept))
+        if ($blocker = $this->removalBlocker($master, $kept)) {
+            $this->fail('proficiency_levels', $blocker);
+        }
+    }
+
+    /**
+     * Why this competency's ladder cannot be cut back to the given rungs, or
+     * null when it can.
+     *
+     * Only rungs actually removed are checked — everything kept, renamed or
+     * renumbered is untouched. The three usages are read as exists subqueries
+     * on the one query that fetches the removed rungs, so a ladder losing
+     * several rows still costs a single round trip.
+     *
+     * Public because the Master Competency import replaces a ladder wholesale
+     * too, and has to refuse the same removals — with a per-row message rather
+     * than a validation error, which is the only reason it does not simply call
+     * {@see check()}.
+     *
+     * @param  array<int, int>  $keptIds  ids of the rungs that survive
+     */
+    public function removalBlocker(Competency $competency, array $keptIds): ?string
+    {
+        $removed = $competency->proficiencyLevels()
+            ->when($keptIds !== [], fn ($q) => $q->whereNotIn('id', $keptIds))
             ->withExists(['implementations', 'trainings', 'developmentPrograms'])
             ->get();
 
@@ -211,11 +229,10 @@ class CompetencyMasterRules
             };
 
             if ($blocker !== null) {
-                $this->fail(
-                    'proficiency_levels',
-                    "Cannot remove '{$level->name_en}': {$blocker}."
-                );
+                return "Cannot remove '{$level->name_en}': {$blocker}.";
             }
         }
+
+        return null;
     }
 }

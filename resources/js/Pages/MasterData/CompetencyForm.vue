@@ -57,6 +57,8 @@ interface ProficiencyLevel {
 interface Competency {
     id: number
     value: string
+    // The competency's short identifier. Null on rows that predate the column.
+    code: string | null
     value_en: string | null
     value_id: string | null
     description_en: string | null
@@ -105,6 +107,7 @@ function masterName(item: {
  */
 
 const form = useForm({
+    code: props.competency?.code ?? '',
     // Canonical `value` tracks the English name (value_en) server-side.
     value_en: props.competency?.value_en ?? props.competency?.value ?? '',
     value_id: props.competency?.value_id ?? '',
@@ -399,8 +402,26 @@ function submit() {
                 step="2"
                 :title="t.idp.settings.competencyName"
                 icon="fa-solid fa-pen"
-                :complete="form.value_en.trim() !== ''"
+                :complete="form.value_en.trim() !== '' && form.code.trim() !== ''"
             >
+                <!-- Code — the competency's short identifier. Not language-
+                     specific, so it sits above the two language blocks. -->
+                <div class="mb-4">
+                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                        {{ t.idp.settings.code }}
+                        <span class="text-red-500">*</span>
+                    </label>
+                    <input
+                        v-model="form.code"
+                        maxlength="50"
+                        class="w-full rounded-md border bg-white px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary sm:w-48"
+                        :class="form.errors.code ? 'border-red-500' : 'border-border'"
+                    >
+                    <p v-if="form.errors.code" class="mt-1 text-xs text-red-600">
+                        {{ form.errors.code }}
+                    </p>
+                </div>
+
                 <div class="grid gap-4 lg:grid-cols-2">
                     <!-- English -->
                     <div class="rounded-lg border border-border bg-slate-50/60 p-4">

@@ -391,6 +391,8 @@ export default {
             removeSubCompetency: 'Remove this sub competency',
             noSubCompetenciesYet: 'No sub competency yet. Add one to break this competency down.',
             competencyTypeTitle: 'Competency Type',
+            // Competency type → its short unique identifier.
+            code: 'Code',
             competencyTypeSubtitle: 'Categories competencies are grouped by',
             searchCompetencyType: 'Search competency type…',
             trainingTitle: 'Master Training',
@@ -799,6 +801,8 @@ export default {
         noLogs: 'No imports yet.',
         confirmDelete: 'Delete this import log?',
         confirmClear: 'Delete all import logs?',
+        templateHint: 'The template provides the required column format, reference data and sample rows.',
+        downloadTemplate: 'Download template',
     },
 
     competency: {

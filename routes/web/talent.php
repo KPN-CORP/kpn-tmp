@@ -21,6 +21,7 @@ Route::middleware('permission:view_report_menu')
 Route::middleware('permission:view_import_center')->name('import.')->group(function () {
     Route::get('import-center', [ImportController::class, 'index'])->name('index');
     Route::post('import-center/process', [ImportController::class, 'processImport'])->name('process');
+    Route::get('import-center/template/{type}', [ImportController::class, 'template'])->name('template');
     Route::get('import-download/{log}', [ImportController::class, 'download'])->name('download');
     Route::delete('import/{log}', [ImportController::class, 'destroy'])->name('destroy');
     Route::delete('import', [ImportController::class, 'destroyAll'])

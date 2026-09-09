@@ -18,6 +18,9 @@ const { t, locale } = useLocale()
 
 interface CompetencyType {
     id: number
+    // The type's short identifier. Null on types created before the column
+    // existed — the form requires one from now on.
+    code: string | null
     value: string
     value_en: string | null
     value_id: string | null
@@ -82,6 +85,8 @@ const editingMasterId = ref<number | null>(null)
 function blankMaster() {
     return {
         type: MASTER_TYPE,
+        // Short identifier, unique across types and not language-specific.
+        code: '',
         // Canonical `value` tracks the English name (value_en) server-side.
         value_en: '',
         value_id: '',
@@ -116,6 +121,7 @@ function openMaster(item?: CompetencyType) {
     // discard prompt — measures this sitting's edits (see `seedForm`).
     seedForm(masterForm, {
         ...blankMaster(),
+        code: item?.code ?? '',
         value_en: item?.value_en ?? item?.value ?? '',
         value_id: item?.value_id ?? '',
         description_en: item?.description_en ?? '',
@@ -206,6 +212,7 @@ const typeRows = computed(() => {
             return (
                 masterName(ct).toLowerCase().includes(q) ||
                 ct.value.toLowerCase().includes(q) ||
+                (ct.code ?? '').toLowerCase().includes(q) ||
                 typeDescription(ct).toLowerCase().includes(q) ||
                 (ct.business_units ?? []).some((unit) =>
                     unit.toLowerCase().includes(q),
@@ -220,6 +227,7 @@ const typeRows = computed(() => {
 })
 
 const typeColumns = computed<Column[]>(() => [
+    { key: 'code', label: t.value.idp.settings.code, sortable: true, thClass: 'w-28' },
     { key: 'name', label: t.value.idp.settings.competencyType, sortable: true, sortKey: '_name', thClass: 'w-64' },
     { key: 'business_units', label: t.value.idp.settings.businessUnit, thClass: 'w-48' },
     { key: 'description', label: t.value.idp.settings.description },
@@ -282,6 +290,16 @@ const typeColumns = computed<Column[]>(() => [
                 :per-page="10"
                 numbered
             >
+                <template #cell-code="{ row }">
+                    <span
+                        v-if="row.code"
+                        class="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
+                    >
+                        {{ row.code }}
+                    </span>
+                    <span v-else class="text-xs italic text-slate-300">—</span>
+                </template>
+
                 <template #cell-name="{ row }">
                     <span class="inline-flex items-center gap-1.5 font-semibold text-slate-800">
                         <i class="fa-solid fa-tag text-[10px] text-indigo-400" />
@@ -359,6 +377,24 @@ const typeColumns = computed<Column[]>(() => [
                 class="space-y-4"
                 @submit.prevent="submitMaster"
             >
+                <!-- Code — the type's short identifier. Not language-
+                     specific, so it sits above the two language blocks. -->
+                <div>
+                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                        {{ t.idp.settings.code }}
+                        <span class="text-red-500">*</span>
+                    </label>
+                    <input
+                        v-model="masterForm.code"
+                        maxlength="50"
+                        class="w-full rounded-md border bg-white px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary sm:w-48"
+                        :class="masterForm.errors.code ? 'border-red-500' : 'border-border'"
+                    >
+                    <p v-if="masterForm.errors.code" class="mt-1 text-xs text-red-600">
+                        {{ masterForm.errors.code }}
+                    </p>
+                </div>
+
                 <!-- English section -->
                 <div class="rounded-lg border border-border bg-slate-50/60 p-4">
                     <div class="mb-3 flex items-center gap-2">

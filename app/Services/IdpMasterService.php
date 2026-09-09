@@ -184,7 +184,15 @@ class IdpMasterService
         }
 
         return $attributes + match ($type) {
+            // A type's short identifier. Trimmed rather than stored verbatim:
+            // it is unique, and trailing whitespace would make two codes that
+            // read alike collide on neither the index nor the eye.
+            MasterDataType::CompetencyType => [
+                'code' => $this->code($data),
+            ],
+
             MasterDataType::CompetencyName => [
+                'code' => $this->code($data),
                 'competency_type_id' => $data['competency_type_id'] ?? null,
             ],
 
@@ -547,6 +555,20 @@ class IdpMasterService
     private function intList(mixed $values): array
     {
         return array_values(array_unique(array_map('intval', (array) $values)));
+    }
+
+    /**
+     * The short code a competency / competency type carries, trimmed: it is
+     * unique, and trailing whitespace would make two codes that read alike
+     * collide on neither the index nor the eye.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function code(array $data): ?string
+    {
+        $code = $this->nullIfBlank($data['code'] ?? null);
+
+        return $code === null ? null : trim($code);
     }
 
     private function nullIfBlank(?string $value): ?string
