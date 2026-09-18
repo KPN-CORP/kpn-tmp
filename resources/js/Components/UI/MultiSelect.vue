@@ -8,6 +8,12 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 export interface Option {
     value: string
     label: string
+    /**
+     * What the option means, printed as a muted second line in the dropdown and
+     * matched by the search box. Chips and the selected-below list stay
+     * label-only — a sentence in a chip is unreadable.
+     */
+    description?: string
 }
 
 const props = defineProps<{
@@ -45,7 +51,13 @@ const selectedOptions = computed(() =>
 
 const filtered = computed(() => {
     const q = search.value.trim().toLowerCase()
-    return q ? props.options.filter((o) => o.label.toLowerCase().includes(q)) : props.options
+    if (!q) return props.options
+
+    return props.options.filter(
+        (o) =>
+            o.label.toLowerCase().includes(q) ||
+            (o.description ?? '').toLowerCase().includes(q),
+    )
 })
 
 function isSelected(value: string): boolean {
@@ -174,17 +186,33 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
                 <li v-for="option in filtered" :key="option.value">
                     <button
                         type="button"
-                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-slate-50"
-                        :class="isSelected(option.value) ? 'font-medium text-primary' : 'text-slate-600'"
+                        class="flex w-full gap-2 px-3 py-2 text-left text-sm transition hover:bg-slate-50"
+                        :class="[
+                            option.description ? 'items-start' : 'items-center',
+                            isSelected(option.value) ? 'font-medium text-primary' : 'text-slate-600',
+                        ]"
                         @click="toggle(option)"
                     >
                         <span
                             class="flex h-4 w-4 shrink-0 items-center justify-center rounded border"
-                            :class="isSelected(option.value) ? 'border-primary bg-primary text-white' : 'border-slate-300'"
+                            :class="[
+                                option.description ? 'mt-0.5' : '',
+                                isSelected(option.value) ? 'border-primary bg-primary text-white' : 'border-slate-300',
+                            ]"
                         >
                             <i v-if="isSelected(option.value)" class="fa-solid fa-check text-[9px]" />
                         </span>
-                        <span class="truncate">{{ option.label }}</span>
+                        <span class="min-w-0 flex-1">
+                            <span class="block truncate">{{ option.label }}</span>
+                            <!-- Wraps rather than truncates: it is a sentence,
+                                 and it is the reason the row is worth reading. -->
+                            <span
+                                v-if="option.description"
+                                class="mt-0.5 block text-xs font-normal leading-snug text-slate-400"
+                            >
+                                {{ option.description }}
+                            </span>
+                        </span>
                     </button>
                 </li>
                 <li v-if="filtered.length === 0" class="px-3 py-4 text-center text-xs text-slate-400">

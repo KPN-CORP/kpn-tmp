@@ -634,8 +634,6 @@ const id: LocaleMessages = {
             competenciesHint: 'Tentukan kompetensi dan kelompokkan berdasarkan tipe. Program dikelola di tab tersendiri.',
             searchCompetency: 'Cari kompetensi…',
             searchProgram: 'Cari program…',
-            linkedCompetencies: 'Kompetensi terkait',
-            noCompetenciesLinked: 'Belum ada kompetensi terkait.',
             noProgramsMatch: 'Tidak ada program yang cocok.',
             action: 'Aksi',
             edit: 'Ubah',

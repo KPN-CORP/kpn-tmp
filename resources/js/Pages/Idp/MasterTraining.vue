@@ -29,10 +29,14 @@ interface Localized {
 }
 
 interface CompetencyType extends Localized {
+    // Short identifier, printed in front of the name. Null on the types that
+    // predate the column.
+    code: string | null
     competencies_count: number
 }
 
 interface Competency extends Localized {
+    code: string | null
     competency_type_id: number | null
     is_active: boolean
 }
@@ -46,6 +50,8 @@ interface ProficiencyLevel extends Localized {
     competency_id: number
     sequence: number
     is_active: boolean
+    description_en: string | null
+    description_id: string | null
 }
 
 interface Training extends Localized {
@@ -88,8 +94,12 @@ function masterName(
     return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
 }
 
-// Localized description (falls back to the other language).
-function trainingDescription(item: Training): string {
+// Localized description (falls back to the other language). Read by both the
+// trainings table and the proficiency-level picker.
+function rowDescription(item: {
+    description_en?: string | null
+    description_id?: string | null
+}): string {
     const preferred = locale.value === 'id' ? item.description_id : item.description_en
     const fallback = locale.value === 'id' ? item.description_en : item.description_id
     return (preferred ?? '').trim() !== '' ? (preferred as string) : (fallback ?? '')
@@ -181,7 +191,13 @@ const proficiencyOptions = computed<Option[]>(() => {
             // are switched off; dropping them would silently unpin them on the
             // next save. They are flagged below instead.
             .filter((p) => !inactive(p) || pinned.has(String(p.id)))
-            .map((p) => ({ value: String(p.id), label: masterName(p) }))
+            // The description says what the rung means, which is the only
+            // thing telling PL1 from PL2 apart on a form.
+            .map((p) => ({
+                value: String(p.id),
+                label: masterName(p),
+                description: rowDescription(p) || undefined,
+            }))
     )
 })
 
@@ -407,66 +423,193 @@ const identityComplete = computed(() => form.value_en.trim() !== '')
  * --------------------------------------------------------------------------
  * Search + table (client-side; ClientTable handles sort + pagination)
  * --------------------------------------------------------------------------
+ *
+ * The table reads as competency type → competency → training, so a training
+ * is flattened into ONE ROW PER PROFICIENCY LEVEL it targets and every other
+ * column merges back over that run. A training targeting no level still
+ * renders one row, so it is never invisible.
+ *
+ * Merging needs the rows of a group to be adjacent, which is why the rows are
+ * pre-sorted down that same hierarchy before ClientTable sees them.
  */
 
 const search = ref('')
 
-const filtered = computed(() => {
+interface TrainingRow {
+    key: string
+    training: Training
+    id: number
+    // Stable identities for the merge: two masters may read alike, ids do not.
+    // A row with no type / competency keys off its own training, so unrelated
+    // trainings never merge into one blank cell.
+    typeKey: string
+    competencyKey: string
+    trainingKey: string
+    type_name: string
+    type_code: string
+    competency_name: string
+    competency_code: string
+    name: string
+    description: string
+    proficiency: string
+    proficiency_description: string
+    business_units: string[]
+    work_locations: string[]
+    is_active: boolean
+}
+
+const filtered = computed<TrainingRow[]>(() => {
     const q = search.value.trim().toLowerCase()
 
-    const rows = props.trainings.map((r) => ({
-        ...r,
-        name: masterName(r),
-        description: trainingDescription(r),
-        type_name: masterName(
-            r.competency_type_id != null
-                ? competencyTypeById.value.get(r.competency_type_id)
-                : null,
-        ),
-        competency_name: masterName(
-            r.competency_id != null ? competencyById.value.get(r.competency_id) : null,
-        ),
-        proficiency_names: (r.proficiency_level_ids ?? [])
-            .map((id) => masterName(proficiencyLevelById.value.get(id)))
-            .filter((n) => n !== ''),
-    }))
+    const trainings = props.trainings
+        .map((r) => {
+            const levels = (r.proficiency_level_ids ?? [])
+                .map((id) => proficiencyLevelById.value.get(id))
+                .filter((l): l is ProficiencyLevel => l != null)
+                .sort((a, b) => a.sequence - b.sequence || a.id - b.id)
 
-    return q
-        ? rows.filter((r) =>
-              [
-                  r.name,
-                  r.value,
-                  r.description,
-                  r.type_name,
-                  r.competency_name,
-                  ...r.proficiency_names,
-                  ...(r.business_units ?? []),
-                  ...(r.work_locations ?? []),
-              ].some((v) => v.toLowerCase().includes(q)),
-          )
-        : rows
+            const type =
+                r.competency_type_id != null
+                    ? competencyTypeById.value.get(r.competency_type_id)
+                    : null
+            const competency =
+                r.competency_id != null ? competencyById.value.get(r.competency_id) : null
+
+            return {
+                training: r,
+                name: masterName(r),
+                description: rowDescription(r),
+                type_name: masterName(type),
+                type_code: type?.code ?? '',
+                competency_name: masterName(competency),
+                competency_code: competency?.code ?? '',
+                levels,
+            }
+        })
+        // Filter whole trainings, not single lines: a search that kept only
+        // the matching proficiency row would break the group it belongs to.
+        .filter((r) =>
+            q
+                ? [
+                      r.name,
+                      r.training.value,
+                      r.description,
+                      r.type_name,
+                      r.type_code,
+                      r.competency_name,
+                      r.competency_code,
+                      ...r.levels.map((l) => masterName(l)),
+                      ...(r.training.business_units ?? []),
+                      ...(r.training.work_locations ?? []),
+                  ].some((v) => v.toLowerCase().includes(q))
+                : true,
+        )
+
+    trainings.sort(
+        (a, b) =>
+            // An untyped / unlinked training sorts after the named ones.
+            Number(a.type_name === '') - Number(b.type_name === '') ||
+            a.type_name.localeCompare(b.type_name) ||
+            Number(a.competency_name === '') - Number(b.competency_name === '') ||
+            a.competency_name.localeCompare(b.competency_name) ||
+            a.name.localeCompare(b.name),
+    )
+
+    const rows: TrainingRow[] = []
+
+    for (const r of trainings) {
+        // `tr`, not `t`: the locale bundle is `t` in this file's scope.
+        const tr = r.training
+
+        const base = {
+            training: tr,
+            id: tr.id,
+            typeKey: tr.competency_type_id == null ? `t${tr.id}` : `T${tr.competency_type_id}`,
+            competencyKey: tr.competency_id == null ? `c${tr.id}` : `C${tr.competency_id}`,
+            trainingKey: String(tr.id),
+            type_name: r.type_name,
+            type_code: r.type_code,
+            competency_name: r.competency_name,
+            competency_code: r.competency_code,
+            name: r.name,
+            description: r.description,
+            business_units: tr.business_units ?? [],
+            work_locations: tr.work_locations ?? [],
+            is_active: tr.is_active,
+        }
+
+        if (r.levels.length === 0) {
+            rows.push({ ...base, key: `${tr.id}-0`, proficiency: '', proficiency_description: '' })
+            continue
+        }
+
+        for (const level of r.levels) {
+            rows.push({
+                ...base,
+                key: `${tr.id}-${level.id}`,
+                proficiency: masterName(level),
+                proficiency_description: rowDescription(level),
+            })
+        }
+    }
+
+    return rows
 })
 
 const columns = computed<Column[]>(() => [
-    { key: 'name', label: t.value.idp.settings.trainingName, sortable: true, thClass: 'w-56' },
+    {
+        key: 'type_name',
+        label: t.value.idp.settings.competencyType,
+        sortable: true,
+        merge: true,
+        mergeKey: 'typeKey',
+        thClass: 'w-44',
+    },
+    // Only the outermost group is sortable. Sorting by anything below it
+    // would interleave the types and shatter the merged cells above; the
+    // order inside a type is fixed (competency, then training name) instead.
     {
         key: 'competency_name',
         label: t.value.idp.settings.competency,
-        sortable: true,
-        thClass: 'w-52',
+        merge: true,
+        mergeKey: 'competencyKey',
+        thClass: 'w-48',
     },
-    { key: 'proficiency_names', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-44' },
-    { key: 'business_units', label: t.value.idp.settings.businessUnit, thClass: 'w-44' },
-    { key: 'work_locations', label: t.value.idp.settings.workLocation, thClass: 'w-48' },
-    { key: 'description', label: t.value.idp.settings.description },
     {
-        key: 'status',
-        label: t.value.idp.settings.status,
-        sortable: true,
-        sortKey: 'is_active',
-        thClass: 'w-52',
+        key: 'name',
+        label: t.value.idp.settings.trainingName,
+        merge: true,
+        mergeKey: 'trainingKey',
+        thClass: 'w-56',
     },
-    { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
+    { key: 'description', label: t.value.idp.settings.description, merge: true, mergeKey: 'trainingKey' },
+    // The one column that is NOT merged: it is what splits the row.
+    { key: 'proficiency', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-56' },
+    {
+        key: 'business_units',
+        label: t.value.idp.settings.businessUnit,
+        merge: true,
+        mergeKey: 'trainingKey',
+        thClass: 'w-44',
+    },
+    {
+        key: 'work_locations',
+        label: t.value.idp.settings.workLocation,
+        merge: true,
+        mergeKey: 'trainingKey',
+        thClass: 'w-48',
+    },
+    // Status lives here too: the cell stacks the Active/Inactive toggle over
+    // the edit / delete buttons, so one column covers everything acting on a
+    // training.
+    {
+        key: 'actions',
+        label: t.value.idp.settings.action,
+        align: 'right',
+        merge: true,
+        mergeKey: 'trainingKey',
+        thClass: 'w-48',
+    },
 ])
 
 /**
@@ -548,68 +691,49 @@ function confirmDelete() {
                     </div>
                 </div>
 
-                <!-- Table -->
+                <!-- Grouped: competency type -> competency -> training, split
+                     one line per proficiency level. -->
+                <!-- 20 rather than 10: a row is one proficiency line now,
+                     so a page of 10 would cut nearly every training in half. -->
                 <ClientTable
                     :columns="columns"
                     :rows="filtered"
-                    row-key="id"
-                    :per-page="10"
-                    numbered
+                    row-key="key"
+                    :per-page="20"
+                    bordered
                 >
-                    <template #cell-name="{ row }">
-                        <span class="font-semibold text-slate-800">{{ row.name }}</span>
+                    <!-- Merged: one cell per competency type. The code sits
+                         on its own line above the name; the chip is inline and
+                         the name a block, which is what breaks the line. -->
+                    <template #cell-type_name="{ row }">
+                        <div v-if="row.type_name">
+                            <span
+                                v-if="row.type_code"
+                                class="mb-1 inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-indigo-700"
+                            >
+                                {{ row.type_code }}
+                            </span>
+                            <div class="font-semibold text-slate-700">{{ row.type_name }}</div>
+                        </div>
+                        <span v-else class="text-xs italic text-slate-300">&#8212;</span>
                     </template>
 
-                    <!-- Competency, with the type it is filed under beneath it. -->
+                    <!-- Merged within its type: one cell per competency. -->
                     <template #cell-competency_name="{ row }">
                         <div v-if="row.competency_name">
-                            <span class="text-slate-700">{{ row.competency_name }}</span>
-                            <span v-if="row.type_name" class="mt-0.5 block text-xs text-slate-400">
-                                {{ row.type_name }}
+                            <span
+                                v-if="row.competency_code"
+                                class="mb-1 inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
+                            >
+                                {{ row.competency_code }}
                             </span>
+                            <div class="font-medium text-slate-700">{{ row.competency_name }}</div>
                         </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
+                        <span v-else class="text-xs italic text-slate-300">&#8212;</span>
                     </template>
 
-                    <template #cell-proficiency_names="{ row }">
-                        <div v-if="row.proficiency_names.length" class="flex flex-wrap gap-1">
-                            <span
-                                v-for="(name, i) in row.proficiency_names"
-                                :key="i"
-                                class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
-                            >
-                                <i class="fa-solid fa-signal text-[9px]" />
-                                {{ name }}
-                            </span>
-                        </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
-
-                    <template #cell-business_units="{ row }">
-                        <div v-if="row.business_units?.length" class="flex flex-wrap gap-1">
-                            <span
-                                v-for="(unit, i) in row.business_units"
-                                :key="i"
-                                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
-                            >
-                                {{ unit }}
-                            </span>
-                        </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
-
-                    <template #cell-work_locations="{ row }">
-                        <div v-if="row.work_locations?.length" class="flex flex-wrap gap-1">
-                            <span
-                                v-for="(location, i) in row.work_locations"
-                                :key="i"
-                                class="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-600"
-                            >
-                                <i class="fa-solid fa-location-dot text-[9px]" />
-                                {{ location }}
-                            </span>
-                        </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
+                    <template #cell-name="{ row }">
+                        <span class="font-semibold text-slate-800">{{ row.name }}</span>
                     </template>
 
                     <template #cell-description="{ row }">
@@ -624,29 +748,73 @@ function confirmDelete() {
                         </span>
                     </template>
 
-                    <template #cell-status="{ row }">
-                        <ActiveStateCell
-                            :active="row.is_active"
-                            :busy="togglingId === row.id"
-                            @toggle="toggleActive(row as unknown as Training)"
-                            @history="openHistory(row as unknown as Training)"
-                        />
+                    <!-- The one unmerged column: a line per level, name over
+                         its description. -->
+                    <template #cell-proficiency="{ row }">
+                        <div v-if="row.proficiency">
+                            <div class="font-medium text-slate-700">{{ row.proficiency }}</div>
+                            <p
+                                v-if="row.proficiency_description"
+                                class="mt-0.5 text-xs leading-snug text-slate-400"
+                            >
+                                {{ row.proficiency_description }}
+                            </p>
+                        </div>
+                        <span v-else class="text-xs italic text-slate-300">&#8212;</span>
                     </template>
 
+                    <template #cell-business_units="{ row }">
+                        <div v-if="row.business_units?.length" class="flex flex-wrap gap-1">
+                            <span
+                                v-for="(unit, i) in row.business_units"
+                                :key="i"
+                                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
+                            >
+                                {{ unit }}
+                            </span>
+                        </div>
+                        <span v-else class="text-xs italic text-slate-300">&#8212;</span>
+                    </template>
+
+                    <template #cell-work_locations="{ row }">
+                        <div v-if="row.work_locations?.length" class="flex flex-wrap gap-1">
+                            <span
+                                v-for="(location, i) in row.work_locations"
+                                :key="i"
+                                class="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-600"
+                            >
+                                <i class="fa-solid fa-location-dot text-[9px]" />
+                                {{ location }}
+                            </span>
+                        </div>
+                        <span v-else class="text-xs italic text-slate-300">&#8212;</span>
+                    </template>
+
+                    <!-- Status over the row actions: both act on the training,
+                         so they share one merged cell. -->
                     <template #cell-actions="{ row }">
-                        <div class="flex items-center justify-end gap-1">
-                            <IconButton
-                                icon="fa-solid fa-pen"
-                                variant="edit"
-                                :title="t.idp.settings.editTraining"
-                                @click="openModal(row as unknown as Training)"
+                        <div class="flex flex-col items-end gap-1.5">
+                            <ActiveStateCell
+                                :active="row.is_active"
+                                :busy="togglingId === row.id"
+                                @toggle="toggleActive(row.training)"
+                                @history="openHistory(row.training)"
                             />
-                            <IconButton
-                                icon="fa-solid fa-trash"
-                                variant="delete"
-                                :title="t.idp.settings.deleteTraining"
-                                @click="deleteTraining(row as unknown as Training)"
-                            />
+
+                            <div class="flex items-center gap-1">
+                                <IconButton
+                                    icon="fa-solid fa-pen"
+                                    variant="edit"
+                                    :title="t.idp.settings.editTraining"
+                                    @click="openModal(row.training)"
+                                />
+                                <IconButton
+                                    icon="fa-solid fa-trash"
+                                    variant="delete"
+                                    :title="t.idp.settings.deleteTraining"
+                                    @click="deleteTraining(row.training)"
+                                />
+                            </div>
                         </div>
                     </template>
 

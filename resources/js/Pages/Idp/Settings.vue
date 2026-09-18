@@ -47,6 +47,8 @@ interface Package {
 
 interface Competency {
     id: number
+    // The competency's short identifier; null on rows predating the column.
+    code: string | null
     value: string
     value_en: string | null
     value_id: string | null
@@ -79,6 +81,8 @@ interface Program {
 
 interface CompetencyType {
     id: number
+    // The type's short identifier; null on rows predating the column.
+    code: string | null
     value: string
     value_en: string | null
     value_id: string | null
@@ -97,6 +101,8 @@ interface ProficiencyLevel {
     value_id: string | null
     competency_id: number
     sequence: number
+    description_en: string | null
+    description_id: string | null
 }
 
 /** A training in the Master Training catalogue, as a name option. */
@@ -146,18 +152,6 @@ const props = defineProps<{
  * lives in `Pages/Idp/DevelopmentModel.vue`.
  */
 
-// Accent palette cycled across program badges so each weighting is visually
-// distinct. Class strings are kept literal so Tailwind can see them.
-const modelPalette = [
-    { bar: 'bg-indigo-500', soft: 'bg-indigo-50', text: 'text-indigo-600', ring: 'ring-indigo-100' },
-    { bar: 'bg-sky-500', soft: 'bg-sky-50', text: 'text-sky-600', ring: 'ring-sky-100' },
-    { bar: 'bg-amber-500', soft: 'bg-amber-50', text: 'text-amber-600', ring: 'ring-amber-100' },
-    { bar: 'bg-emerald-500', soft: 'bg-emerald-50', text: 'text-emerald-600', ring: 'ring-emerald-100' },
-    { bar: 'bg-rose-500', soft: 'bg-rose-50', text: 'text-rose-600', ring: 'ring-rose-100' },
-]
-
-const colorFor = (i: number) => modelPalette[i % modelPalette.length]
-
 // Display the model name in the active UI language, falling back to the
 // canonical `name` when the preferred localized name is empty.
 function modelName(model: {
@@ -174,12 +168,6 @@ const modelById = computed(() => {
     for (const mod of props.developmentModels) m.set(mod.id, mod)
     return m
 })
-
-function modelNameById(id: number | null): string {
-    if (id == null) return ''
-    const m = modelById.value.get(id)
-    return m ? modelName(m) : ''
-}
 
 /**
  * --------------------------------------------------------------------------
@@ -257,6 +245,18 @@ function masterName(item: {
 }): string {
     const preferred = locale.value === 'id' ? item.value_id : item.value_en
     return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
+}
+
+// Localized description, falling back to the other language. '' when there is
+// none.
+function rowDescription(item: {
+    description_en?: string | null
+    description_id?: string | null
+}): string {
+    const preferred = locale.value === 'id' ? item.description_id : item.description_en
+    const fallback = locale.value === 'id' ? item.description_en : item.description_id
+
+    return (preferred || fallback || '').trim()
 }
 
 function openMaster(type: MasterType, item?: Program) {
@@ -694,6 +694,9 @@ const proficiencyLevelOptions = computed<Option[]>(() => {
                 label: grades
                     ? `${masterName(pl)} (${t.value.idp.settings.gradeLevel} ${grades})`
                     : masterName(pl),
+                // What the rung means — the only thing telling PL1 from PL2
+                // apart on a form.
+                description: rowDescription(pl) || undefined,
             }
         })
 })
@@ -711,13 +714,6 @@ const gradeOptions = computed<Option[]>(() => {
         ...loadedGrades.value.filter((g) => !list.includes(g)),
     ].map((g) => ({ value: g, label: g }))
 })
-
-// Localized proficiency-level name for the program table (or '').
-function proficiencyLevelName(id: number | null): string {
-    if (id == null) return ''
-    const pl = proficiencyLevelById.value.get(id)
-    return pl ? masterName(pl) : ''
-}
 
 // Per-type snapshot of the competency-related fields, so switching competency
 // type resets the selection but returning to a type restores what was chosen
@@ -804,89 +800,258 @@ watch(gradeOptions, (opts) => {
 
 /**
  * --------------------------------------------------------------------------
- * Development model lookups (for labelling programs by their model)
+ * Development program table — grouped competency type → competency → program
  * --------------------------------------------------------------------------
- */
-
-const modelIndexById = computed(() => {
-    const m = new Map<number, number>()
-    props.developmentModels.forEach((mod, i) => m.set(mod.id, i))
-    return m
-})
-
-const modelPercentById = computed(() => {
-    const m = new Map<number, number>()
-    for (const mod of props.developmentModels) m.set(mod.id, mod.percentage)
-    return m
-})
-
-const neutralColor = {
-    bar: 'bg-slate-400',
-    soft: 'bg-slate-100',
-    text: 'text-slate-500',
-    ring: 'ring-slate-100',
-}
-
-const groupColor = (i: number) => (i < 0 ? neutralColor : colorFor(i))
-
-/**
- * --------------------------------------------------------------------------
- * Development program table — program-centric list with each program's model
- * and the competencies linked to it (linking is edited from the program form).
+ * The grain is one row per (program × linked competency): a program carries at
+ * most one competency, but three legacy rows carry two, and a program with none
+ * still needs a line. Rows are pre-sorted type → competency → program so the
+ * two leading columns merge into runs (ClientTable spans them); sorting the
+ * table by another column simply breaks those runs apart, which is honest.
+ * The development model is a tab rather than a column, so `modelKey` is here to
+ * pick the tab's rows out, not to be rendered.
  * Search is external; ClientTable handles sort + pagination.
- * --------------------------------------------------------------------------
  */
 
 const programSearch = ref('')
 
+// The tab a program with no development model falls into.
+const NO_MODEL_KEY = 'none'
+
 interface ProgramRow {
+    key: string
     id: number
     program: Program
     name: string
-    modelName: string
-    percentage: number | null
-    colorIndex: number
-    competencies: Competency[]
+    // Stable identities for the merge: two masters may read alike, ids do not.
+    modelKey: string
+    competencyTypeKey: string
+    competencyKey: string
+    competencyTypeCode: string
+    competencyTypeName: string
+    competencyCode: string
+    competencyName: string
     proficiency: string
+    proficiencyDescription: string
     grades: string[]
 }
 
 const programRows = computed<ProgramRow[]>(() => {
     const q = programSearch.value.trim().toLowerCase()
+    const rows: ProgramRow[] = []
 
-    return props.developmentPrograms
-        .map((p) => ({
+    for (const p of props.developmentPrograms) {
+        const level =
+            p.proficiency_level_id == null
+                ? null
+                : proficiencyLevelById.value.get(p.proficiency_level_id) ?? null
+
+        const base = {
             id: p.id,
             program: p,
             name: masterName(p),
-            modelName:
-                modelNameById(p.development_model_id) || (p.model_name ?? ''),
-            percentage:
+            modelKey:
                 p.development_model_id == null
-                    ? null
-                    : modelPercentById.value.get(p.development_model_id) ?? null,
-            colorIndex:
-                p.development_model_id == null
-                    ? -1
-                    : modelIndexById.value.get(p.development_model_id) ?? -1,
-            competencies: props.competencies.filter((c) =>
-                c.related_program.includes(p.id),
-            ),
+                    ? NO_MODEL_KEY
+                    : String(p.development_model_id),
             // Free-typed proficiency (Others) falls back onto the picked level.
-            proficiency:
-                proficiencyLevelName(p.proficiency_level_id) ||
-                (p.custom_proficiency_level ?? ''),
+            proficiency: level
+                ? masterName(level)
+                : p.custom_proficiency_level ?? '',
+            proficiencyDescription: level ? rowDescription(level) : '',
             grades: p.grades ?? [],
-        }))
-        .filter((row) => {
-            if (!q) return true
-            if (row.name.toLowerCase().includes(q)) return true
-            if (row.program.value.toLowerCase().includes(q)) return true
-            return row.competencies.some((c) =>
-                masterName(c).toLowerCase().includes(q),
-            )
-        })
+        }
+
+        // The type comes off the competency, so it groups the same way the
+        // competency does; a program with none falls back to its own scope.
+        const typeCell = (typeId: number | null) => {
+            const ct = typeId == null ? null : competencyTypeById.value.get(typeId)
+            return {
+                competencyTypeKey: ct ? String(ct.id) : 'none',
+                competencyTypeCode: ct?.code ?? '',
+                competencyTypeName: ct ? masterName(ct) : '',
+            }
+        }
+
+        const linked = props.competencies.filter((c) =>
+            c.related_program.includes(p.id),
+        )
+
+        if (linked.length === 0) {
+            rows.push({
+                ...base,
+                ...typeCell(p.competency_type_id),
+                key: `${p.id}-0`,
+                competencyKey: 'none',
+                competencyCode: '',
+                competencyName: '',
+            })
+        } else {
+            for (const c of linked) {
+                rows.push({
+                    ...base,
+                    ...typeCell(c.competency_type_id ?? p.competency_type_id),
+                    key: `${p.id}-${c.id}`,
+                    competencyKey: String(c.id),
+                    competencyCode: c.code ?? '',
+                    competencyName: masterName(c),
+                })
+            }
+        }
+    }
+
+    // An unnamed master sorts after the named ones, so a legacy row with no
+    // type or no competency lands at the foot of its group rather than the top.
+    const byName = (a: string, b: string) => {
+        if ((a !== '') !== (b !== '')) return a !== '' ? -1 : 1
+        return a.localeCompare(b)
+    }
+
+    rows.sort((a, b) => {
+        const byType = byName(a.competencyTypeName, b.competencyTypeName)
+        if (byType !== 0) return byType
+        const byCompetency = byName(a.competencyName, b.competencyName)
+        if (byCompetency !== 0) return byCompetency
+        return a.name.localeCompare(b.name)
+    })
+
+    if (!q) return rows
+
+    return rows.filter((row) =>
+        [
+            row.name,
+            row.program.value,
+            row.competencyName,
+            row.competencyCode,
+            row.competencyTypeName,
+            row.competencyTypeCode,
+        ].some((field) => field.toLowerCase().includes(q)),
+    )
 })
+
+/**
+ * --------------------------------------------------------------------------
+ * One tab per development model
+ * --------------------------------------------------------------------------
+ * A model is the coarsest grouping, so it is a tab rather than a merged first
+ * column: the whole table then answers "what does THIS model develop?" and the
+ * remaining columns nest below it. Counts are of the SEARCHED rows, so a search
+ * that matches nothing here but something next door says so on the other tab
+ * instead of reading as no results at all.
+ */
+
+// Which package each model belongs to, so a row can be counted under its
+// package without walking the model list per row.
+const packageKeyOfModel = computed(() => {
+    const m = new Map<string, string>()
+    for (const mod of props.developmentModels) {
+        m.set(String(mod.id), String(mod.development_model_package_id))
+    }
+    return m
+})
+
+// A program filed under no model belongs to no package either, so the orphan
+// bucket sits in the PACKAGE strip; picking it leaves nothing to sub-divide.
+const orphanCount = computed(
+    () =>
+        props.developmentPrograms.filter((p) => p.development_model_id == null)
+            .length,
+)
+
+interface PackageTab {
+    key: string
+    label: string
+    isActive: boolean
+    count: number
+}
+
+const packageTabs = computed<PackageTab[]>(() => {
+    const counts = new Map<string, number>()
+    for (const row of programRows.value) {
+        const key = packageKeyOfModel.value.get(row.modelKey) ?? NO_MODEL_KEY
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+
+    const tabs: PackageTab[] = props.packages.map((pk) => ({
+        key: String(pk.id),
+        label: pk.name,
+        isActive: pk.id === props.activePackageId,
+        count: counts.get(String(pk.id)) ?? 0,
+    }))
+
+    if (orphanCount.value > 0) {
+        tabs.push({
+            key: NO_MODEL_KEY,
+            label: t.value.idp.settings.noModel,
+            isActive: false,
+            count: counts.get(NO_MODEL_KEY) ?? 0,
+        })
+    }
+
+    return tabs
+})
+
+// Open on the package in force — the cycle being worked on.
+const selectedPackageKey = ref<string | null>(null)
+
+const activePackageKey = computed<string>(() => {
+    const tabs = packageTabs.value
+    const chosen = tabs.find((tab) => tab.key === selectedPackageKey.value)
+    if (chosen) return chosen.key
+
+    const current = tabs.find(
+        (tab) => tab.key === String(props.activePackageId),
+    )
+
+    return current?.key ?? tabs[0]?.key ?? NO_MODEL_KEY
+})
+
+interface ModelTab {
+    key: string
+    label: string
+    percentage: number
+    count: number
+}
+
+// Only the open package's models: a model belongs to exactly one package, and
+// mixing two packages' weightings in one strip is what made this ambiguous.
+const modelTabs = computed<ModelTab[]>(() => {
+    if (activePackageKey.value === NO_MODEL_KEY) return []
+
+    const counts = new Map<string, number>()
+    for (const row of programRows.value) {
+        counts.set(row.modelKey, (counts.get(row.modelKey) ?? 0) + 1)
+    }
+
+    return props.developmentModels
+        .filter(
+            (m) =>
+                String(m.development_model_package_id) === activePackageKey.value,
+        )
+        .map((m) => ({
+            key: String(m.id),
+            label: modelName(m),
+            percentage: m.percentage,
+            count: counts.get(String(m.id)) ?? 0,
+        }))
+})
+
+// The chosen model only survives while it belongs to the open package, so
+// switching package lands on that package's first model rather than an empty
+// table.
+const selectedModelKey = ref<string | null>(null)
+
+const activeModelKey = computed<string>(() => {
+    const tabs = modelTabs.value
+    if (!tabs.length) return NO_MODEL_KEY
+
+    const chosen = tabs.find((tab) => tab.key === selectedModelKey.value)
+
+    return chosen?.key ?? tabs[0].key
+})
+
+const visibleRows = computed(() =>
+    programRows.value.filter((row) => row.modelKey === activeModelKey.value),
+)
 
 /**
  * --------------------------------------------------------------------------
@@ -915,10 +1080,25 @@ const placementComplete = computed(
 )
 
 const programColumns = computed<Column[]>(() => [
-    { key: 'name', label: t.value.idp.settings.program, sortable: true, thClass: 'w-64' },
-    { key: 'modelName', label: t.value.idp.settings.model, sortable: true, thClass: 'w-48' },
-    { key: 'competencies', label: t.value.idp.settings.linkedCompetencies },
-    { key: 'scope', label: t.value.idp.settings.scope, thClass: 'w-48' },
+    {
+        key: 'competencyTypeName',
+        label: t.value.idp.settings.competencyType,
+        sortable: true,
+        merge: true,
+        mergeKey: 'competencyTypeKey',
+        thClass: 'w-44',
+    },
+    {
+        key: 'competencyName',
+        label: t.value.idp.settings.competency,
+        sortable: true,
+        merge: true,
+        mergeKey: 'competencyKey',
+        thClass: 'w-52',
+    },
+    { key: 'name', label: t.value.idp.settings.program, sortable: true },
+    { key: 'proficiency', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-56' },
+    { key: 'grades', label: t.value.idp.settings.grade, thClass: 'w-36' },
     { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
 ])
 </script>
@@ -976,83 +1156,156 @@ const programColumns = computed<Column[]>(() => [
                 </div>
             </div>
 
-                <!-- Program table (program → model + linked competencies) -->
+                <!-- Two levels: which model package, then which of its
+                     development models. A model belongs to exactly one package,
+                     so splitting them apart is what says which is which. -->
+                <div
+                    v-if="packageTabs.length > 1"
+                    class="flex flex-wrap items-center gap-2 border-b border-border/60 bg-slate-50/60 px-5 py-3"
+                >
+                    <span class="mr-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        {{ t.idp.settings.packages }}
+                    </span>
+                    <button
+                        v-for="tab in packageTabs"
+                        :key="tab.key"
+                        type="button"
+                        class="inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition"
+                        :class="
+                            activePackageKey === tab.key
+                                ? 'border-primary bg-primary/5 text-primary'
+                                : 'border-border bg-white text-slate-600 hover:bg-slate-50'
+                        "
+                        @click="selectedPackageKey = tab.key"
+                    >
+                        {{ tab.label }}
+                        <span
+                            v-if="tab.isActive"
+                            class="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-600"
+                        >
+                            {{ t.idp.settings.statusActive }}
+                        </span>
+                        <span
+                            class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
+                            :class="activePackageKey === tab.key ? 'bg-primary/15' : 'bg-slate-100 text-slate-500'"
+                        >
+                            {{ tab.count }}
+                        </span>
+                    </button>
+                </div>
+
+                <div
+                    v-if="modelTabs.length"
+                    class="flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-3"
+                >
+                    <span class="mr-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        {{ t.idp.settings.model }}
+                    </span>
+                    <button
+                        v-for="tab in modelTabs"
+                        :key="tab.key"
+                        type="button"
+                        class="inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium transition"
+                        :class="
+                            activeModelKey === tab.key
+                                ? 'border-primary bg-primary/5 text-primary'
+                                : 'border-border bg-white text-slate-600 hover:bg-slate-50'
+                        "
+                        @click="selectedModelKey = tab.key"
+                    >
+                        {{ tab.label }}
+                        <span class="text-slate-400">{{ tab.percentage }}%</span>
+                        <span
+                            class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
+                            :class="activeModelKey === tab.key ? 'bg-primary/15' : 'bg-slate-100 text-slate-500'"
+                        >
+                            {{ tab.count }}
+                        </span>
+                    </button>
+                </div>
+
+                <!-- Grouped: competency type → competency → program -->
                 <ClientTable
                     :columns="programColumns"
-                    :rows="programRows"
-                    row-key="id"
+                    :rows="visibleRows"
+                    row-key="key"
                     :per-page="10"
-                    numbered
+                    bordered
                 >
+                    <!-- One cell per competency type, merged across the
+                         programs under it. Code above, name below — the code identifies it,
+                         the name reads it. -->
+                    <template #cell-competencyTypeName="{ row }">
+                        <div v-if="row.competencyTypeName || row.competencyTypeCode">
+                            <span
+                                v-if="row.competencyTypeCode"
+                                class="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
+                            >
+                                {{ row.competencyTypeCode }}
+                            </span>
+                            <div
+                                v-if="row.competencyTypeName"
+                                class="mt-0.5 font-medium text-slate-700"
+                            >
+                                {{ row.competencyTypeName }}
+                            </div>
+                        </div>
+                        <span v-else class="text-xs italic text-slate-300">
+                            &#8212;
+                        </span>
+                    </template>
+
+                    <!-- Merged within its type: one cell per competency. -->
+                    <template #cell-competencyName="{ row }">
+                        <div v-if="row.competencyName || row.competencyCode">
+                            <span
+                                v-if="row.competencyCode"
+                                class="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
+                            >
+                                {{ row.competencyCode }}
+                            </span>
+                            <div
+                                v-if="row.competencyName"
+                                class="mt-0.5 font-medium text-slate-700"
+                            >
+                                {{ row.competencyName }}
+                            </div>
+                        </div>
+                        <span v-else class="text-xs italic text-slate-300">
+                            &#8212;
+                        </span>
+                    </template>
+
                     <template #cell-name="{ row }">
                         <span class="font-semibold text-slate-800">{{ row.name }}</span>
                     </template>
 
-                    <template #cell-modelName="{ row }">
-                        <span
-                            v-if="row.modelName"
-                            class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
-                            :class="[
-                                groupColor(row.colorIndex).soft,
-                                groupColor(row.colorIndex).text,
-                            ]"
-                        >
-                            <span
-                                class="h-2 w-2 rounded-full"
-                                :class="groupColor(row.colorIndex).bar"
-                            />
-                            {{ row.modelName }}
-                            <span v-if="row.percentage !== null">
-                                ({{ row.percentage }}%)
-                            </span>
-                        </span>
-                        <span v-else class="text-xs italic text-slate-300">
-                            {{ t.idp.settings.noModel }}
-                        </span>
-                    </template>
-
-                    <template #cell-competencies="{ row }">
-                        <div
-                            v-if="row.competencies.length"
-                            class="flex flex-wrap gap-1.5"
-                        >
-                            <span
-                                v-for="c in row.competencies"
-                                :key="c.id"
-                                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
-                            >
-                                {{ masterName(c) }}
-                            </span>
-                        </div>
-                        <span v-else class="text-xs italic text-slate-300">
-                            {{ t.idp.settings.noCompetenciesLinked }}
-                        </span>
-                    </template>
-
-                    <template #cell-scope="{ row }">
-                        <div
-                            v-if="row.proficiency || row.grades.length"
-                            class="flex flex-wrap gap-1.5"
-                        >
-                            <span
-                                v-if="row.proficiency"
-                                class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
-                                :title="t.idp.settings.proficiencyLevel"
-                            >
-                                <i class="fa-solid fa-signal text-[9px]" />
+                    <template #cell-proficiency="{ row }">
+                        <div v-if="row.proficiency">
+                            <div class="font-medium text-slate-700">
                                 {{ row.proficiency }}
-                            </span>
+                            </div>
+                            <p
+                                v-if="row.proficiencyDescription"
+                                class="mt-0.5 text-xs leading-snug text-slate-400"
+                            >
+                                {{ row.proficiencyDescription }}
+                            </p>
+                        </div>
+                        <span v-else class="text-xs italic text-slate-300">&#8212;</span>
+                    </template>
+
+                    <template #cell-grades="{ row }">
+                        <div v-if="row.grades.length" class="flex flex-wrap gap-1.5">
                             <span
                                 v-for="g in row.grades"
                                 :key="g"
-                                class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600"
-                                :title="t.idp.settings.grade"
+                                class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600"
                             >
-                                <i class="fa-solid fa-layer-group text-[9px]" />
                                 {{ g }}
                             </span>
                         </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
+                        <span v-else class="text-xs italic text-slate-300">&#8212;</span>
                     </template>
 
                     <template #cell-actions="{ row }">

@@ -13,6 +13,11 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 export interface Option {
     value: string
     label: string
+    /**
+     * What the option means, printed as a muted second line in the dropdown and
+     * matched by the search box. The closed trigger stays label-only.
+     */
+    description?: string
 }
 
 const props = defineProps<{
@@ -37,7 +42,13 @@ const selectedLabel = computed(
 
 const filtered = computed(() => {
     const q = search.value.trim().toLowerCase()
-    return q ? props.options.filter((o) => o.label.toLowerCase().includes(q)) : props.options
+    if (!q) return props.options
+
+    return props.options.filter(
+        (o) =>
+            o.label.toLowerCase().includes(q) ||
+            (o.description ?? '').toLowerCase().includes(q),
+    )
 })
 
 // Fixed-position box for the teleported menu, recomputed from the trigger's
@@ -157,12 +168,30 @@ onUnmounted(() => {
                     <li v-for="option in filtered" :key="option.value">
                         <button
                             type="button"
-                            class="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition hover:bg-slate-50"
-                            :class="option.value === modelValue ? 'font-medium text-primary' : 'text-slate-600'"
+                            class="flex w-full justify-between gap-2 px-3 py-2 text-left text-sm transition hover:bg-slate-50"
+                            :class="[
+                                option.description ? 'items-start' : 'items-center',
+                                option.value === modelValue ? 'font-medium text-primary' : 'text-slate-600',
+                            ]"
                             @click="select(option)"
                         >
-                            <span class="truncate">{{ option.label || '—' }}</span>
-                            <i v-if="option.value === modelValue" class="fa-solid fa-check shrink-0 text-xs" />
+                            <span class="min-w-0 flex-1">
+                                <span class="block truncate">{{ option.label || '—' }}</span>
+                                <!-- Wraps rather than truncates: it is a
+                                     sentence, and it is the reason the row is
+                                     worth reading. -->
+                                <span
+                                    v-if="option.description"
+                                    class="mt-0.5 block text-xs font-normal leading-snug text-slate-400"
+                                >
+                                    {{ option.description }}
+                                </span>
+                            </span>
+                            <i
+                                v-if="option.value === modelValue"
+                                class="fa-solid fa-check shrink-0 text-xs"
+                                :class="option.description ? 'mt-1' : ''"
+                            />
                         </button>
                     </li>
                     <li v-if="filtered.length === 0" class="px-3 py-4 text-center text-xs text-slate-400">

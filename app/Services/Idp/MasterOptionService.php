@@ -108,6 +108,10 @@ class MasterOptionService
             ->map(fn (CompetencyProficiencyLevel $level) => $this->option($level) + [
                 'competency_id' => $level->competency_id,
                 'sequence' => $level->sequence,
+                // What the rung actually means. The Master Implementation list
+                // prints it under the level, the way the competency list does.
+                'description_en' => $level->description_en,
+                'description_id' => $level->description_id,
             ]);
     }
 
@@ -146,6 +150,10 @@ class MasterOptionService
             ->orderBy('name_en')
             ->get()
             ->map(fn (Competency $c) => $this->option($c) + [
+                // The competency's short identifier, shown in front of its
+                // name wherever a list prints one. Null on the rows that
+                // predate the column — the form requires one from now on.
+                'code' => $c->code,
                 'competency_type_id' => $c->competency_type_id,
             ] + ($with === null ? [] : $with($c)));
     }

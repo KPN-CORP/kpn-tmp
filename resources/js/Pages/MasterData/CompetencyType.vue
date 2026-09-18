@@ -301,10 +301,7 @@ const typeColumns = computed<Column[]>(() => [
                 </template>
 
                 <template #cell-name="{ row }">
-                    <span class="inline-flex items-center gap-1.5 font-semibold text-slate-800">
-                        <i class="fa-solid fa-tag text-[10px] text-indigo-400" />
-                        {{ row._name }}
-                    </span>
+                    <span class="font-semibold text-slate-800">{{ row._name }}</span>
                 </template>
 
                 <template #cell-business_units="{ row }">

@@ -632,8 +632,6 @@ export default {
             competenciesHint: 'Define competencies and group them by type. Programs are managed on their own tab.',
             searchCompetency: 'Search competency…',
             searchProgram: 'Search program…',
-            linkedCompetencies: 'Linked competencies',
-            noCompetenciesLinked: 'No competencies linked yet.',
             noProgramsMatch: 'No programs match your search.',
             action: 'Action',
             edit: 'Edit',

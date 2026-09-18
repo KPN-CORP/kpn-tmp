@@ -11,6 +11,17 @@ export interface Column {
     align?: 'left' | 'right' | 'center'
     thClass?: string
     tdClass?: string
+    // Merge this cell vertically across adjacent rows that share the same
+    // value. Merging is hierarchical in column order: a merge column only
+    // spans rows that also agree on every merge column to its left, so a
+    // second-level group never straddles two first-level groups. Runs are
+    // computed per page, so a group split by pagination simply merges twice.
+    // Not compatible with `expanded` rows, which would offset the spans.
+    merge?: boolean
+    // Compare this field instead of `key` when deciding what merges — use it
+    // when the rendered label is not a stable identity (two models may read
+    // alike; their ids do not).
+    mergeKey?: string
 }
 
 const props = withDefaults(
@@ -34,6 +45,10 @@ const props = withDefaults(
         expandedKeys?: (string | number)[]
         // Options for the "rows per page" selector in the pager.
         perPageOptions?: number[]
+        // Draw vertical dividers between the columns. Opt-in: a plain list
+        // reads better without them, but a table with `merge` columns needs
+        // the column edges drawn, or a merged block does not read as a block.
+        bordered?: boolean
     }>(),
     {
         perPage: 5,
@@ -44,6 +59,7 @@ const props = withDefaults(
         selectedKey: null,
         expandedKeys: () => [],
         perPageOptions: () => [10, 20, 50, 100],
+        bordered: false,
     },
 )
 
@@ -143,6 +159,60 @@ const colSpan = computed(() => props.columns.length + (props.numbered ? 1 : 0))
 function isExpanded(row: Record<string, any>, i: number) {
     return props.expandedKeys.includes(rowKeyVal(row, i))
 }
+
+/**
+ * Rowspans for the merge columns on the current page: `spans[i][col.key]` is
+ * how many rows this cell covers, or 0 when the row above already covers it
+ * and this row must not render a cell at all.
+ */
+const mergeColumns = computed(() => props.columns.filter((c) => c.merge))
+
+const mergeSpans = computed<Record<string, number>[]>(() => {
+    const rows = pageRows.value
+    const spans: Record<string, number>[] = rows.map(() => ({}))
+    const cols = mergeColumns.value
+    if (!cols.length) return spans
+
+    // A row's group at depth d is everything it agrees on up to and including
+    // that column — which is what makes the nesting hierarchical.
+    const SEP = String.fromCharCode(0)
+    const sig = (row: Record<string, any>, depth: number) =>
+        cols
+            .slice(0, depth + 1)
+            .map((c) => String(row?.[c.mergeKey ?? c.key] ?? ''))
+            .join(SEP)
+
+    cols.forEach((col, depth) => {
+        let start = 0
+        for (let i = 1; i <= rows.length; i++) {
+            if (i === rows.length || sig(rows[i], depth) !== sig(rows[start], depth)) {
+                spans[start][col.key] = i - start
+                for (let j = start + 1; j < i; j++) spans[j][col.key] = 0
+                start = i
+            }
+        }
+    })
+
+    return spans
+})
+
+function cellSpan(col: Column, i: number): number {
+    if (!col.merge) return 1
+    return mergeSpans.value[i]?.[col.key] ?? 1
+}
+
+/**
+ * The column divider, skipped on the last column so the table does not draw a
+ * line on top of its container's own right border. It is keyed on the column
+ * rather than a `last:` variant because a merged-away cell is not rendered at
+ * all, so the last cell IN A ROW is not always the last column.
+ */
+const lastColumnKey = computed(() => props.columns[props.columns.length - 1]?.key)
+
+function dividerClass(colKey?: string) {
+    if (!props.bordered || colKey === lastColumnKey.value) return ''
+    return 'border-r border-border/60'
+}
 </script>
 
 <template>
@@ -151,14 +221,18 @@ function isExpanded(row: Record<string, any>, i: number) {
             <table class="w-full text-left text-sm">
                 <thead>
                     <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
-                        <th v-if="numbered" class="w-14 px-4 py-2.5 text-center font-semibold">
+                        <th
+                            v-if="numbered"
+                            class="w-14 px-4 py-2.5 text-center font-semibold"
+                            :class="dividerClass()"
+                        >
                             #
                         </th>
                         <th
                             v-for="col in columns"
                             :key="col.key"
                             class="px-4 py-2.5 font-semibold"
-                            :class="[alignClass(col.align), col.thClass, col.sortable ? 'cursor-pointer select-none hover:text-slate-600' : '']"
+                            :class="[alignClass(col.align), col.thClass, dividerClass(col.key), col.sortable ? 'cursor-pointer select-none hover:text-slate-600' : '']"
                             @click="toggleSort(col)"
                         >
                             <span
@@ -190,19 +264,30 @@ function isExpanded(row: Record<string, any>, i: number) {
                             ]"
                             @click="selectable && emit('row-click', row)"
                         >
-                            <td v-if="numbered" class="px-4 py-3 text-center text-slate-400">
+                            <td
+                                v-if="numbered"
+                                class="px-4 py-3 text-center text-slate-400"
+                                :class="dividerClass()"
+                            >
                                 {{ (page - 1) * perPageState + i + 1 }}
                             </td>
-                            <td
-                                v-for="col in columns"
-                                :key="col.key"
-                                class="px-4 py-3 text-slate-700"
-                                :class="[alignClass(col.align), col.tdClass]"
-                            >
-                                <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
-                                    {{ row[col.key] ?? '—' }}
-                                </slot>
-                            </td>
+                            <!-- A merged cell is rendered once, by the first
+                                 row of its group; the rows it covers skip it.
+                                 Every cell is middle-aligned, merged or not, so
+                                 a group label lines up with the rows it covers
+                                 rather than floating above a taller neighbour. -->
+                            <template v-for="col in columns" :key="col.key">
+                                <td
+                                    v-if="cellSpan(col, i) !== 0"
+                                    class="px-4 py-3 align-middle text-slate-700"
+                                    :class="[alignClass(col.align), col.tdClass, dividerClass(col.key)]"
+                                    :rowspan="cellSpan(col, i) > 1 ? cellSpan(col, i) : undefined"
+                                >
+                                    <slot :name="`cell-${col.key}`" :row="row" :value="row[col.key]">
+                                        {{ row[col.key] ?? '—' }}
+                                    </slot>
+                                </td>
+                            </template>
                         </tr>
 
                         <!-- Detail panel for this row, spanning the full width. -->

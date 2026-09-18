@@ -11,7 +11,7 @@ import IconButton from '@/Components/UI/IconButton.vue'
 import FormSection from '@/Components/UI/FormSection.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import MultiSelect from '@/Components/UI/MultiSelect.vue'
-import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
+import Pagination from '@/Components/UI/Pagination.vue'
 import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
@@ -30,10 +30,15 @@ interface Localized {
 }
 
 interface CompetencyType extends Localized {
+    // The type's short identifier. Null on types that predate the column; the
+    // list renders it as a chip in front of the type name when present.
+    code: string | null
     competencies_count: number
 }
 
 interface Competency extends Localized {
+    // The competency's short identifier. Null on rows that predate the column.
+    code: string | null
     competency_type_id: number | null
     // The rungs of this competency's own proficiency ladder.
     proficiency_level_ids: number[]
@@ -50,6 +55,8 @@ interface ProficiencyLevel extends Localized {
     competency_id: number
     sequence: number
     is_active: boolean
+    description_en: string | null
+    description_id: string | null
 }
 
 interface Implementation {
@@ -98,6 +105,20 @@ function masterName(item: {
     if (!item) return ''
     const preferred = locale.value === 'id' ? item.value_id : item.value_en
     return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
+}
+
+/**
+ * A row's description in the reading language, falling back to the other — the
+ * same rule the Master Competency list applies. '' when there is none.
+ */
+function rowDescription(row: {
+    description_en?: string | null
+    description_id?: string | null
+}): string {
+    const preferred = locale.value === 'id' ? row.description_id : row.description_en
+    const fallback = locale.value === 'id' ? row.description_en : row.description_id
+
+    return (preferred || fallback || '').trim()
 }
 
 /**
@@ -256,7 +277,13 @@ const proficiencyOptions = computed<Option[]>(() => {
         // switched off; dropping them would silently unpin them on the next
         // save. They are flagged below instead.
         .filter((p) => p.is_active || pinned.has(String(p.id)))
-        .map((p) => ({ value: String(p.id), label: masterName(p) }))
+        // The description says what the rung means, which is the only thing
+        // telling PL1 from PL2 apart on a form.
+        .map((p) => ({
+            value: String(p.id),
+            label: masterName(p),
+            description: rowDescription(p) || undefined,
+        }))
 })
 
 // Pinned levels that have since been switched off.
@@ -386,63 +413,315 @@ const scopeComplete = computed(
 
 /**
  * --------------------------------------------------------------------------
- * Implementation table — search → ClientTable (sort + pagination)
+ * Implementation table — search + type tab (external) → sort + pages (below)
  * --------------------------------------------------------------------------
+ * Same shape as the Master Competency list: the competency type splits the
+ * list into a tab strip and, on the "All" tab, merges down the left edge, and
+ * a mapping's proficiency levels are one row each rather than a wrap of chips.
+ * So this is a grouped (rowspan) grid rather than a ClientTable — sorting and
+ * paging therefore work on mappings, not on rendered rows, which is why they
+ * live here instead of coming from ClientTable.
  */
 
 const implSearch = ref('')
 
-const implRows = computed(() => {
-    const q = implSearch.value.trim().toLowerCase()
+// Every mapping with its labels resolved, before search or the type tab.
+const labelledImpls = computed(() =>
+    props.implementations.map((row) => {
+        const competency = row.competency_id != null
+            ? competencyById.value.get(row.competency_id)
+            : null
+        const type = row.competency_type_id != null
+            ? competencyTypeById.value.get(row.competency_type_id)
+            : null
 
-    return props.implementations
+        // Ordered by their position on the competency's ladder, so PL1 reads
+        // above PL2 whatever order they were pinned in.
+        const levels = (row.proficiency_level_ids ?? [])
+            .map((id) => proficiencyLevelById.value.get(id))
+            .filter((p): p is ProficiencyLevel => !!p)
+            .sort((a, b) => a.sequence - b.sequence || a.id - b.id)
+
+        return {
+            ...row,
+            competency_name: masterName(competency),
+            competency_code: competency?.code ?? '',
+            type_name: masterName(type),
+            type_code: type?.code ?? '',
+            levels,
+            proficiency_names: levels.map((p) => masterName(p)),
+        }
+    }),
+)
+
+// Everything the search matches, before the type tab narrows it. The tab
+// counts are taken from here, so each tab's number is exactly how many rows
+// opening it would show.
+const searchedImpls = computed(() => {
+    const q = implSearch.value.trim().toLowerCase()
+    if (!q) return labelledImpls.value
+
+    return labelledImpls.value.filter((row) =>
+        [
+            row.competency_name,
+            row.competency_code,
+            row.type_name,
+            row.type_code,
+            ...row.proficiency_names,
+            ...(row.grades ?? []),
+            ...(row.business_units ?? []),
+            row.job_family ?? '',
+            row.function_name ?? '',
+            row.position ?? '',
+        ].some((v) => v.toLowerCase().includes(q)),
+    )
+})
+
+/**
+ * The competency type the list is showing. The list is split by type into a
+ * tab strip — null is the "all types" tab, 0 the bucket of mappings that have
+ * no type at all.
+ */
+const selectedTypeFilter = ref<number | null>(null)
+
+// Keep the open tab valid as types are added/removed.
+watch(
+    () => props.competencyTypes,
+    (list) => {
+        if (
+            selectedTypeFilter.value !== null &&
+            selectedTypeFilter.value !== 0 &&
+            !list.some((ct) => ct.id === selectedTypeFilter.value)
+        ) {
+            selectedTypeFilter.value = null
+        }
+    },
+)
+
+// Mappings with no type assigned. Read off the whole set rather than the
+// searched one, so the "Untyped" tab does not appear and vanish while typing.
+const untypedImplCount = computed(
+    () => props.implementations.filter((i) => i.competency_type_id == null).length,
+)
+
+// One tab per competency type, plus "All" and — when there are any — the
+// untyped bucket.
+const typeTabs = computed(() => {
+    const counts = new Map<number, number>()
+
+    for (const row of searchedImpls.value) {
+        const key = row.competency_type_id ?? 0
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+
+    const tabs: { key: number | null; label: string; count: number }[] = [
+        {
+            key: null,
+            label: t.value.idp.settings.allTypes,
+            count: searchedImpls.value.length,
+        },
+        ...props.competencyTypes.map((ct) => ({
+            key: ct.id,
+            label: masterName(ct),
+            count: counts.get(ct.id) ?? 0,
+        })),
+    ]
+
+    if (untypedImplCount.value) {
+        tabs.push({
+            key: 0,
+            label: t.value.idp.settings.untyped,
+            count: counts.get(0) ?? 0,
+        })
+    }
+
+    return tabs
+})
+
+function selectType(key: number | null) {
+    selectedTypeFilter.value = key
+    // Two tabs may hold the same number of mappings, so the length watcher
+    // below cannot be relied on to send the reader back to page one.
+    implPage.value = 1
+}
+
+/**
+ * The type column only earns its place on the "All" tab: on any other the tab
+ * itself already names the type every row carries.
+ */
+const showTypeColumn = computed(() => selectedTypeFilter.value === null)
+
+const implRows = computed(() => {
+    const typeFilter = selectedTypeFilter.value
+    if (typeFilter === null) return searchedImpls.value
+
+    return searchedImpls.value.filter((row) =>
+        // 0 = the untyped bucket.
+        typeFilter === 0
+            ? row.competency_type_id == null
+            : row.competency_type_id === typeFilter,
+    )
+})
+
+// --- sorting (competency / type) ---
+
+type ImplSortKey = 'competency_name' | 'type_name'
+
+const implSort = ref<{ key: ImplSortKey; dir: 'asc' | 'desc' }>({
+    key: 'competency_name',
+    dir: 'asc',
+})
+
+function toggleImplSort(key: ImplSortKey) {
+    const s = implSort.value
+    implSort.value =
+        s.key === key
+            ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+            : { key, dir: 'asc' }
+    implPage.value = 1
+}
+
+/**
+ * On the "All" tab the type column merges the mappings that share a type into
+ * one cell, so the list reads as a type at a time. That only works if they are
+ * adjacent, so the type is the PRIMARY sort there and whatever column the
+ * reader clicked orders the mappings inside it. Untyped rows sort last,
+ * whichever way the type runs.
+ */
+const sortedImpls = computed(() => {
+    const { key, dir } = implSort.value
+    const sign = dir === 'asc' ? 1 : -1
+    const groupByType = showTypeColumn.value
+
+    return [...implRows.value].sort((a, b) => {
+        if (groupByType) {
+            // '￿' sorts after any real name, which parks the untyped
+            // bucket at the end of an ascending list.
+            const ta = a.type_name || '￿'
+            const tb = b.type_name || '￿'
+            // Clicking the type header is the only thing that reverses the
+            // groups; the other columns reorder within them.
+            const byType = ta.localeCompare(tb) * (key === 'type_name' ? sign : 1)
+
+            if (byType !== 0) return byType
+        }
+
+        // The type is already settled by the time we get here, so it cannot
+        // also be the tiebreak — fall back to the competency name.
+        const within = key === 'type_name' && groupByType ? 'competency_name' : key
+
+        return String(a[within] ?? '').localeCompare(String(b[within] ?? '')) * sign
+    })
+})
+
+// --- paging (by mapping, so a block is never split across pages) ---
+
+const implPage = ref(1)
+const implPerPage = ref(10)
+
+const implTotalPages = computed(() =>
+    Math.max(1, Math.ceil(sortedImpls.value.length / implPerPage.value)),
+)
+
+// Any change to the filtered set sends the user back to the first page.
+watch(() => implRows.value.length, () => (implPage.value = 1))
+
+const implFrom = computed(() =>
+    sortedImpls.value.length ? (implPage.value - 1) * implPerPage.value + 1 : 0,
+)
+
+const implTo = computed(() =>
+    Math.min(implPage.value * implPerPage.value, sortedImpls.value.length),
+)
+
+function changeImplPerPage(size: number) {
+    implPerPage.value = size
+    implPage.value = 1
+}
+
+/**
+ * One rendered <tr> of a mapping block: a single proficiency level, or one
+ * blank line when the mapping pins none.
+ *
+ * The badge is the rung's position on its competency's ladder — PL1, PL2 —
+ * mirroring the B1..Bn badges the competency list gives key behaviors, with
+ * what the rung means printed under it, the way the competency list prints a
+ * level's description.
+ *
+ * The name only earns a place beside the badge when it says something the
+ * badge does not: the ladders are named "PL<n>" in English but descriptively
+ * in Indonesian ("Dasar", "Mahir"), so the badge is what stays constant.
+ */
+interface ImplLine {
+    badge: string | null
+    name: string | null
+    description: string | null
+    active: boolean
+}
+
+function linesFor(levels: ProficiencyLevel[]): ImplLine[] {
+    if (levels.length === 0) {
+        return [{ badge: null, name: null, description: null, active: true }]
+    }
+
+    return levels.map((level) => {
+        const badge = `PL${level.sequence}`
+        const name = masterName(level)
+
+        return {
+            badge,
+            name: name === badge ? null : name,
+            description: rowDescription(level) || null,
+            active: level.is_active,
+        }
+    })
+}
+
+// The mappings on the current page, each expanded into its rendered lines.
+const implBlocks = computed(() => {
+    if (implPage.value > implTotalPages.value) {
+        implPage.value = implTotalPages.value
+    }
+
+    const start = (implPage.value - 1) * implPerPage.value
+
+    const blocks = sortedImpls.value
+        .slice(start, start + implPerPage.value)
         .map((row) => {
-            const competency = row.competency_id != null
-                ? competencyById.value.get(row.competency_id)
-                : null
-            const type = row.competency_type_id != null
-                ? competencyTypeById.value.get(row.competency_type_id)
-                : null
-            const proficiencyNames = (row.proficiency_level_ids ?? [])
-                .map((id) => masterName(proficiencyLevelById.value.get(id)))
-                .filter((n) => n !== '')
+            const lines = linesFor(row.levels)
 
             return {
                 ...row,
-                competency_name: masterName(competency),
-                type_name: masterName(type),
-                proficiency_names: proficiencyNames,
+                lines,
+                rowspan: lines.length,
+                // Filled in below: how many rendered lines this block's type
+                // cell spans. 0 on every block but the first of its group,
+                // which is what merges the column.
+                typeRowspan: 0,
             }
         })
-        .filter((row) => {
-            if (!q) return true
-            return [
-                row.competency_name,
-                row.type_name,
-                ...row.proficiency_names,
-                ...(row.grades ?? []),
-                ...(row.business_units ?? []),
-                row.job_family ?? '',
-                row.function_name ?? '',
-                row.position ?? '',
-            ].some((v) => v.toLowerCase().includes(q))
-        })
-})
 
-const implColumns = computed<Column[]>(() => [
-    { key: 'competency_name', label: t.value.idp.settings.competency, sortable: true, thClass: 'w-56' },
-    { key: 'proficiency_names', label: t.value.idp.settings.proficiencyLevel, thClass: 'w-48' },
-    { key: 'grades', label: t.value.idp.settings.grade, thClass: 'w-40' },
-    { key: 'business_units', label: t.value.idp.settings.businessUnit, thClass: 'w-48' },
-    {
-        key: 'status',
-        label: t.value.idp.settings.status,
-        sortable: true,
-        sortKey: 'is_active',
-        thClass: 'w-52',
-    },
-    { key: 'actions', label: t.value.idp.settings.action, align: 'right' },
-])
+    /**
+     * Merge the type column over each run of mappings sharing a type. The run
+     * is taken from the PAGE, not the whole list, so a group split across
+     * pages simply merges as far as each page goes.
+     */
+    for (let i = 0; i < blocks.length; ) {
+        const type = blocks[i].competency_type_id
+        let span = 0
+        let j = i
+
+        while (j < blocks.length && blocks[j].competency_type_id === type) {
+            span += blocks[j].rowspan
+            j++
+        }
+
+        blocks[i].typeRowspan = span
+        i = j
+    }
+
+    return blocks
+})
 
 /**
  * --------------------------------------------------------------------------
@@ -562,96 +841,295 @@ function confirmDelete() {
                     </div>
                 </div>
 
-                <ClientTable
-                    :columns="implColumns"
-                    :rows="implRows"
-                    row-key="id"
-                    :per-page="10"
-                    numbered
+                <!-- One tab per competency type. The type is what a reader
+                     comes to this screen with in mind, so it splits the list
+                     rather than sitting in a dropdown; the count on each tab
+                     is how many rows opening it shows, search included. -->
+                <div
+                    class="flex gap-2 overflow-x-auto border-b border-border/60 bg-slate-50/40 px-5 py-2.5"
+                    role="tablist"
                 >
-                    <template #cell-competency_name="{ row }">
-                        <div class="flex flex-col items-start gap-1">
-                            <span class="font-semibold text-slate-800">{{ row.competency_name || '—' }}</span>
-                            <span
-                                v-if="row.type_name"
-                                class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600"
+                    <button
+                        v-for="tab in typeTabs"
+                        :key="tab.key ?? 'all'"
+                        type="button"
+                        role="tab"
+                        :aria-selected="selectedTypeFilter === tab.key"
+                        class="inline-flex shrink-0 items-center gap-2 rounded-lg border px-3.5 py-1.5 text-sm font-medium transition"
+                        :class="
+                            selectedTypeFilter === tab.key
+                                ? 'border-primary bg-primary/5 text-primary'
+                                : 'border-transparent bg-white text-slate-600 hover:bg-slate-50'
+                        "
+                        @click="selectType(tab.key)"
+                    >
+                        {{ tab.label }}
+                        <span
+                            class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
+                            :class="
+                                selectedTypeFilter === tab.key
+                                    ? 'bg-primary/15'
+                                    : 'bg-slate-100 text-slate-500'
+                            "
+                        >
+                            {{ tab.count }}
+                        </span>
+                    </button>
+                </div>
+
+                <!-- Implementation table — grouped rows: one mapping spans a
+                     block, split into one row per proficiency level. -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr
+                                class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400"
                             >
-                                <i class="fa-solid fa-tag text-[9px]" />
-                                {{ row.type_name }}
-                            </span>
-                        </div>
-                    </template>
+                                <!-- The type leads: it is what the list is
+                                     grouped by, so it reads as the section
+                                     label down the left edge. -->
+                                <th
+                                    v-if="showTypeColumn"
+                                    class="w-52 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
+                                    @click="toggleImplSort('type_name')"
+                                >
+                                    <span class="inline-flex items-center gap-1">
+                                        {{ t.idp.settings.competencyType }}
+                                        <i
+                                            class="fa-solid text-[10px]"
+                                            :class="implSort.key === 'type_name'
+                                                ? (implSort.dir === 'asc' ? 'fa-sort-up text-primary' : 'fa-sort-down text-primary')
+                                                : 'fa-sort text-slate-300'"
+                                        />
+                                    </span>
+                                </th>
+                                <th
+                                    class="w-56 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
+                                    @click="toggleImplSort('competency_name')"
+                                >
+                                    <span class="inline-flex items-center gap-1">
+                                        {{ t.idp.settings.competency }}
+                                        <i
+                                            class="fa-solid text-[10px]"
+                                            :class="implSort.key === 'competency_name'
+                                                ? (implSort.dir === 'asc' ? 'fa-sort-up text-primary' : 'fa-sort-down text-primary')
+                                                : 'fa-sort text-slate-300'"
+                                        />
+                                    </span>
+                                </th>
+                                <th class="w-48 px-4 py-2.5 font-semibold">
+                                    {{ t.idp.settings.proficiencyLevel }}
+                                </th>
+                                <th class="w-40 px-4 py-2.5 font-semibold">
+                                    {{ t.idp.settings.grade }}
+                                </th>
+                                <th class="w-48 px-4 py-2.5 font-semibold">
+                                    {{ t.idp.settings.businessUnit }}
+                                </th>
+                                <!-- Status sits in this column too: the badge
+                                     is itself the on/off control, so it belongs
+                                     with edit and delete. -->
+                                <th class="w-44 px-4 py-2.5 text-right font-semibold">
+                                    {{ t.idp.settings.action }}
+                                </th>
+                            </tr>
+                        </thead>
 
-                    <template #cell-proficiency_names="{ row }">
-                        <div v-if="row.proficiency_names.length" class="flex flex-wrap gap-1">
-                            <span
-                                v-for="(name, i) in row.proficiency_names"
-                                :key="i"
-                                class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-600"
-                            >
-                                <i class="fa-solid fa-signal text-[9px]" />
-                                {{ name }}
-                            </span>
-                        </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
+                        <tbody>
+                            <template v-for="block in implBlocks" :key="block.id">
+                                <tr
+                                    v-for="(line, i) in block.lines"
+                                    :key="i"
+                                    class="transition hover:bg-slate-50/70"
+                                    :class="i === block.lines.length - 1 ? 'border-b border-border/60' : ''"
+                                >
+                                    <!-- Painted once per RUN of mappings
+                                         sharing a type, so the column merges. -->
+                                    <td
+                                        v-if="showTypeColumn && i === 0 && block.typeRowspan > 0"
+                                        :rowspan="block.typeRowspan"
+                                        class="border-r border-border/40 bg-slate-50/40 px-4 py-3 align-top"
+                                    >
+                                        <!-- Code on its own line above the
+                                             name. The chip is inline and the
+                                             name a block, which is what breaks
+                                             the line, so a row with no code
+                                             leaves no gap. -->
+                                        <template v-if="block.type_name">
+                                            <span
+                                                v-if="block.type_code"
+                                                class="mb-1 inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-indigo-700"
+                                            >
+                                                {{ block.type_code }}
+                                            </span>
+                                            <div class="font-semibold text-slate-800">
+                                                {{ block.type_name }}
+                                            </div>
+                                        </template>
+                                        <span v-else class="text-xs italic text-slate-300">
+                                            {{ t.idp.settings.untyped }}
+                                        </span>
+                                    </td>
 
-                    <template #cell-grades="{ row }">
-                        <div v-if="row.grades?.length" class="flex flex-wrap gap-1">
-                            <span
-                                v-for="(grade, i) in row.grades"
-                                :key="i"
-                                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
-                            >
-                                {{ grade }}
-                            </span>
-                        </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
+                                    <!-- Mapping-wide cells: painted once,
+                                         spanning the block. The competency's
+                                         own code sits above its name. -->
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                    >
+                                        <span
+                                            v-if="block.competency_code"
+                                            class="mb-1 inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
+                                        >
+                                            {{ block.competency_code }}
+                                        </span>
+                                        <div class="font-semibold text-slate-800">
+                                            {{ block.competency_name || '—' }}
+                                        </div>
+                                    </td>
 
-                    <template #cell-status="{ row }">
-                        <ActiveStateCell
-                            :active="row.is_active"
-                            :busy="togglingId === row.id"
-                            @toggle="toggleActive(row as unknown as Implementation)"
-                            @history="openHistory(row as unknown as Implementation)"
-                        />
-                    </template>
+                                    <!-- Proficiency level: one per line. -->
+                                    <td
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                        :class="i < block.lines.length - 1 ? 'border-b border-border/40' : ''"
+                                    >
+                                        <template v-if="line.badge">
+                                            <span
+                                                class="inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold"
+                                                :class="
+                                                    line.active
+                                                        ? 'bg-emerald-50 text-emerald-700'
+                                                        : 'bg-slate-100 text-slate-400 line-through'
+                                                "
+                                                :title="line.active ? undefined : t.idp.settings.inactiveBadge"
+                                            >
+                                                {{ line.badge }}
+                                            </span>
+                                            <span
+                                                v-if="line.name"
+                                                class="ml-1.5 text-slate-600"
+                                                :class="line.active ? '' : 'text-slate-400 line-through'"
+                                            >
+                                                {{ line.name }}
+                                            </span>
 
-                    <template #cell-business_units="{ row }">
-                        <div v-if="row.business_units?.length" class="flex flex-wrap gap-1">
-                            <span
-                                v-for="bu in row.business_units"
-                                :key="bu"
-                                class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600"
-                            >
-                                {{ bu }}
-                            </span>
-                        </div>
-                        <span v-else class="text-xs italic text-slate-300">—</span>
-                    </template>
+                                            <!-- What the rung means, under it,
+                                                 as on the competency list. -->
+                                            <p
+                                                v-if="line.description"
+                                                class="mt-1 whitespace-pre-line text-[11px] leading-snug text-slate-400"
+                                            >
+                                                {{ line.description }}
+                                            </p>
+                                        </template>
+                                        <span v-else class="text-xs italic text-slate-300">
+                                            {{ t.idp.settings.noProficiencyLevel }}
+                                        </span>
+                                    </td>
 
-                    <template #cell-actions="{ row }">
-                        <div class="flex items-center justify-end gap-1">
-                            <IconButton
-                                icon="fa-solid fa-pen"
-                                variant="edit"
-                                :title="t.idp.settings.editImplementation"
-                                @click="openImpl(row as unknown as Implementation)"
-                            />
-                            <IconButton
-                                icon="fa-solid fa-trash"
-                                variant="delete"
-                                :title="t.idp.settings.deleteImplementation"
-                                @click="deleteImpl(row as unknown as { id: number; competency_name: string })"
-                            />
-                        </div>
-                    </template>
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                    >
+                                        <div v-if="block.grades?.length" class="flex flex-wrap gap-1">
+                                            <span
+                                                v-for="(grade, g) in block.grades"
+                                                :key="g"
+                                                class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
+                                            >
+                                                {{ grade }}
+                                            </span>
+                                        </div>
+                                        <span v-else class="text-xs italic text-slate-300">—</span>
+                                    </td>
 
-                    <template #empty>
-                        {{ implSearch ? t.idp.settings.noImplementationsMatch : t.idp.settings.noImplementations }}
-                    </template>
-                </ClientTable>
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="border-r border-border/40 px-4 py-3 align-top"
+                                    >
+                                        <div v-if="block.business_units?.length" class="flex flex-wrap gap-1">
+                                            <span
+                                                v-for="bu in block.business_units"
+                                                :key="bu"
+                                                class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600"
+                                            >
+                                                {{ bu }}
+                                            </span>
+                                        </div>
+                                        <span v-else class="text-xs italic text-slate-300">—</span>
+                                    </td>
+
+                                    <!-- Status rides in the action cell: the
+                                         badge is itself the on/off control, so
+                                         it belongs with edit and delete rather
+                                         than in a column of its own. -->
+                                    <td
+                                        v-if="i === 0"
+                                        :rowspan="block.rowspan"
+                                        class="px-4 py-3 align-top"
+                                    >
+                                        <div class="flex flex-col items-end gap-2">
+                                            <ActiveStateCell
+                                                :active="block.is_active"
+                                                :busy="togglingId === block.id"
+                                                @toggle="toggleActive(block)"
+                                                @history="openHistory(block)"
+                                            />
+
+                                            <div class="flex items-center gap-1">
+                                                <IconButton
+                                                    icon="fa-solid fa-pen"
+                                                    variant="edit"
+                                                    :title="t.idp.settings.editImplementation"
+                                                    @click="openImpl(block)"
+                                                />
+                                                <IconButton
+                                                    icon="fa-solid fa-trash"
+                                                    variant="delete"
+                                                    :title="t.idp.settings.deleteImplementation"
+                                                    @click="deleteImpl(block)"
+                                                />
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
+
+                            <tr v-if="implBlocks.length === 0">
+                                <td
+                                    :colspan="showTypeColumn ? 6 : 5"
+                                    class="px-4 py-8 text-center text-slate-400"
+                                >
+                                    {{
+                                        implSearch || selectedTypeFilter !== null
+                                            ? t.idp.settings.noImplementationsMatch
+                                            : t.idp.settings.noImplementations
+                                    }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pager: pages mappings, so a block is never split. -->
+                <div
+                    v-if="implTotalPages > 1 || sortedImpls.length > 10"
+                    class="border-t border-border px-4 py-2.5 [&>div]:!mt-0"
+                >
+                    <Pagination
+                        :page="implPage"
+                        :per-page="implPerPage"
+                        :total="sortedImpls.length"
+                        :from="implFrom"
+                        :to="implTo"
+                        @update:page="implPage = $event"
+                        @update:per-page="changeImplPerPage"
+                    />
+                </div>
             </section>
         </div>
 

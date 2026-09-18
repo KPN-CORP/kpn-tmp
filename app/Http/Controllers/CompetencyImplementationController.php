@@ -59,6 +59,10 @@ class CompetencyImplementationController extends Controller
             // the form can cascade (type -> competency -> proficiency levels).
             'competencies' => $this->options->competencies(
                 fn (Competency $c) => [
+                    // The short identifier, shown in front of the name in the
+                    // list. Asked for here rather than added to the shared
+                    // option list, which the screens outside Master Data read.
+                    'code' => $c->code,
                     'proficiency_level_ids' => $c->proficiencyLevels->pluck('id')->all(),
                 ],
                 ['proficiencyLevels'],

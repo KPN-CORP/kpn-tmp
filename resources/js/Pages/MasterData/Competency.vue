@@ -37,6 +37,8 @@ interface Competency {
 interface CompetencyType {
     id: number
     value: string
+    // The type's short identifier. Null on types that predate the column.
+    code: string | null
     value_en: string | null
     value_id: string | null
     description_en: string | null
@@ -160,6 +162,12 @@ function competencyTypeName(id: number | null): string {
     return ct ? masterName(ct) : ''
 }
 
+// The linked type's short code (or '' when it has none / is untyped).
+function competencyTypeCode(id: number | null): string {
+    if (id == null) return ''
+    return competencyTypeById.value.get(id)?.code ?? ''
+}
+
 /**
  * Localized name for one of the competency's own nested rows. They store
  * `name_en` / `name_id` (the DB's own field names) rather than the masters'
@@ -182,11 +190,14 @@ function rowName(row: { name_en: string; name_id?: string | null }): string {
     return (preferred ?? '').trim() !== '' ? (preferred as string) : row.name_en
 }
 
-// Selected competency-type filter for the competencies table (null = all;
-// 0 = the "untyped" bucket).
+/**
+ * The competency type the list is showing. The list is split by type into a
+ * tab strip — null is the "all types" tab, 0 the bucket of competencies that
+ * have no type at all.
+ */
 const selectedTypeFilter = ref<number | null>(null)
 
-// Keep the filter valid as types are added/removed.
+// Keep the open tab valid as types are added/removed.
 watch(
     () => props.competencyTypes,
     (list) => {
@@ -200,54 +211,100 @@ watch(
     },
 )
 
-// Competencies with no type assigned (drives the "Untyped" filter option).
+// Competencies with no type assigned. Read off the whole set rather than the
+// searched one, so the "Untyped" tab does not appear and vanish while typing.
 const untypedCompetencyCount = computed(
     () => props.competencies.filter((c) => c.competency_type_id == null).length,
 )
 
-// Bridge the numeric/null type filter to the string-valued <select> in the
-// competency toolbar ('' = all, '0' = untyped bucket).
-const typeFilterValue = computed<string>({
-    get: () => (selectedTypeFilter.value === null ? '' : String(selectedTypeFilter.value)),
-    set: (v) => (selectedTypeFilter.value = v === '' ? null : Number(v)),
-})
-
 /**
  * --------------------------------------------------------------------------
- * Competency table — search + type filter (external) → ClientTable (sort + pages)
+ * Competency table — search + type tab (external) → sort + pages (below)
  * --------------------------------------------------------------------------
  */
 
 const competencySearch = ref('')
 
-// Rows carry the derived localized name + type name ClientTable sorts on; the
+// Everything the search matches, before the type tab narrows it. The tab
+// counts are taken from here, so each tab's number is exactly how many rows
+// opening it would show.
+const searchedCompetencies = computed(() => {
+    const q = competencySearch.value.trim().toLowerCase()
+    if (!q) return props.competencies
+
+    return props.competencies.filter(
+        (c) =>
+            masterName(c).toLowerCase().includes(q) ||
+            c.value.toLowerCase().includes(q) ||
+            (c.code ?? '').toLowerCase().includes(q),
+    )
+})
+
+// One tab per competency type, plus "All" and — when there are any — the
+// untyped bucket.
+const typeTabs = computed(() => {
+    const counts = new Map<number, number>()
+
+    for (const c of searchedCompetencies.value) {
+        const key = c.competency_type_id ?? 0
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+
+    const tabs: { key: number | null; label: string; count: number }[] = [
+        {
+            key: null,
+            label: t.value.idp.settings.allTypes,
+            count: searchedCompetencies.value.length,
+        },
+        ...props.competencyTypes.map((ct) => ({
+            key: ct.id,
+            label: masterName(ct),
+            count: counts.get(ct.id) ?? 0,
+        })),
+    ]
+
+    if (untypedCompetencyCount.value) {
+        tabs.push({
+            key: 0,
+            label: t.value.idp.settings.untyped,
+            count: counts.get(0) ?? 0,
+        })
+    }
+
+    return tabs
+})
+
+function selectType(key: number | null) {
+    selectedTypeFilter.value = key
+    // Two tabs may hold the same number of competencies, so the length watcher
+    // below cannot be relied on to send the reader back to page one.
+    competencyPage.value = 1
+}
+
+/**
+ * The type column only earns its place on the "All" tab: on any other the tab
+ * itself already names the type every row carries.
+ */
+const showTypeColumn = computed(() => selectedTypeFilter.value === null)
+
+// Rows carry the derived localized name + type name the sorter reads; the
 // original fields remain (spread) so the cell slots' helpers keep working.
 const competencyRows = computed(() => {
-    const q = competencySearch.value.trim().toLowerCase()
     const typeFilter = selectedTypeFilter.value
 
-    return props.competencies
+    return searchedCompetencies.value
         .filter((c) => {
-            // Competency-type filter (0 = untyped bucket).
-            if (typeFilter !== null) {
-                if (typeFilter === 0) {
-                    if (c.competency_type_id != null) return false
-                } else if (c.competency_type_id !== typeFilter) {
-                    return false
-                }
-            }
-
-            if (!q) return true
-            return (
-                masterName(c).toLowerCase().includes(q) ||
-                c.value.toLowerCase().includes(q) ||
-                (c.code ?? '').toLowerCase().includes(q)
-            )
+            if (typeFilter === null) return true
+            // 0 = the untyped bucket.
+            return typeFilter === 0
+                ? c.competency_type_id == null
+                : c.competency_type_id === typeFilter
         })
         .map((c) => ({
             ...c,
             name: masterName(c),
             type_name: competencyTypeName(c.competency_type_id),
+            type_code: competencyTypeCode(c.competency_type_id),
         }))
 })
 
@@ -266,7 +323,6 @@ const competencyRows = computed(() => {
 interface CompetencyLine {
     // Level cell: rendered only on the first line of its level group.
     levelName: string | null
-    levelSequence: number | null
     levelActive: boolean
     levelRowspan: number
     // 2 when the competency has no levels at all — the empty level cell then
@@ -274,6 +330,8 @@ interface CompetencyLine {
     levelColspan: number
     levelDescription: string | null
     behaviorName: string | null
+    // The behavior's position within its rung, rendered as the B1..Bn badge.
+    behaviorSequence: number | null
 }
 
 // Build one competency's lines: its rungs in sequence, each expanded to one
@@ -284,31 +342,37 @@ function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLi
     if (levels.length === 0) {
         return [{
             levelName: null,
-            levelSequence: null,
             levelActive: true,
             levelRowspan: 1,
             levelColspan: 2,
             levelDescription: null,
             behaviorName: null,
+            behaviorSequence: null,
         }]
     }
 
     const lines: CompetencyLine[] = []
 
     for (const level of levels) {
-        const behaviors = (level.key_behaviors ?? []).map((kb) => rowName(kb))
+        // The stored sequence is the badge's number; it is server-assigned
+        // 1..n within the rung, so a gap in it would be a bug rather than
+        // something to paper over — but fall back to the position anyway.
+        const behaviors = (level.key_behaviors ?? []).map((kb, n) => ({
+            name: rowName(kb),
+            sequence: kb.sequence || n + 1,
+        }))
         const span = Math.max(1, behaviors.length)
 
         for (let i = 0; i < span; i++) {
             lines.push({
                 // Only the group's first line paints the level cell.
                 levelName: i === 0 ? rowName(level) : null,
-                levelSequence: i === 0 ? level.sequence : null,
                 levelActive: level.is_active,
                 levelRowspan: i === 0 ? span : 0,
                 levelColspan: 1,
                 levelDescription: i === 0 ? rowDescription(level) || null : null,
-                behaviorName: behaviors[i] ?? null,
+                behaviorName: behaviors[i]?.name ?? null,
+                behaviorSequence: behaviors[i]?.sequence ?? null,
             })
         }
     }
@@ -318,12 +382,12 @@ function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLi
 
 // --- sorting (competency / type) ---
 
-const competencySort = ref<{ key: 'code' | 'name' | 'type_name'; dir: 'asc' | 'desc' }>({
+const competencySort = ref<{ key: 'name' | 'type_name'; dir: 'asc' | 'desc' }>({
     key: 'name',
     dir: 'asc',
 })
 
-function toggleCompetencySort(key: 'code' | 'name' | 'type_name') {
+function toggleCompetencySort(key: 'name' | 'type_name') {
     const s = competencySort.value
     competencySort.value =
         s.key === key
@@ -332,13 +396,39 @@ function toggleCompetencySort(key: 'code' | 'name' | 'type_name') {
     competencyPage.value = 1
 }
 
+/**
+ * On the "All" tab the type column merges the competencies that share a type
+ * into one cell, so the list reads as a type at a time. That only works if
+ * they are adjacent, so the type is the PRIMARY sort there and whatever
+ * column the reader clicked orders the competencies inside it. Untyped rows
+ * sort last, whichever way the type runs.
+ */
 const sortedCompetencies = computed(() => {
     const { key, dir } = competencySort.value
     const sign = dir === 'asc' ? 1 : -1
+    const groupByType = showTypeColumn.value
 
-    return [...competencyRows.value].sort(
-        (a, b) => String(a[key] ?? '').localeCompare(String(b[key] ?? '')) * sign,
-    )
+    const text = (v: unknown) => String(v ?? '')
+
+    return [...competencyRows.value].sort((a, b) => {
+        if (groupByType) {
+            // '￿' sorts after any real name, which parks the untyped
+            // bucket at the end of an ascending list.
+            const ta = a.type_name || '￿'
+            const tb = b.type_name || '￿'
+            // Clicking the type header is the only thing that reverses the
+            // groups; sorting by code or name reorders within them.
+            const byType = ta.localeCompare(tb) * (key === 'type_name' ? sign : 1)
+
+            if (byType !== 0) return byType
+        }
+
+        // The type is already settled by the time we get here, so it cannot
+        // also be the tiebreak — fall back to the name.
+        const within = key === 'type_name' && groupByType ? 'name' : key
+
+        return text(a[within]).localeCompare(text(b[within])) * sign
+    })
 })
 
 // --- paging (by competency, so a block is never split across pages) ---
@@ -371,19 +461,42 @@ const competencyBlocks = computed(() => {
 
     const start = (competencyPage.value - 1) * competencyPerPage.value
 
-    return sortedCompetencies.value
+    const blocks = sortedCompetencies.value
         .slice(start, start + competencyPerPage.value)
-        .map((row, i) => {
+        .map((row) => {
             const lines = linesFor(row)
 
             return {
                 ...row,
                 lines,
                 rowspan: lines.length,
-                // Running position across pages, matching ClientTable's "#".
-                index: start + i + 1,
+                // Filled in below: how many rendered lines this block's type
+                // cell spans. 0 on every block but the first of its group,
+                // which is what merges the column.
+                typeRowspan: 0,
             }
         })
+
+    /**
+     * Merge the type column over each run of competencies sharing a type.
+     * The run is taken from the PAGE, not the whole list, so a group split
+     * across pages simply merges as far as each page goes.
+     */
+    for (let i = 0; i < blocks.length; ) {
+        const type = blocks[i].competency_type_id
+        let span = 0
+        let j = i
+
+        while (j < blocks.length && blocks[j].competency_type_id === type) {
+            span += blocks[j].rowspan
+            j++
+        }
+
+        blocks[i].typeRowspan = span
+        i = j
+    }
+
+    return blocks
 })
 
 /**
@@ -451,45 +564,63 @@ function changeCompetencyPerPage(size: number) {
                 </div>
 
                 <div class="flex flex-wrap items-center gap-2">
-                    <!-- Competency-type filter (replaces the old filter chips) -->
-                <select
-                    v-model="typeFilterValue"
-                    class="rounded-md border border-border bg-white px-3 py-2 text-sm text-slate-600 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                    <option value="">{{ t.idp.settings.allTypes }}</option>
-                    <option
-                        v-for="ct in competencyTypes"
-                        :key="ct.id"
-                        :value="String(ct.id)"
-                    >
-                        {{ masterName(ct) }}
-                    </option>
-                    <option v-if="untypedCompetencyCount" value="0">
-                        {{ t.idp.settings.untyped }}
-                    </option>
-                </select>
+                    <div class="relative">
+                        <i
+                            class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
+                        />
+                        <input
+                            v-model="competencySearch"
+                            type="search"
+                            :placeholder="t.idp.settings.searchCompetency"
+                            class="w-56 rounded-md border border-border bg-white py-2 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                    </div>
 
-                <div class="relative">
-                    <i
-                        class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400"
-                    />
-                    <input
-                        v-model="competencySearch"
-                        type="search"
-                        :placeholder="t.idp.settings.searchCompetency"
-                        class="w-56 rounded-md border border-border bg-white py-2 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    <Link
+                        :href="route('master_data.competency.create')"
+                        class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
                     >
+                        <i class="fa-solid fa-plus text-xs" />
+                        {{ t.idp.settings.competency }}
+                    </Link>
                 </div>
-
-                <Link
-                    :href="route('master_data.competency.create')"
-                    class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
-                >
-                    <i class="fa-solid fa-plus text-xs" />
-                    {{ t.idp.settings.competency }}
-                </Link>
             </div>
-        </div>
+
+            <!-- One tab per competency type. The type is what a reader
+                 comes to this screen with in mind, so it splits the list
+                 rather than sitting in a dropdown; the count on each tab is
+                 how many rows opening it shows, search included. -->
+            <div
+                class="flex gap-2 overflow-x-auto border-b border-border/60 bg-slate-50/40 px-5 py-2.5"
+                role="tablist"
+            >
+                <button
+                    v-for="tab in typeTabs"
+                    :key="tab.key ?? 'all'"
+                    type="button"
+                    role="tab"
+                    :aria-selected="selectedTypeFilter === tab.key"
+                    class="inline-flex shrink-0 items-center gap-2 rounded-lg border px-3.5 py-1.5 text-sm font-medium transition"
+                    :class="
+                        selectedTypeFilter === tab.key
+                            ? 'border-primary bg-primary/5 text-primary'
+                            : 'border-transparent bg-white text-slate-600 hover:bg-slate-50'
+                    "
+                    @click="selectType(tab.key)"
+                >
+                    {{ tab.label }}
+                    <span
+                        class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
+                        :class="
+                            selectedTypeFilter === tab.key
+                                ? 'bg-primary/15'
+                                : 'bg-slate-100 text-slate-500'
+                        "
+                    >
+                        {{ tab.count }}
+                    </span>
+                </button>
+            </div>
 
             <!-- Competency table — grouped rows: one competency spans a
                  block, split by proficiency level and then key behavior. -->
@@ -499,25 +630,29 @@ function changeCompetencyPerPage(size: number) {
                         <tr
                             class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400"
                         >
-                            <th class="w-14 px-4 py-2.5 text-center font-semibold">
-                                #
-                            </th>
+                            <!-- The type leads: it is what the list is
+                                 grouped by, so it reads as the section
+                                 label down the left edge. -->
                             <th
-                                class="w-28 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
-                                @click="toggleCompetencySort('code')"
+                                v-if="showTypeColumn"
+                                class="w-52 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
+                                @click="toggleCompetencySort('type_name')"
                             >
                                 <span class="inline-flex items-center gap-1">
-                                    {{ t.idp.settings.code }}
+                                    {{ t.idp.settings.competencyType }}
                                     <i
                                         class="fa-solid text-[10px]"
-                                        :class="competencySort.key === 'code'
+                                        :class="competencySort.key === 'type_name'
                                             ? (competencySort.dir === 'asc' ? 'fa-sort-up text-primary' : 'fa-sort-down text-primary')
                                             : 'fa-sort text-slate-300'"
                                     />
                                 </span>
                             </th>
+                            <!-- The competency's code rides in this cell, in
+                                 front of its name, rather than in a column of
+                                 its own. -->
                             <th
-                                class="w-64 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
+                                class="w-72 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
                                 @click="toggleCompetencySort('name')"
                             >
                                 <span class="inline-flex items-center gap-1">
@@ -533,29 +668,16 @@ function changeCompetencyPerPage(size: number) {
                             <th class="px-4 py-2.5 font-semibold">
                                 {{ t.idp.settings.description }}
                             </th>
-                            <th
-                                class="w-48 cursor-pointer select-none px-4 py-2.5 font-semibold hover:text-slate-600"
-                                @click="toggleCompetencySort('type_name')"
-                            >
-                                <span class="inline-flex items-center gap-1">
-                                    {{ t.idp.settings.competencyType }}
-                                    <i
-                                        class="fa-solid text-[10px]"
-                                        :class="competencySort.key === 'type_name'
-                                            ? (competencySort.dir === 'asc' ? 'fa-sort-up text-primary' : 'fa-sort-down text-primary')
-                                            : 'fa-sort text-slate-300'"
-                                    />
-                                </span>
-                            </th>
-                            <th class="w-52 px-4 py-2.5 font-semibold">
-                                {{ t.idp.settings.status }}
-                            </th>
                             <!-- The level column carries its key behaviors,
                                  so its header spans both sub-columns. -->
                             <th class="w-64 px-4 py-2.5 font-semibold" colspan="2">
                                 {{ t.idp.settings.proficiencyLevel }}
                             </th>
-                            <th class="w-28 px-4 py-2.5 text-right font-semibold">
+                            <!-- Status sits in this column too: the badge is
+                                 itself the on/off control, so it belongs with
+                                 edit and delete rather than in a column of
+                                 its own. -->
+                            <th class="w-44 px-4 py-2.5 text-right font-semibold">
                                 {{ t.idp.settings.action }}
                             </th>
                         </tr>
@@ -572,15 +694,36 @@ function changeCompetencyPerPage(size: number) {
                                 class="transition hover:bg-slate-50/70"
                                 :class="i === block.lines.length - 1 ? 'border-b border-border/60' : ''"
                             >
-                                <!-- Competency-wide cells: painted once, spanning the block. -->
+                                <!-- Painted once per RUN of competencies
+                                     sharing a type, so the column merges. -->
                                 <td
-                                    v-if="i === 0"
-                                    :rowspan="block.rowspan"
-                                    class="border-r border-border/40 px-4 py-3 text-center align-top text-slate-400"
+                                    v-if="showTypeColumn && i === 0 && block.typeRowspan > 0"
+                                    :rowspan="block.typeRowspan"
+                                    class="border-r border-border/40 bg-slate-50/40 px-4 py-3 align-top"
                                 >
-                                    {{ block.index }}
+                                    <!-- Code on its own line above the name.
+                                         The chip is inline and the name a
+                                         block, which is what breaks the line,
+                                         so a row with no code leaves no gap. -->
+                                    <template v-if="block.type_name">
+                                        <span
+                                            v-if="block.type_code"
+                                            class="mb-1 inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-indigo-700"
+                                        >
+                                            {{ block.type_code }}
+                                        </span>
+                                        <div class="font-semibold text-slate-800">
+                                            {{ block.type_name }}
+                                        </div>
+                                    </template>
+                                    <span v-else class="text-xs italic text-slate-300">
+                                        {{ t.idp.settings.untyped }}
+                                    </span>
                                 </td>
 
+                                <!-- Competency-wide cells: painted once,
+                                     spanning the block. The competency's own
+                                     code sits above its name. -->
                                 <td
                                     v-if="i === 0"
                                     :rowspan="block.rowspan"
@@ -588,21 +731,13 @@ function changeCompetencyPerPage(size: number) {
                                 >
                                     <span
                                         v-if="block.code"
-                                        class="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
+                                        class="mb-1 inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
                                     >
                                         {{ block.code }}
                                     </span>
-                                    <span v-else class="text-xs italic text-slate-300">—</span>
-                                </td>
-
-                                <td
-                                    v-if="i === 0"
-                                    :rowspan="block.rowspan"
-                                    class="border-r border-border/40 px-4 py-3 align-top"
-                                >
-                                    <span class="font-semibold text-slate-800">
+                                    <div class="font-semibold text-slate-800">
                                         {{ block.name }}
-                                    </span>
+                                    </div>
                                 </td>
 
                                 <td
@@ -621,36 +756,6 @@ function changeCompetencyPerPage(size: number) {
                                     </span>
                                 </td>
 
-                                <td
-                                    v-if="i === 0"
-                                    :rowspan="block.rowspan"
-                                    class="border-r border-border/40 px-4 py-3 align-top"
-                                >
-                                    <span
-                                        v-if="block.type_name"
-                                        class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600"
-                                    >
-                                        <i class="fa-solid fa-tag text-[9px]" />
-                                        {{ block.type_name }}
-                                    </span>
-                                    <span v-else class="text-xs italic text-slate-300">
-                                        {{ t.idp.settings.untyped }}
-                                    </span>
-                                </td>
-
-                                <td
-                                    v-if="i === 0"
-                                    :rowspan="block.rowspan"
-                                    class="border-r border-border/40 px-4 py-3 align-top"
-                                >
-                                    <ActiveStateCell
-                                        :active="block.is_active"
-                                        :busy="togglingId === block.id"
-                                        @toggle="toggleActive(block as unknown as Competency)"
-                                        @history="openHistory(block as unknown as Competency)"
-                                    />
-                                </td>
-
                                 <!-- Level cell: painted once per level group. -->
                                 <td
                                     v-if="line.levelRowspan > 0"
@@ -663,7 +768,7 @@ function changeCompetencyPerPage(size: number) {
                                 >
                                     <span
                                         v-if="line.levelName"
-                                        class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+                                        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
                                         :class="
                                             line.levelActive
                                                 ? 'bg-emerald-50 text-emerald-600'
@@ -675,11 +780,6 @@ function changeCompetencyPerPage(size: number) {
                                                 : t.idp.settings.inactiveBadge
                                         "
                                     >
-                                        <span
-                                            class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white/70 text-[9px] font-bold"
-                                        >
-                                            {{ line.levelSequence }}
-                                        </span>
                                         {{ line.levelName }}
                                     </span>
                                     <span v-else class="text-xs italic text-slate-300">
@@ -703,14 +803,17 @@ function changeCompetencyPerPage(size: number) {
                                         ? 'border-b border-border/40'
                                         : ''"
                                 >
-                                    <span
-                                        v-if="line.behaviorName"
-                                        class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600"
-                                        :title="t.idp.settings.keyBehavior"
-                                    >
-                                        <i class="fa-solid fa-list-check text-[9px]" />
-                                        {{ line.behaviorName }}
-                                    </span>
+                                    <template v-if="line.behaviorName">
+                                        <span
+                                            class="mr-1.5 inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-700"
+                                            :title="t.idp.settings.keyBehavior"
+                                        >
+                                            B{{ line.behaviorSequence }}
+                                        </span>
+                                        <span class="text-slate-600">
+                                            {{ line.behaviorName }}
+                                        </span>
+                                    </template>
                                     <span v-else class="text-xs italic text-slate-300">
                                         —
                                     </span>
@@ -721,27 +824,36 @@ function changeCompetencyPerPage(size: number) {
                                     :rowspan="block.rowspan"
                                     class="px-4 py-3 align-top"
                                 >
-                                    <div class="flex items-center justify-end gap-1">
-                                        <Link :href="editUrl(block.id)">
-                                            <IconButton
-                                                icon="fa-solid fa-pen"
-                                                variant="edit"
-                                                :title="t.idp.settings.editCompetency"
-                                            />
-                                        </Link>
-                                        <IconButton
-                                            icon="fa-solid fa-trash"
-                                            variant="delete"
-                                            :title="t.idp.settings.deleteCompetency"
-                                            @click="deleteMaster(block.id, block.name)"
+                                    <div class="flex flex-col items-end gap-2">
+                                        <ActiveStateCell
+                                            :active="block.is_active"
+                                            :busy="togglingId === block.id"
+                                            @toggle="toggleActive(block as unknown as Competency)"
+                                            @history="openHistory(block as unknown as Competency)"
                                         />
+
+                                        <div class="flex items-center gap-1">
+                                            <Link :href="editUrl(block.id)">
+                                                <IconButton
+                                                    icon="fa-solid fa-pen"
+                                                    variant="edit"
+                                                    :title="t.idp.settings.editCompetency"
+                                                />
+                                            </Link>
+                                            <IconButton
+                                                icon="fa-solid fa-trash"
+                                                variant="delete"
+                                                :title="t.idp.settings.deleteCompetency"
+                                                @click="deleteMaster(block.id, block.name)"
+                                            />
+                                        </div>
                                     </div>
                                 </td>
                             </tr>
                         </template>
 
                         <tr v-if="competencyBlocks.length === 0">
-                            <td colspan="9" class="px-4 py-8 text-center text-slate-400">
+                            <td :colspan="showTypeColumn ? 6 : 5" class="px-4 py-8 text-center text-slate-400">
                                 {{
                                     competencySearch || selectedTypeFilter !== null
                                         ? t.idp.settings.noMatch
