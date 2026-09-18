@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exports\IdpExport;
+use App\Exports\Templates\IdpPlanTemplateExport;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Requests\StoreIndividualDevelopmentPlanRequest;
 use App\Http\Requests\UpdateIndividualDevelopmentPlanRequest;
@@ -11,19 +12,24 @@ use App\Imports\SingleEmployeeDevelopmentPlanImport;
 use App\Jobs\GenerateIdpZip;
 use App\Models\BusinessUnit;
 use App\Models\Competency;
+use App\Models\DevelopmentModel;
+use App\Models\IdpApproval;
 use App\Models\ImportLog;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\JobStatus;
 use App\Models\ReviewTool;
 use App\Services\EmployeeScopeService;
+use App\Services\Idp\IdpStageService;
 use App\Services\IdpService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 use Maatwebsite\Excel\Facades\Excel;
@@ -43,6 +49,7 @@ class IdpController extends Controller
     public function __construct(
         private readonly EmployeeScopeService $scope,
         private readonly IdpService $idp,
+        private readonly IdpStageService $stage,
     ) {}
 
     /**
@@ -59,18 +66,84 @@ class IdpController extends Controller
 
         $base = $this->scope->accessibleQuery($user, ...self::IDP_VIEW);
 
+        // Which cycle the list is reporting on. The picker has no per-employee
+        // count to show, so it asks for none.
+        $activePackageId = $this->stage->currentPackage()?->id;
+        $packages = $this->stage->packageOptions($activePackageId);
+        $selectedPackageId = $this->stage->selectedPackageId(
+            $packages,
+            $request->integer('package') ?: null,
+            $activePackageId,
+        );
+
         $employees = $this->filteredQuery(clone $base, $filters)
             ->orderBy($sort['key'], $sort['dir'])
             ->paginate((int) $request->integer('per_page', 10))
             ->withQueryString()
             ->through(fn ($employee) => (new EmployeeResource($employee))->resolve());
 
+        // Where each employee on THIS page stands in the chosen cycle, resolved
+        // in two queries for the whole page rather than one pair per row.
+        $employees->setCollection(
+            $this->withCycleStatus($employees->getCollection(), $selectedPackageId),
+        );
+
         return Inertia::render('Idp/Index', [
             'employees' => $employees,
             'filters' => $filters,
             'sort' => $sort,
+            'packages' => $packages->all(),
+            'selectedPackageId' => $selectedPackageId,
+            'viewingActive' => $selectedPackageId !== null && $selectedPackageId === $activePackageId,
             'filterOptions' => $this->filterOptions(clone $base),
         ]);
+    }
+
+    /**
+     * Attach each row's standing in one cycle: how many programs it holds and
+     * where its planning approval is.
+     *
+     * The list is paginated, so this runs over the visible page only — two
+     * queries in total, not two per employee.
+     *
+     * @param  Collection<int, array<string, mixed>>  $rows
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function withCycleStatus(Collection $rows, ?int $packageId): Collection
+    {
+        $ids = $rows->pluck('employee_id')->filter()->values();
+
+        if ($packageId === null || $ids->isEmpty()) {
+            return $rows->map(fn (array $row) => $row + ['cycle' => null]);
+        }
+
+        $modelIds = $this->stage->modelIdsFor($packageId);
+
+        $plans = IndividualDevelopmentPlan::whereIn('employee_id', $ids)
+            ->whereIn('development_model_id', $modelIds ?: [0])
+            ->get(['id', 'employee_id', 'planning_approved_at'])
+            ->groupBy('employee_id');
+
+        // Ascending, so the last one written per employee wins — the latest
+        // revision, which is the current approval for that cycle.
+        $approvals = IdpApproval::planning()
+            ->whereIn('employee_id', $ids)
+            ->where('development_model_package_id', $packageId)
+            ->orderBy('id')
+            ->get()
+            ->keyBy('employee_id');
+
+        return $rows->map(function (array $row) use ($plans, $approvals) {
+            $employeePlans = $plans->get($row['employee_id']) ?? collect();
+            $approval = $approvals->get($row['employee_id']);
+
+            return $row + ['cycle' => [
+                'plans' => $employeePlans->count(),
+                'status' => $this->stage->planningStatus($approval, $employeePlans),
+                'current_level' => $approval?->status === 'pending' ? $approval->current_level : null,
+                'total_levels' => $approval?->totalLevels(),
+            ]];
+        });
     }
 
     /**
@@ -137,8 +210,15 @@ class IdpController extends Controller
 
         return Inertia::render('Idp/Manage', array_merge(
             ['employee' => new EmployeeResource($employee)],
-            // The manage screen may edit + submit the IDP for approval.
-            $this->idp->manageData($employeeId, $user, canManage: true),
+            // The manage screen may edit + submit the IDP for approval — but
+            // only while it is showing the ACTIVE cycle; the service decides
+            // that from the package asked for.
+            $this->idp->manageData(
+                $employeeId,
+                $user,
+                canManage: true,
+                packageId: $request->integer('package') ?: null,
+            ),
         ));
     }
 
@@ -152,11 +232,15 @@ class IdpController extends Controller
 
         $employee = $this->scope->accessibleQuery($user, ...self::IDP_DOWNLOAD)
             ->where('employee_id', $employeeId)->firstOrFail();
-        $data = $this->idp->manageData($employeeId);
+        // The PDF covers the cycle the screen is showing, not always the active
+        // one — the download button carries the package it was pressed on.
+        $data = $this->idp->manageData($employeeId, packageId: $request->integer('package') ?: null);
 
         $pdf = Pdf::loadView('pdf.idp', [
             'employee' => $employee,
             'developmentModels' => $data['developmentModels'],
+            // The document says which cycle it covers and where its plan stands.
+            'planning' => $data['planning'],
         ]);
 
         return $pdf->download('idp_'.Str::slug($employee->fullname).'.pdf');
@@ -169,7 +253,11 @@ class IdpController extends Controller
     {
         abort_unless($this->scope->canAccess($request->user(), $employeeId, ...self::IDP_DOWNLOAD), 403);
 
-        return Excel::download(new IdpExport($employeeId), 'idp_'.$employeeId.'.xlsx');
+        // Same rule as the PDF: the file covers the cycle the screen was on.
+        return Excel::download(
+            new IdpExport($employeeId, $request->integer('package') ?: null),
+            'idp_'.$employeeId.'.xlsx',
+        );
     }
 
     /**
@@ -179,13 +267,16 @@ class IdpController extends Controller
     {
         abort_unless($this->scope->canView($request->user(), $employeeId), 403);
 
-        $path = public_path('templates/template_idp_single.xlsx');
-        abort_unless(file_exists($path), 404, 'Template file not found.');
-
         $employee = $this->scope->query($request->user())->where('employee_id', $employeeId)->first();
         $safeName = $employee ? Str::slug($employee->fullname ?? $employeeId, '_') : $employeeId;
 
-        return response()->download($path, "IDP_Template_{$employeeId}_{$safeName}.xlsx");
+        // Generated, not a file on disk: the columns then always match what the
+        // importer reads, and the reference tabs always show the master data as
+        // it stands rather than as it stood when someone last exported it.
+        return Excel::download(
+            app(IdpPlanTemplateExport::class),
+            "IDP_Template_{$employeeId}_{$safeName}.xlsx",
+        );
     }
 
     /**
@@ -234,9 +325,28 @@ class IdpController extends Controller
             'idp_file' => ['required', 'file', 'mimes:xlsx,xls', 'max:10240'],
         ]);
 
+        // A plan can only be written into the ACTIVE cycle, so that is the only
+        // cycle an upload may target — whichever one the screen was showing.
+        $package = $this->stage->currentPackage();
+
+        if (! $package) {
+            return back()->with('error', 'There is no active development model package to import into.');
+        }
+
+        // An import adds plans, so it is held to the same freeze the add form is:
+        // the set must not be with an approver.
+        try {
+            $this->stage->assertPlansEditable($employeeId, $package->id);
+        } catch (ValidationException $e) {
+            return back()->with('error', $e->validator->errors()->first());
+        }
+
         $path = $request->file('idp_file')->store('imports', 'local');
 
-        $import = new SingleEmployeeDevelopmentPlanImport($employeeId);
+        $import = new SingleEmployeeDevelopmentPlanImport(
+            $employeeId,
+            $this->stage->modelIdsFor($package->id),
+        );
 
         try {
             Excel::import($import, Storage::disk('local')->path($path));
@@ -256,6 +366,11 @@ class IdpController extends Controller
         $imported = $import->imported();
         $errors = $import->errors();
         $failed = count($errors);
+
+        // Imported rows change the set the same way the add form does.
+        if ($imported > 0) {
+            $this->stage->withdrawPlanningApproval($employeeId, $package->id);
+        }
 
         $summary = "{$imported} plan(s) imported".($failed ? ", {$failed} row(s) skipped." : '.');
         $detail = $failed ? ' '.implode(' ', array_slice($errors, 0, 15)) : '';
@@ -300,7 +415,9 @@ class IdpController extends Controller
             'progress' => 0,
         ]);
 
-        GenerateIdpZip::dispatch($employeeIds, $status->id);
+        // The zip covers the cycle the list was showing, not always the active
+        // one — same rule as the per-employee PDF button.
+        GenerateIdpZip::dispatch($employeeIds, $status->id, $request->integer('package') ?: null);
 
         return response()->json(['job_id' => $status->id]);
     }
@@ -334,6 +451,12 @@ class IdpController extends Controller
         return Storage::disk('local')->download($path, 'idp_bulk.zip');
     }
 
+    /**
+     * Add a plan. Refused while the package's planning approval is in flight —
+     * approvers must not have the set change under them mid-review. A plan added
+     * to an already-approved set is simply unapproved, which puts the set into
+     * `revision` until it is submitted again.
+     */
     public function store(StoreIndividualDevelopmentPlanRequest $request): RedirectResponse
     {
         $user = $request->user();
@@ -341,26 +464,88 @@ class IdpController extends Controller
 
         abort_unless($this->scope->canView($user, $employeeId), 403);
 
-        IndividualDevelopmentPlan::create($request->validated());
+        $data = $request->validated();
 
-        return back()->with('success', 'Development plan added successfully.');
+        $packageId = DevelopmentModel::withTrashed()
+            ->whereKey($data['development_model_id'])
+            ->value('development_model_package_id');
+
+        try {
+            $this->stage->assertPlansEditable($employeeId, $packageId);
+        } catch (ValidationException $e) {
+            return back()->with('error', $e->validator->errors()->first());
+        }
+
+        IndividualDevelopmentPlan::create($data);
+
+        // A new program changes the set that was signed off, so the whole plan
+        // returns to "not approved" and has to be submitted again.
+        $withdrawn = $this->stage->withdrawPlanningApproval($employeeId, $packageId);
+
+        return back()->with('success', $withdrawn > 0
+            ? 'Development plan added. The plan needs approval again.'
+            : 'Development plan added successfully.');
     }
 
+    /**
+     * Edit a plan's PLANNING fields. Changing any of them withdraws that row's
+     * planning sign-off, so the set has to be approved again before the row's
+     * result can be filed.
+     */
     public function update(UpdateIndividualDevelopmentPlanRequest $request, IndividualDevelopmentPlan $idp): RedirectResponse
     {
         abort_unless($this->scope->canView($request->user(), $idp->employee_id), 403);
 
+        // Read before the save: a change of development model can move the row
+        // to another package, and BOTH sets then stop describing what was
+        // approved.
+        $packageBefore = $this->stage->packageIdFor($idp);
+
+        try {
+            $this->stage->assertPlansEditable($idp->employee_id, $packageBefore);
+            $this->stage->assertResultNotSettled($idp);
+        } catch (ValidationException $e) {
+            return back()->with('error', $e->validator->errors()->first());
+        }
+
         $idp->update($request->validated());
 
-        return back()->with('success', 'Development plan updated successfully.');
+        if (! $idp->wasChanged(IndividualDevelopmentPlan::PLANNING_FIELDS)) {
+            return back()->with('success', 'Development plan updated successfully.');
+        }
+
+        $withdrawn = 0;
+
+        foreach (array_unique(array_filter([$packageBefore, $this->stage->packageIdFor($idp)])) as $packageId) {
+            $withdrawn += $this->stage->withdrawPlanningApproval($idp->employee_id, $packageId);
+        }
+
+        return back()->with('success', $withdrawn > 0
+            ? 'Development plan updated. The plan needs approval again.'
+            : 'Development plan updated successfully.');
     }
 
     public function destroy(Request $request, IndividualDevelopmentPlan $idp): RedirectResponse
     {
         abort_unless($this->scope->canView($request->user(), $idp->employee_id), 403);
 
+        $packageId = $this->stage->packageIdFor($idp);
+
+        try {
+            $this->stage->assertPlansEditable($idp->employee_id, $packageId);
+            $this->stage->assertResultNotSettled($idp);
+        } catch (ValidationException $e) {
+            return back()->with('error', $e->validator->errors()->first());
+        }
+
         $idp->delete();
 
-        return back()->with('success', 'Development plan deleted successfully.');
+        // Removing a program changes the set that was signed off, exactly as
+        // adding or editing one does.
+        $withdrawn = $this->stage->withdrawPlanningApproval($idp->employee_id, $packageId);
+
+        return back()->with('success', $withdrawn > 0
+            ? 'Development plan deleted. The plan needs approval again.'
+            : 'Development plan deleted successfully.');
     }
 }

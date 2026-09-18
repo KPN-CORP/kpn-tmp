@@ -7,56 +7,83 @@ use App\Models\CompetencyType;
 use App\Models\DevelopmentModel;
 use App\Models\DevelopmentModelPackage;
 use App\Models\DevelopmentProgram;
-use App\Models\Employee;
 use App\Models\IdpApproval;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\ReviewTool;
 use App\Models\User;
+use App\Services\Idp\ApprovalPresenter;
+use App\Services\Idp\IdpStageService;
 use Illuminate\Support\Collection;
 
 /**
  * Assembles the data the IDP "manage" screen needs: the development models, an
  * employee's plans grouped by model, the master-driven dropdown options, and
- * the competency→programs map that drives the soft-competency cascade.
+ * the competency→programs map that drives the competency cascade.
  *
- * Each plan also carries its approval state (status, staged L1→L2 chain, and
- * whether the viewer may submit or act) so the panel can render the workflow.
+ * On top of that it reports where the plan set stands in the two-stage
+ * workflow — the package-wide PLANNING approval, and each program's own RESULT
+ * approval — together with what the viewer may do at each: edit a plan, submit
+ * the planning, file a result, or decide on one.
  */
 class IdpService
 {
-    public function __construct(private readonly ApprovalChainService $chain) {}
+    public function __construct(
+        private readonly ApprovalChainService $chain,
+        private readonly IdpStageService $stage,
+    ) {}
 
     /**
      * @param  User|null  $viewer  the signed-in user (drives can_act)
      * @param  bool  $canManage  whether the viewer may edit / submit this IDP
+     * @param  int|null  $packageId  the development-model package to show; the
+     *                               active one when omitted or unknown
      */
-    public function manageData(string $employeeId, ?User $viewer = null, bool $canManage = false): array
-    {
-        $plans = IndividualDevelopmentPlan::where('employee_id', $employeeId)
+    public function manageData(
+        string $employeeId,
+        ?User $viewer = null,
+        bool $canManage = false,
+        ?int $packageId = null,
+    ): array {
+        $allPlans = IndividualDevelopmentPlan::where('employee_id', $employeeId)
             ->orderByDesc('id')
-            ->get()
-            ->groupBy('development_model_id');
+            ->get();
 
-        // New plans may only be filed under the active package's models. Older
-        // plans still point at models from a previous package, so include those
-        // (read-only) too and flag which models accept new plans.
-        $activePackageId = DevelopmentModelPackage::active()?->id;
+        $plans = $allPlans->groupBy('development_model_id');
 
-        $activeModels = DevelopmentModel::when(
-            $activePackageId,
-            fn ($q) => $q->where('development_model_package_id', $activePackageId),
+        // The screen shows ONE cycle at a time. Which one is the viewer's
+        // choice; the active package is the default, since that is the only one
+        // a plan can still be written in.
+        $activePackage = DevelopmentModelPackage::active();
+        $activePackageId = $activePackage?->id;
+
+        $packages = $this->stage->packageOptions($activePackageId, $this->planCounts($allPlans));
+
+        $selectedPackageId = $this->stage->selectedPackageId($packages, $packageId, $activePackageId);
+
+        $selectedPackage = $selectedPackageId === $activePackageId
+            ? $activePackage
+            : DevelopmentModelPackage::find($selectedPackageId);
+
+        // A closed cycle is read-only: its plans stay visible, but nothing about
+        // them can be added, changed, submitted or reported on any more.
+        $viewingActive = $selectedPackageId !== null && $selectedPackageId === $activePackageId;
+        $canManage = $canManage && $viewingActive;
+
+        $models = DevelopmentModel::when(
+            $selectedPackageId,
+            fn ($q) => $q->where('development_model_package_id', $selectedPackageId),
             fn ($q) => $q->whereRaw('1 = 0'),
         )->orderByDesc('percentage')->orderBy('name')->get();
 
-        $activeIds = $activeModels->pluck('id')->all();
+        $activeIds = $viewingActive ? $models->pluck('id')->all() : [];
 
-        $historicalModels = DevelopmentModel::whereIn('id', $plans->keys()->filter())
-            ->whereNotIn('id', $activeIds ?: [0])
-            ->orderByDesc('percentage')->orderBy('name')->get();
+        // Only the selected cycle's plans are rendered, so a row from another
+        // package never leaks onto the screen.
+        $allPlans = $allPlans->filter(
+            fn ($p) => $models->contains('id', $p->development_model_id),
+        )->values();
 
-        $models = $activeModels->concat($historicalModels);
-
-        $approvalFor = $this->approvalResolver($employeeId, $viewer, $canManage);
+        $workflow = $this->workflow($employeeId, $selectedPackage, $models, $allPlans, $viewer, $canManage);
 
         $programs = DevelopmentProgram::with('competencyType:id,name_en')
             ->orderBy('name_en')
@@ -124,9 +151,10 @@ class IdpService
                 'description_id' => $m->description_id,
                 // Only active-package models accept new plans; historical ones
                 // are shown read-only so past plans stay visible.
-                'can_add' => in_array($m->id, $activeIds, true),
+                'can_add' => in_array($m->id, $activeIds, true) && $workflow['planning']['plans_editable'],
+                'is_active_package' => in_array($m->id, $activeIds, true),
                 'plans' => ($plans->get($m->id) ?? collect())
-                    ->map(fn ($p) => array_merge($p->toArray(), ['approval' => $approvalFor($p)]))
+                    ->map(fn ($p) => array_merge($p->toArray(), ['stage' => $workflow['planFlags'][$p->id]]))
                     ->values(),
             ]),
             'options' => [
@@ -144,105 +172,184 @@ class IdpService
                 'reviewTools' => $reviewTools->map($option)->values(),
             ],
             'competencyMap' => $competencyMap,
+            'planning' => $workflow['planning'],
+            'progress' => $workflow['progress'],
+            // The cycle picker: every package, newest first, with this
+            // employee's plan count so an empty one is obvious before it is
+            // opened. The screen shows one at a time.
+            'packages' => $packages->all(),
+            'selectedPackageId' => $selectedPackageId,
+            // False for a closed cycle — the whole screen is then read-only.
+            'viewingActive' => $viewingActive,
         ];
     }
 
     /**
-     * Build a closure that maps an IDP item to its approval payload:
+     * How many of this employee's plans sit in each package, for the cycle
+     * picker: an empty cycle is obvious before it is opened.
      *
-     *   - status:        draft | pending | approved | rejected
-     *   - current_level: which layer's turn it is (pending only)
-     *   - total_levels:  number of approval layers
-     *   - steps:         the L1→L2→… chain, each with approver + decision + note
-     *   - can_submit:    the viewer may (re)submit this item
-     *   - can_act:       the viewer is the approver whose turn it currently is
+     * Soft-deleted models are not rendered, so their plans are not counted
+     * either — the number has to match what opening the package shows.
      *
-     * For not-yet-submitted items the chain is previewed from the employee's
-     * effective approval layers so the UI can show where it will go.
+     * @param  Collection<int, IndividualDevelopmentPlan>  $allPlans
+     * @return array<int, int>
      */
-    private function approvalResolver(string $employeeId, ?User $viewer, bool $canManage): \Closure
+    private function planCounts(Collection $allPlans): array
     {
-        $approvals = IdpApproval::where('employee_id', $employeeId)
+        $packageOfModel = DevelopmentModel::pluck('development_model_package_id', 'id');
+
+        return $allPlans
+            ->groupBy(fn ($plan) => $packageOfModel[$plan->development_model_id] ?? 0)
+            ->map->count()
+            ->all();
+    }
+
+    /**
+     * The two-stage state of an employee's plan set: the package-wide planning
+     * approval, the per-row flags the table renders, and the headline counts the
+     * stage tracker shows.
+     *
+     * @param  Collection<int, DevelopmentModel>  $models
+     * @param  Collection<int, IndividualDevelopmentPlan>  $allPlans
+     * @return array{planning: array<string, mixed>, planFlags: array<int, array<string, mixed>>, progress: array<string, int>}
+     */
+    private function workflow(
+        string $employeeId,
+        ?DevelopmentModelPackage $selectedPackage,
+        Collection $models,
+        Collection $allPlans,
+        ?User $viewer,
+        bool $canManage,
+    ): array {
+        $viewerEmpId = $viewer?->employee_id;
+        $presenter = new ApprovalPresenter;
+
+        // modelId => packageId, so each plan can be attributed to the planning
+        // approval that covers it. A plan under a previous package answers to
+        // that package's own approval, not the active one.
+        $packageOfModel = $models->pluck('development_model_package_id', 'id');
+
+        $packageIds = $packageOfModel->values()
+            ->merge([$selectedPackage?->id])
+            ->filter()
+            ->unique()
+            ->values();
+
+        // The current (latest) planning approval for every package in play.
+        $planningApprovals = IdpApproval::planning()
+            ->where('employee_id', $employeeId)
+            ->whereIn('development_model_package_id', $packageIds->all() ?: [0])
+            ->with('steps')
+            ->orderBy('id')
+            ->get()
+            // Ascending order means the last one written wins — the latest
+            // revision, which is the current approval for that package.
+            ->keyBy('development_model_package_id');
+
+        $resultApprovals = IdpApproval::result()
+            ->where('employee_id', $employeeId)
             ->with('steps')
             ->get()
             ->keyBy('individual_development_plan_id');
 
         $chainLayers = $this->chain->layersFor($employeeId);
 
-        // Resolve every referenced approver id to a name in one guarded query.
-        $ids = $approvals->flatMap(fn ($a) => $a->steps->pluck('approver_employee_id'))
-            ->merge($chainLayers)
-            ->filter()->unique()->values();
-        $names = $this->resolveNames($ids);
+        $presenter->prime(
+            $presenter->approverIds($planningApprovals->values()->merge($resultApprovals->values()))
+                ->merge($chainLayers),
+        );
 
-        $viewerEmpId = $viewer?->employee_id;
+        $chainPreview = $presenter->preview($chainLayers);
 
-        $mapStep = fn ($step) => [
-            'level' => $step->level,
-            'approver_id' => $step->approver_employee_id,
-            'approver_name' => $names[$step->approver_employee_id] ?? $step->approver_employee_id,
-            'status' => $step->status,
-            'note' => $step->note,
-            'acted_by_name' => $step->acted_by_name,
-            'acted_at' => $step->acted_at?->toDateTimeString(),
+        // --- Per-plan flags -------------------------------------------------
+        $planFlags = [];
+
+        foreach ($allPlans as $plan) {
+            $packageId = $packageOfModel[$plan->development_model_id] ?? null;
+            $planning = $packageId !== null ? $planningApprovals->get($packageId) : null;
+            $frozen = ! $this->stage->plansEditable($planning);
+
+            $result = $resultApprovals->get($plan->id);
+            $resultStatus = $result?->status;
+            $settled = in_array($resultStatus, ['pending', 'approved'], true);
+
+            $planFlags[$plan->id] = [
+                'planning_approved' => $plan->isPlanningApproved(),
+                'planning_approved_at' => $plan->planning_approved_at?->toDateTimeString(),
+                // The planning fields are editable while the set is not in
+                // flight and the result has not been settled on top of them.
+                'can_edit' => $canManage && ! $frozen && ! $settled,
+                'can_delete' => $canManage && ! $frozen && ! $settled,
+                'frozen_by_planning' => $frozen,
+                'result' => [
+                    'status' => $plan->isPlanningApproved() ? ($resultStatus ?? 'open') : 'locked',
+                    'filled' => $plan->isRealized(),
+                    'approval' => $result ? $presenter->approval($result, $viewerEmpId) : null,
+                    'chain_preview' => $result ? null : $chainPreview,
+                    // The result may be filed (or re-filed after a rejection)
+                    // once this row's planning is signed off.
+                    'can_submit' => $canManage
+                        && $plan->isPlanningApproved()
+                        && in_array($resultStatus, [null, 'rejected'], true),
+                    'can_act' => $result
+                        ? $presenter->approval($result, $viewerEmpId)['can_act']
+                        : false,
+                ],
+            ];
+        }
+
+        // --- The package-wide planning stage --------------------------------
+        $selectedId = $selectedPackage?->id;
+        $currentPlanning = $selectedId ? $planningApprovals->get($selectedId) : null;
+
+        $packagePlans = $selectedId
+            ? $allPlans->filter(fn ($p) => ($packageOfModel[$p->development_model_id] ?? null) === $selectedId)
+            : collect();
+
+        $status = $this->stage->planningStatus($currentPlanning, $packagePlans);
+        $awaiting = $packagePlans->reject->isPlanningApproved()->count();
+
+        $planning = [
+            'package' => $selectedPackage ? [
+                'id' => $selectedPackage->id,
+                'name' => $selectedPackage->name,
+                'start_date' => $selectedPackage->start_date?->toDateString(),
+                'end_date' => $selectedPackage->end_date?->toDateString(),
+            ] : null,
+            'status' => $status,
+            'approval' => $currentPlanning ? $presenter->approval($currentPlanning, $viewerEmpId) : null,
+            'chain_preview' => $chainPreview,
+            'history' => $this->stage
+                ->planningHistory($employeeId, $selectedId, $currentPlanning?->id)
+                ->map(fn (IdpApproval $a) => $presenter->approval($a, $viewerEmpId))
+                ->values()
+                ->all(),
+            // The set may be submitted when it holds plans, is not already in
+            // flight, and has something new to approve.
+            'can_submit' => $canManage
+                && $selectedId !== null
+                && $packagePlans->isNotEmpty()
+                && $status !== IdpStageService::PENDING
+                && $awaiting > 0,
+            'plans_editable' => $this->stage->plansEditable($currentPlanning),
+            'total_plans' => $packagePlans->count(),
+            'awaiting_plans' => $awaiting,
+            'has_approvers' => ! empty($chainLayers),
         ];
 
-        // The would-be chain shown for draft / not-yet-submitted items.
-        $chainPreview = collect($chainLayers)->values()->map(fn ($id, $i) => [
-            'level' => $i + 1,
-            'approver_id' => $id,
-            'approver_name' => $names[$id] ?? $id,
-            'status' => 'pending',
-            'note' => null,
-            'acted_by_name' => null,
-            'acted_at' => null,
-        ])->all();
+        // --- Headline counts for the stage tracker --------------------------
+        $resultStates = $packagePlans->map(fn ($p) => $planFlags[$p->id]['result']['status']);
 
-        return function ($plan) use ($approvals, $mapStep, $chainPreview, $chainLayers, $viewerEmpId, $canManage) {
-            $appr = $approvals->get($plan->id);
-            $status = $appr?->status ?? 'draft';
+        $progress = [
+            'plans' => $packagePlans->count(),
+            'planning_approved' => $packagePlans->filter->isPlanningApproved()->count(),
+            'result_open' => $resultStates->filter(fn ($s) => $s === 'open')->count(),
+            'result_pending' => $resultStates->filter(fn ($s) => $s === 'pending')->count(),
+            'result_approved' => $resultStates->filter(fn ($s) => $s === 'approved')->count(),
+            'result_rejected' => $resultStates->filter(fn ($s) => $s === 'rejected')->count(),
+            'result_locked' => $resultStates->filter(fn ($s) => $s === 'locked')->count(),
+        ];
 
-            $steps = $appr ? $appr->steps->map($mapStep)->values()->all() : $chainPreview;
-            $current = $appr?->currentStep();
-
-            $canAct = $viewerEmpId
-                && $appr
-                && $status === 'pending'
-                && $current
-                && $current->approver_employee_id === $viewerEmpId;
-
-            return [
-                'id' => $appr?->id,
-                'status' => $status,
-                'current_level' => $appr?->current_level,
-                'total_levels' => $appr ? $appr->totalLevels() : count($chainLayers),
-                'submitted_at' => $appr?->submitted_at?->toDateTimeString(),
-                'steps' => $steps,
-                // Only a completed (realized) item can be submitted for approval.
-                'can_submit' => $canManage
-                    && in_array($status, ['draft', 'rejected'], true)
-                    && filled($plan->realization_date),
-                'can_act' => (bool) $canAct,
-            ];
-        };
-    }
-
-    /**
-     * @param  Collection<int, string>  $ids
-     * @return array<string, string>
-     */
-    private function resolveNames($ids): array
-    {
-        $ids = collect($ids)->filter()->unique()->values();
-
-        if ($ids->isEmpty()) {
-            return [];
-        }
-
-        try {
-            return Employee::whereIn('employee_id', $ids)->pluck('fullname', 'employee_id')->all();
-        } catch (\Throwable) {
-            return [];
-        }
+        return ['planning' => $planning, 'planFlags' => $planFlags, 'progress' => $progress];
     }
 }

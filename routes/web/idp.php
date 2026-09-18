@@ -35,14 +35,18 @@ Route::prefix('idp')->name('idp.')->group(function () {
     Route::put('{idp}', [IdpController::class, 'update'])->name('update');
     Route::delete('{idp}', [IdpController::class, 'destroy'])->name('destroy');
 
-    // --- Submitting for approval (gated by IDP visibility) ---
+    // --- The two-stage workflow (gated by IDP visibility) ---
+    //   planning: the whole plan set, submitted once per package
+    //   result:   one program's realization + evidence, submitted per program
     Route::name('approval.')->group(function () {
-        Route::post('{idp}/submit-approval', [IdpApprovalController::class, 'submit'])->name('submit');
-        Route::post('{employeeId}/submit-all-approval', [IdpApprovalController::class, 'submitAll'])->name('submit_all');
+        Route::post('{employeeId}/submit-planning', [IdpApprovalController::class, 'submitPlanning'])->name('submit_planning');
+        Route::post('{idp}/result', [IdpApprovalController::class, 'saveResult'])->name('save_result');
+        Route::post('{idp}/submit-result', [IdpApprovalController::class, 'submitResult'])->name('submit_result');
+        Route::post('{employeeId}/submit-all-results', [IdpApprovalController::class, 'submitAllResults'])->name('submit_all_results');
     });
 });
 
-// --- Approval runtime (staged L1 -> L2 -> ... per item) ---
+// --- Approval runtime (staged L1 -> L2 -> ... per request) ---
 // Approving is gated on being the current-layer approver, enforced in the
 // service, so these need no permission middleware either.
 Route::get('approvals', [IdpApprovalController::class, 'inbox'])->name('approvals.inbox');

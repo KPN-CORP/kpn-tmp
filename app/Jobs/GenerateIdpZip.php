@@ -30,8 +30,9 @@ class GenerateIdpZip implements ShouldQueue
     public function __construct(
         public array $employeeIds,
         public string $jobStatusId,
-    ) {
-    }
+        /** The development-model cycle to render; the active one when null. */
+        public ?int $packageId = null,
+    ) {}
 
     public function handle(IdpService $idp): void
     {
@@ -46,7 +47,7 @@ class GenerateIdpZip implements ShouldQueue
         $fileName = 'idp_bulk_'.$this->jobStatusId.'.zip';
         $absolutePath = Storage::disk('local')->path(self::DIR.'/'.$fileName);
 
-        $zip = new ZipArchive();
+        $zip = new ZipArchive;
         if ($zip->open($absolutePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
             $status->update(['status' => 'failed', 'error_message' => 'Could not create zip archive.']);
 
@@ -60,10 +61,11 @@ class GenerateIdpZip implements ShouldQueue
             $employee = Employee::where('employee_id', $employeeId)->first();
 
             if ($employee) {
-                $data = $idp->manageData($employeeId);
+                $data = $idp->manageData($employeeId, packageId: $this->packageId);
                 $pdf = Pdf::loadView('pdf.idp', [
                     'employee' => $employee,
                     'developmentModels' => $data['developmentModels'],
+                    'planning' => $data['planning'],
                 ]);
                 $zip->addFromString("idp_{$employeeId}.pdf", $pdf->output());
             }

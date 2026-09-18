@@ -1,4 +1,18 @@
 <script setup lang="ts">
+/**
+ * An employee's development plan, as the two-stage workflow sees it.
+ *
+ *   1. Planning        — write the programs (this panel's plan drawer)
+ *   2. Planning approval — submit the whole set once; it is frozen while it is
+ *                          with an approver
+ *   3. Results         — file each program's realization + evidence
+ *   4. Result approval — each result walks the chain on its own
+ *
+ * The StageTracker at the top says where the plan stands and what to do next;
+ * each PlanRow carries the same two stages for one program. This component
+ * orchestrates them: it owns the plan form (and its master-driven cascade), the
+ * drawers, and the calls that move the workflow along.
+ */
 import { computed, nextTick, ref, watch } from 'vue'
 import { router, useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
@@ -7,82 +21,32 @@ import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import FormSection from '@/Components/UI/FormSection.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
+import StageTracker from '@/Components/Domain/Idp/StageTracker.vue'
+import PlanRow from '@/Components/Domain/Idp/PlanRow.vue'
+import ResultDrawer from '@/Components/Domain/Idp/ResultDrawer.vue'
+import DecisionDrawer from '@/Components/Domain/Idp/DecisionDrawer.vue'
+import ApprovalChain from '@/Components/Domain/Idp/ApprovalChain.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
-import { formatDate as fmt, formatDateTime as fmtDateTime } from '@/Composables/useDate'
+import { formatDateTime } from '@/Composables/useDate'
 import { route } from '@/Config/route'
+import type {
+    ApprovalInfo,
+    DevelopmentModelView,
+    MasterOption,
+    PackageOption,
+    Plan,
+    PlanningState,
+    ProgramOption,
+    StageProgress,
+} from '@/types/idp'
 
 const { t, locale } = useLocale()
-
-interface MasterOption {
-    value: string
-    value_en: string | null
-    value_id: string | null
-    // The competency type this master is filed under, as the plan stores it (a
-    // name string). Null means untyped, which by convention is global and fits
-    // every competency type.
-    competency_type?: string | null
-}
-
-// A development program additionally carries the development model it is filed
-// under. Null is legacy data with no model, which — like an untyped master —
-// counts as global.
-interface ProgramOption extends MasterOption {
-    model_id?: number | null
-}
-
-interface ApprovalStep {
-    level: number
-    approver_id: string
-    approver_name: string | null
-    status: 'pending' | 'approved' | 'rejected'
-    note: string | null
-    acted_by_name: string | null
-    acted_at: string | null
-}
-
-interface ApprovalInfo {
-    id: number | null
-    status: 'draft' | 'pending' | 'approved' | 'rejected'
-    current_level: number | null
-    total_levels: number
-    submitted_at: string | null
-    steps: ApprovalStep[]
-    can_submit: boolean
-    can_act: boolean
-}
-
-interface Plan {
-    id: number
-    development_model_id: number
-    competency_type: string
-    competency_name: string
-    development_program: string
-    review_tools: string | null
-    expected_outcome: string | null
-    time_frame_start: string | null
-    time_frame_end: string | null
-    realization_date: string | null
-    result_evidence: string | null
-    approval?: ApprovalInfo
-}
-
-interface Model {
-    id: number
-    name: string
-    percentage: number
-    description_en: string | null
-    description_id: string | null
-    // Only models in the active package accept new plans; historical models
-    // (from a previous package) render read-only.
-    can_add: boolean
-    plans: Plan[]
-}
 
 const props = withDefaults(
     defineProps<{
         employee: { employee_id: string; fullname: string; designation_name: string | null }
-        developmentModels: Model[]
+        developmentModels: DevelopmentModelView[]
         options: {
             competencyTypes: MasterOption[]
             competencyNames: MasterOption[]
@@ -90,17 +54,43 @@ const props = withDefaults(
             reviewTools: MasterOption[]
         }
         competencyMap: Record<string, ProgramOption[]>
-        // Show the add / edit / delete plan controls; the profile's inline tab
-        // is view-only.
+        planning: PlanningState
+        progress: StageProgress
+        /** Every development-model cycle, for the picker. */
+        packages: PackageOption[]
+        selectedPackageId: number | null
+        /** False for a closed cycle: its plans are readable, nothing more. */
+        viewingActive: boolean
+        /** Where to reload when another cycle is picked (the host page's route). */
+        reloadUrl: string
+        // Show the add / edit / delete / submit controls; the profile's inline
+        // tab is view-only.
         canEdit?: boolean
     }>(),
     { canEdit: true },
 )
 
+/**
+ * A closed cycle is read-only whatever the viewer may normally do, so the row
+ * actions are not merely disabled — the whole column goes.
+ */
+const rowsEditable = computed(() => props.canEdit && props.viewingActive)
+
+/** Switching cycles is a filter: same page, different package. */
+function selectPackage(id: number) {
+    if (id === props.selectedPackageId) return
+
+    router.get(props.reloadUrl, { package: id }, {
+        preserveState: true,
+        preserveScroll: true,
+        replace: true,
+    })
+}
+
 const emp = props.employee
 
 // Pick the model description in the active language (fall back to the other).
-function modelDescription(model: Model): string {
+function modelDescription(model: DevelopmentModelView): string {
     const primary = locale.value === 'id' ? model.description_id : model.description_en
     return (primary || model.description_en || model.description_id || '').trim()
 }
@@ -109,7 +99,7 @@ const hasDescriptions = computed(() => props.developmentModels.some((m) => model
 
 // Split a model description into display lines; a leading "-" / "•" marks a
 // bullet. Locale-agnostic (only the marker is detected, not the label text).
-function descLines(model: Model): Array<{ text: string; bullet: boolean }> {
+function descLines(model: DevelopmentModelView): Array<{ text: string; bullet: boolean }> {
     return modelDescription(model)
         .split('\n')
         .map((line) => line.trim())
@@ -131,19 +121,17 @@ const initials = computed(() =>
         .toUpperCase(),
 )
 
-const stats = computed(() => {
-    const all = props.developmentModels.flatMap((m) => m.plans)
-    const completed = all.filter((p) => p.realization_date).length
-    return { total: all.length, completed, ongoing: all.length - completed }
-})
-
 const modalOpen = ref(false)
 const editingId = ref<number | null>(null)
 
-// The empty plan. Inertia rewrites a form's defaults to the submitted data on a
-// successful visit, so `reset()` alone would refill the drawer with the plan
-// that was just saved — hence every open seeds both the data and the defaults
-// from here (or from the plan being edited).
+// The empty plan — PLANNING fields only. The realization date and the result
+// evidence belong to stage 3 and are filed through the result drawer, so that
+// editing a plan and reporting on it stay separate acts with separate approvals.
+//
+// Inertia rewrites a form's defaults to the submitted data on a successful
+// visit, so `reset()` alone would refill the drawer with the plan that was just
+// saved — hence every open seeds both the data and the defaults from here (or
+// from the plan being edited).
 function blankPlan() {
     return {
         employee_id: emp.employee_id,
@@ -155,8 +143,6 @@ function blankPlan() {
         expected_outcome: '',
         time_frame_start: '',
         time_frame_end: '',
-        realization_date: '',
-        result_evidence: '',
     }
 }
 
@@ -186,20 +172,12 @@ function matchesTypeName(item: MasterOption, type: string): boolean {
     return type !== '' && masterType !== '' && masterType.toLowerCase() === type.toLowerCase()
 }
 
-function matchesType(item: MasterOption): boolean {
-    return matchesTypeName(item, form.competency_type.trim())
-}
-
 // Development programs are scoped the other way round: an untyped program is
 // global and fits every type. They are narrowed primarily by the competency
 // they build, and treating a missing type as "none" would empty the picker.
 function fitsTypeName(item: MasterOption, type: string): boolean {
     const masterType = (item.competency_type ?? '').trim()
     return type === '' || masterType === '' || masterType.toLowerCase() === type.toLowerCase()
-}
-
-function fitsType(item: MasterOption): boolean {
-    return fitsTypeName(item, form.competency_type.trim())
 }
 
 // A program is filed under one development model (the 70-20-10 split) and the
@@ -294,6 +272,7 @@ function labelMap(items: MasterOption[]): Record<string, string> {
 const competencyLabels = computed(() => labelMap(props.options.competencyNames))
 const programLabels = computed(() => labelMap(props.options.developmentPrograms))
 const reviewToolLabels = computed(() => labelMap(props.options.reviewTools))
+const competencyTypeLabels = computed(() => labelMap(props.options.competencyTypes))
 
 function localize(map: Record<string, string>, value: string | null): string {
     return value ? (map[value] ?? value) : ''
@@ -340,8 +319,6 @@ const typeOffList = computed(
         !usableCompetencyTypes.value.some((item) => item.value === form.competency_type),
 )
 
-const competencyTypeLabels = computed(() => labelMap(props.options.competencyTypes))
-
 // --- Plan form state: section progress, locked steps, and inline warnings ---
 
 // Each section of the drawer turns "complete" once its required fields hold a
@@ -349,7 +326,6 @@ const competencyTypeLabels = computed(() => labelMap(props.options.competencyTyp
 const areaComplete = computed(() => !!form.competency_type && !!form.competency_name)
 const programComplete = computed(() => !!form.development_program)
 const timelineComplete = computed(() => !!form.time_frame_start)
-const resultComplete = computed(() => !!form.realization_date && !!form.result_evidence)
 
 // A dependent field stays locked (with an explanation) rather than showing an
 // empty dropdown the user cannot account for.
@@ -439,10 +415,6 @@ const durationLabel = computed(() => {
         : `${inclusive} ${t.value.idp.form.durationDays}`
 })
 
-// Result evidence is only required once a realization date is set (the server
-// rule is `required_with:realization_date`), so the field reflects that.
-const evidenceRequired = computed(() => !!form.realization_date)
-
 // Validation errors come back attached to fields spread down a scrolling
 // drawer; summarise them at the top so a failed save is never silent.
 const errorLabels = computed<Record<string, string>>(() => ({
@@ -454,8 +426,6 @@ const errorLabels = computed<Record<string, string>>(() => ({
     expected_outcome: t.value.idp.form.expectedOutcome,
     time_frame_start: t.value.idp.form.start,
     time_frame_end: t.value.idp.form.end,
-    realization_date: t.value.idp.form.realization,
-    result_evidence: t.value.idp.form.resultEvidence,
 }))
 
 // Required fields still empty, named in the footer so the user can see what a
@@ -466,9 +436,6 @@ const missingRequired = computed(() => {
     if (!form.competency_name) missing.push(t.value.idp.form.competencyName)
     if (!form.development_program) missing.push(t.value.idp.form.program)
     if (!form.time_frame_start) missing.push(t.value.idp.form.start)
-    if (evidenceRequired.value && !form.result_evidence) {
-        missing.push(t.value.idp.form.resultEvidence)
-    }
     return missing
 })
 
@@ -481,6 +448,8 @@ const errorList = computed(() =>
             message: message as string,
         })),
 )
+
+// --- The plans table -------------------------------------------------------
 
 type StatusKey = 'completed' | 'overdue' | 'inProgress' | 'upcoming' | 'planned'
 
@@ -499,6 +468,7 @@ const accents = [
     { bar: 'bg-amber-500', chip: 'bg-amber-50 text-amber-700' },
 ]
 
+/** Where the program sits against its own timeline (not its approval state). */
 function statusKey(plan: Plan): StatusKey {
     if (plan.realization_date) return 'completed'
     const today = new Date()
@@ -511,30 +481,31 @@ function statusKey(plan: Plan): StatusKey {
     return 'planned'
 }
 
-function typeBadge(type: string): string {
-    return type === 'Technical Competency'
-        ? 'bg-teal-50 text-teal-700'
-        : 'bg-indigo-50 text-indigo-700'
-}
-
-function isUrl(value: string | null): boolean {
-    return !!value && /^https?:\/\//i.test(value.trim())
-}
-
 const modelsView = computed(() =>
     props.developmentModels.map((model, index) => ({
         ...model,
         accent: accents[index % accents.length],
-        plans: model.plans.map((plan) => {
+        rows: model.plans.map((plan) => {
             const key = statusKey(plan)
-            return { plan, status: { key, label: t.value.idp.status[key], ...statusStyle[key] } }
+            return { plan, timeline: { key, label: t.value.idp.status[key], ...statusStyle[key] } }
         }),
     })),
 )
 
+/** Results that are filled in and could be submitted right now. */
+const readyResults = computed(
+    () =>
+        props.developmentModels
+            .flatMap((m) => m.plans)
+            .filter((p) => p.stage.result.can_submit && p.stage.result.filled && p.stage.result.status !== 'rejected')
+            .length,
+)
+
+// --- Plan form: open, cascade, save ---------------------------------------
+
 // Suppresses the type → competency → program cascade while a row is being
-// loaded into the form: the watchers flush after the assignments below and
-// would otherwise clear the values they had just restored.
+// loaded: the watchers flush after the assignments below and would otherwise
+// clear the values they had just restored.
 const loadingForm = ref(false)
 
 // Seeds the values as BOTH the form data and its defaults, so the drawer starts
@@ -563,10 +534,15 @@ function openEdit(plan: Plan) {
         expected_outcome: plan.expected_outcome ?? '',
         time_frame_start: plan.time_frame_start?.slice(0, 10) ?? '',
         time_frame_end: plan.time_frame_end?.slice(0, 10) ?? '',
-        realization_date: plan.realization_date?.slice(0, 10) ?? '',
-        result_evidence: plan.result_evidence ?? '',
     })
 }
+
+/**
+ * The plan set is signed off, so ANY change to it — a new program, an edit to
+ * an existing one, or a removal — withdraws the approval for the whole plan.
+ * Say so before the save rather than after.
+ */
+const withdrawsApproval = computed(() => props.planning.status === 'approved')
 
 // Changing the development model drops a competency type that no longer fits
 // under it; changing the competency type (or the model) drops a competency that
@@ -603,7 +579,7 @@ watch(
     },
 )
 
-function submit() {
+function submitPlan() {
     const opts = {
         preserveScroll: true,
         preserveState: true,
@@ -621,9 +597,9 @@ function closeModal() {
     seedForm(form, blankPlan())
 }
 
-// Closing a drawer throws its draft away, so each of this component's three
-// forms confirms first when there is something to lose. Backdrop click, Escape
-// and Cancel all route through the guard.
+// Closing a drawer throws its draft away, so each of this component's forms
+// confirms first when there is something to lose. Backdrop click, Escape and
+// Cancel all route through the guard.
 const {
     confirming: confirmingPlan,
     requestClose: requestClosePlan,
@@ -650,7 +626,8 @@ function doDelete() {
     })
 }
 
-// --- Upload development plan (Excel import) ---
+// --- Upload development plan (Excel import) --------------------------------
+
 const uploadOpen = ref(false)
 const uploadForm = useForm<{ idp_file: File | null }>({ idp_file: null })
 
@@ -684,105 +661,122 @@ function submitUpload() {
     })
 }
 
-// --- Approval workflow (staged L1 → L2 → … per item) ---
+// --- Stage 2: submitting the plan set --------------------------------------
 
-// Whether there is at least one item the viewer may (re)submit for approval.
-const hasSubmittable = computed(() =>
-    props.developmentModels.some((m) => m.plans.some((p) => p.approval?.can_submit)),
-)
+const submittingPlanning = ref(false)
 
-function approvalBadge(approval?: ApprovalInfo): { label: string; cls: string; dot: string } {
-    const status = approval?.status ?? 'draft'
-    if (status === 'approved') {
-        return { label: t.value.approvalFlow.statusApproved, cls: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20', dot: 'bg-emerald-500' }
-    }
-    if (status === 'rejected') {
-        return { label: t.value.approvalFlow.statusRejected, cls: 'bg-red-50 text-red-700 ring-red-600/20', dot: 'bg-red-500' }
-    }
-    if (status === 'pending') {
-        const lvl = approval?.current_level ?? 1
-        if (approval?.can_act) {
-            return { label: t.value.approvalFlow.needsYourApproval, cls: 'bg-amber-100 text-amber-800 ring-amber-600/30', dot: 'bg-amber-500' }
-        }
-        return {
-            label: `${t.value.approvalFlow.waiting} ${t.value.approvalFlow.layerShort}${lvl}`,
-            cls: 'bg-amber-50 text-amber-700 ring-amber-600/20',
-            dot: 'bg-amber-500',
-        }
-    }
-    return { label: t.value.approvalFlow.statusDraft, cls: 'bg-slate-100 text-slate-600 ring-slate-500/20', dot: 'bg-slate-400' }
-}
-
-// Submit a single item for approval.
-const submittingId = ref<number | null>(null)
-function submitItem(plan: Plan) {
-    submittingId.value = plan.id
-    router.post(route('idp.approval.submit', plan.id), {}, {
+function submitPlanning() {
+    submittingPlanning.value = true
+    router.post(route('idp.approval.submit_planning', emp.employee_id), {}, {
         preserveScroll: true,
         preserveState: true,
-        onFinish: () => (submittingId.value = null),
+        onFinish: () => (submittingPlanning.value = false),
     })
 }
 
-// Submit every draft / rejected item at once.
-const submittingAll = ref(false)
-function submitAllApprovals() {
-    submittingAll.value = true
-    router.post(route('idp.approval.submit_all', emp.employee_id), {}, {
+// --- Stage 3: filing and submitting results --------------------------------
+
+const resultOpen = ref(false)
+const resultPlan = ref<Plan | null>(null)
+
+function openResult(plan: Plan) {
+    resultPlan.value = plan
+    resultOpen.value = true
+}
+
+const submittingResultId = ref<number | null>(null)
+
+function submitResult(plan: Plan) {
+    submittingResultId.value = plan.id
+    router.post(route('idp.approval.submit_result', plan.id), {}, {
         preserveScroll: true,
         preserveState: true,
-        onFinish: () => (submittingAll.value = false),
+        onFinish: () => (submittingResultId.value = null),
     })
 }
 
-// Approve / reject dialog (note required).
-const actOpen = ref(false)
-const actDecision = ref<'approve' | 'reject'>('approve')
-const actApprovalId = ref<number | null>(null)
-const actPlan = ref<Plan | null>(null)
-const actForm = useForm({ note: '' })
+const submittingResults = ref(false)
 
-function openAct(plan: Plan, decision: 'approve' | 'reject') {
-    actDecision.value = decision
-    actApprovalId.value = plan.approval?.id ?? null
-    actPlan.value = plan
-    seedForm(actForm, { note: '' })
-    actOpen.value = true
-}
-
-function closeAct() {
-    actOpen.value = false
-    seedForm(actForm, { note: '' })
-}
-
-// A typed-but-unsent note is lost on close, so ask before throwing it away.
-const {
-    confirming: confirmingAct,
-    requestClose: requestCloseAct,
-    discard: discardAct,
-} = useUnsavedGuard(actForm, closeAct)
-
-function submitAct() {
-    if (!actApprovalId.value) return
-    actForm.post(route(`idp.approval.${actDecision.value}`, actApprovalId.value), {
+function submitAllResults() {
+    submittingResults.value = true
+    router.post(route('idp.approval.submit_all_results', emp.employee_id), {}, {
         preserveScroll: true,
         preserveState: true,
-        onSuccess: () => closeAct(),
+        onFinish: () => (submittingResults.value = false),
     })
 }
 
-// Approval-chain detail drawer.
-const chainOpen = ref(false)
-const chainPlan = ref<Plan | null>(null)
-function openChain(plan: Plan) {
-    chainPlan.value = plan
-    chainOpen.value = true
+// --- Deciding (either stage) -----------------------------------------------
+
+const decision = ref<{
+    open: boolean
+    kind: 'approve' | 'reject'
+    approvalId: number | null
+    subject: string
+    detail: string | null
+    level: number | null
+    totalLevels: number | null
+}>({ open: false, kind: 'approve', approvalId: null, subject: '', detail: null, level: null, totalLevels: null })
+
+function decideOnPlanning(kind: 'approve' | 'reject') {
+    const approval = props.planning.approval
+    if (!approval) return
+    decision.value = {
+        open: true,
+        kind,
+        approvalId: approval.id,
+        subject: `${emp.fullname} · ${props.planning.package?.name ?? ''}`,
+        detail: t.value.idp.stage.decidingPlan.replace('{n}', String(props.planning.total_plans)),
+        level: approval.current_level,
+        totalLevels: approval.total_levels,
+    }
 }
 
-function stepIcon(status: string): { icon: string; color: string } {
-    if (status === 'approved') return { icon: 'fa-solid fa-circle-check', color: 'text-emerald-500' }
-    if (status === 'rejected') return { icon: 'fa-solid fa-circle-xmark', color: 'text-red-500' }
-    return { icon: 'fa-regular fa-circle', color: 'text-slate-300' }
+function decideOnResult(plan: Plan, kind: 'approve' | 'reject') {
+    const approval = plan.stage.result.approval
+    if (!approval) return
+    decision.value = {
+        open: true,
+        kind,
+        approvalId: approval.id,
+        subject: `${emp.fullname} · ${localize(competencyLabels.value, plan.competency_name)}`,
+        detail: localize(programLabels.value, plan.development_program),
+        level: approval.current_level,
+        totalLevels: approval.total_levels,
+    }
+}
+
+// --- Reading a chain -------------------------------------------------------
+
+const chain = ref<{
+    open: boolean
+    title: string
+    subtitle: string
+    approval: ApprovalInfo | null
+    preview: boolean
+    history: ApprovalInfo[]
+}>({ open: false, title: '', subtitle: '', approval: null, preview: false, history: [] })
+
+function openPlanningChain() {
+    chain.value = {
+        open: true,
+        title: t.value.idp.stage.stepPlanningApproval,
+        subtitle: props.planning.package?.name ?? '',
+        approval: props.planning.approval ?? props.planning.chain_preview,
+        preview: !props.planning.approval,
+        history: props.planning.history,
+    }
+}
+
+function openResultChain(plan: Plan) {
+    chain.value = {
+        open: true,
+        title: t.value.idp.stage.stepResultApproval,
+        subtitle: localize(competencyLabels.value, plan.competency_name),
+        approval: plan.stage.result.approval ?? plan.stage.result.chain_preview,
+        preview: !plan.stage.result.approval,
+        history: [],
+    }
 }
 
 // Let the page header open the upload drawer (the drawer lives here).
@@ -791,69 +785,44 @@ defineExpose({ openUpload })
 
 <template>
     <div>
-        <!-- Employee banner + progress stats -->
-        <div class="mb-6 flex flex-col gap-4 rounded-xl border border-border bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-            <div class="flex items-center gap-4">
-                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-base font-bold text-primary">
-                    {{ initials }}
-                </div>
-                <div class="min-w-0">
-                    <h2 class="truncate text-lg font-bold text-slate-800">{{ emp.fullname }}</h2>
-                    <p class="truncate text-sm text-slate-500">{{ emp.employee_id }} · {{ emp.designation_name ?? '—' }}</p>
-                </div>
+        <!-- Who this plan belongs to -->
+        <div class="mb-6 flex items-center gap-4 rounded-xl border border-border bg-white p-4 shadow-sm">
+            <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
+                {{ initials }}
             </div>
-
-            <div class="grid grid-cols-3 gap-2 sm:flex sm:gap-3">
-                <div class="rounded-lg border border-border bg-slate-50/60 px-3 py-2 text-center sm:min-w-20">
-                    <div class="text-lg font-bold text-slate-800">{{ stats.total }}</div>
-                    <div class="text-[11px] uppercase tracking-wide text-slate-400">{{ t.idp.stats.total }}</div>
-                </div>
-                <div class="rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-center sm:min-w-20">
-                    <div class="text-lg font-bold text-emerald-600">{{ stats.completed }}</div>
-                    <div class="text-[11px] uppercase tracking-wide text-emerald-600/70">{{ t.idp.stats.completed }}</div>
-                </div>
-                <div class="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2 text-center sm:min-w-20">
-                    <div class="text-lg font-bold text-amber-600">{{ stats.ongoing }}</div>
-                    <div class="text-[11px] uppercase tracking-wide text-amber-600/70">{{ t.idp.stats.ongoing }}</div>
-                </div>
+            <div class="min-w-0">
+                <h2 class="truncate font-bold text-slate-800">{{ emp.fullname }}</h2>
+                <p class="truncate text-sm text-slate-500">{{ emp.employee_id }} · {{ emp.designation_name ?? '—' }}</p>
             </div>
         </div>
 
-        <!-- Submit-all-for-approval bar -->
-        <div
-            v-if="canEdit && hasSubmittable"
-            class="mb-6 flex flex-col items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between"
-        >
-            <p class="flex items-center gap-2 text-sm text-amber-800">
-                <i class="fa-solid fa-paper-plane" />
-                {{ t.approvalFlow.submitAll }}
-            </p>
-            <button
-                type="button"
-                :disabled="submittingAll"
-                class="inline-flex shrink-0 items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:opacity-60"
-                @click="submitAllApprovals"
-            >
-                <i v-if="submittingAll" class="fa-solid fa-spinner fa-spin" />
-                <i v-else class="fa-solid fa-paper-plane" />
-                {{ t.approvalFlow.submitAll }}
-            </button>
-        </div>
+        <!-- Where the plan stands, and the one thing to do next -->
+        <StageTracker
+            :planning="planning"
+            :progress="progress"
+            :ready-results="readyResults"
+            :can-edit="canEdit"
+            :submitting-planning="submittingPlanning"
+            :submitting-results="submittingResults"
+            :packages="packages"
+            :selected-package-id="selectedPackageId"
+            :viewing-active="viewingActive"
+            @select-package="selectPackage"
+            @submit-planning="submitPlanning"
+            @submit-results="submitAllResults"
+            @open-chain="openPlanningChain"
+            @act="decideOnPlanning"
+        />
 
         <!-- 70-20-10 learning model explainer -->
-        <div
-            v-if="hasDescriptions"
-            class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3"
-        >
+        <div v-if="hasDescriptions" class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
             <div
                 v-for="(model, i) in developmentModels"
                 :key="model.id"
                 class="relative overflow-hidden rounded-xl border border-border bg-white p-5 shadow-sm"
             >
-                <!-- Colored accent bar -->
                 <span class="absolute inset-x-0 top-0 h-1" :class="accents[i % accents.length].bar" />
 
-                <!-- Header: percentage badge + name -->
                 <div class="mb-3 flex items-center gap-3">
                     <div
                         class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-sm font-bold"
@@ -864,7 +833,6 @@ defineExpose({ openUpload })
                     <h3 class="font-bold leading-snug text-slate-800">{{ model.name }}</h3>
                 </div>
 
-                <!-- Description: intro lines + bulleted examples -->
                 <div class="space-y-1.5">
                     <template v-for="(line, li) in descLines(model)" :key="li">
                         <div v-if="line.bullet" class="flex gap-2 text-sm leading-relaxed text-slate-500">
@@ -884,15 +852,14 @@ defineExpose({ openUpload })
                 :key="model.id"
                 class="overflow-hidden rounded-xl border border-border bg-white shadow-sm"
             >
-                <!-- Model header -->
                 <div class="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
                     <div class="flex min-w-0 items-center gap-3">
                         <span class="h-9 w-1.5 shrink-0 rounded-full" :class="model.accent.bar" />
                         <div class="min-w-0">
                             <h3 class="truncate font-semibold text-slate-800">{{ model.name }}</h3>
                             <p class="text-xs text-slate-400">
-                                {{ model.plans.length }}
-                                {{ model.plans.length === 1 ? t.idp.planSingular : t.idp.planPlural }}
+                                {{ model.rows.length }}
+                                {{ model.rows.length === 1 ? t.idp.planSingular : t.idp.planPlural }}
                             </p>
                         </div>
                         <span
@@ -902,210 +869,66 @@ defineExpose({ openUpload })
                             {{ model.percentage }}%
                         </span>
                     </div>
-                    <span
-                        v-if="!model.can_add"
-                        class="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500"
-                        :title="t.idp.historicalModelHint"
-                    >
-                        <i class="fa-solid fa-clock-rotate-left text-[10px]" />
-                        {{ t.idp.historicalModel }}
-                    </span>
-                    <button
-                        v-if="canEdit && model.can_add"
-                        type="button"
-                        class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-hover"
-                        @click="openCreate(model.id)"
-                    >
-                        <i class="fa-solid fa-plus" />
-                        {{ t.idp.addPlan }}
-                    </button>
+
+                    <div class="flex shrink-0 items-center gap-2">
+                        <!-- The set is frozen while its approval is in flight, so
+                             say why the add button is gone rather than hiding it
+                             silently. (A closed cycle says so once, in the
+                             tracker, rather than on every model.) -->
+                        <span
+                            v-if="canEdit && viewingActive && !planning.plans_editable"
+                            class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700"
+                            :title="t.idp.stage.lockedInReview"
+                        >
+                            <i class="fa-solid fa-lock text-[10px]" />
+                            {{ t.idp.stage.locked }}
+                        </span>
+                        <button
+                            v-if="canEdit && model.can_add"
+                            type="button"
+                            class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-hover"
+                            @click="openCreate(model.id)"
+                        >
+                            <i class="fa-solid fa-plus" />
+                            {{ t.idp.addPlan }}
+                        </button>
+                    </div>
                 </div>
 
-                <!-- Plans table -->
-                <div v-if="model.plans.length" class="overflow-x-auto">
-                    <table class="w-full min-w-[900px] text-left text-sm">
+                <div v-if="model.rows.length" class="overflow-x-auto">
+                    <table class="w-full min-w-[960px] text-left text-sm">
                         <thead>
                             <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
                                 <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.competency }}</th>
-                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.program }}</th>
                                 <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.timeframe }}</th>
-                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.status }}</th>
-                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.realization }}</th>
-                                <th class="px-5 py-2.5 font-semibold">{{ t.approvalFlow.heading }}</th>
-                                <th v-if="canEdit" class="px-5 py-2.5 text-right font-semibold" />
+                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.planning }}</th>
+                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.result }}</th>
+                                <th v-if="rowsEditable" class="px-5 py-2.5 text-right font-semibold" />
                             </tr>
                         </thead>
                         <tbody>
-                            <tr
-                                v-for="{ plan, status } in model.plans"
-                                :key="plan.id"
-                                class="group border-b border-border/60 align-top transition last:border-0 hover:bg-slate-50/70"
-                            >
-                                <!-- Competency -->
-                                <td class="px-5 py-3.5">
-                                    <div class="font-medium text-slate-800">{{ localize(competencyLabels, plan.competency_name) }}</div>
-                                    <div class="mt-1 flex flex-wrap items-center gap-1.5">
-                                        <span
-                                            class="rounded px-1.5 py-0.5 text-[11px] font-medium"
-                                            :class="typeBadge(plan.competency_type)"
-                                        >
-                                            {{ localize(competencyTypeLabels, plan.competency_type) }}
-                                        </span>
-                                        <span
-                                            v-if="plan.review_tools"
-                                            class="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500"
-                                        >
-                                            <i class="fa-solid fa-clipboard-check text-[10px]" />
-                                            {{ localize(reviewToolLabels, plan.review_tools) }}
-                                        </span>
-                                    </div>
-                                </td>
-
-                                <!-- Program -->
-                                <td class="px-5 py-3.5">
-                                    <div class="font-medium text-slate-700">{{ localize(programLabels, plan.development_program) }}</div>
-                                    <div v-if="plan.expected_outcome" class="mt-0.5 max-w-xs whitespace-pre-line text-xs text-slate-400">
-                                        <span class="font-medium">{{ t.idp.outcomeLabel }}:</span>
-                                        {{ plan.expected_outcome }}
-                                    </div>
-                                </td>
-
-                                <!-- Timeframe -->
-                                <td class="px-5 py-3.5 text-slate-500">
-                                    <div class="flex items-center gap-1.5 whitespace-nowrap">
-                                        <i class="fa-regular fa-calendar text-xs text-slate-300" />
-                                        <span>{{ fmt(plan.time_frame_start) }}</span>
-                                        <i class="fa-solid fa-arrow-right-long text-[10px] text-slate-300" />
-                                        <span>{{ plan.time_frame_end ? fmt(plan.time_frame_end) : '—' }}</span>
-                                    </div>
-                                </td>
-
-                                <!-- Status -->
-                                <td class="px-5 py-3.5">
-                                    <span
-                                        class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset"
-                                        :class="status.badge"
-                                    >
-                                        <span class="h-1.5 w-1.5 rounded-full" :class="status.dot" />
-                                        {{ status.label }}
-                                    </span>
-                                </td>
-
-                                <!-- Realization / evidence -->
-                                <td class="px-5 py-3.5 text-slate-500">
-                                    <div v-if="plan.realization_date" class="whitespace-nowrap">{{ fmt(plan.realization_date) }}</div>
-                                    <div v-else class="text-slate-300">—</div>
-                                    <a
-                                        v-if="isUrl(plan.result_evidence)"
-                                        :href="plan.result_evidence!"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        class="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                                    >
-                                        <i class="fa-solid fa-link text-[10px]" />
-                                        {{ t.idp.evidenceLabel }}
-                                    </a>
-                                    <div v-else-if="plan.result_evidence" class="mt-0.5 max-w-xs text-xs text-slate-400">
-                                        {{ plan.result_evidence }}
-                                    </div>
-                                </td>
-
-                                <!-- Approval -->
-                                <td class="px-5 py-3.5">
-                                    <div class="flex flex-col items-start gap-1.5">
-                                        <span
-                                            class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset"
-                                            :class="approvalBadge(plan.approval).cls"
-                                        >
-                                            <span class="h-1.5 w-1.5 rounded-full" :class="approvalBadge(plan.approval).dot" />
-                                            {{ approvalBadge(plan.approval).label }}
-                                        </span>
-
-                                        <!-- Actions for the current approver -->
-                                        <div v-if="plan.approval?.can_act" class="flex items-center gap-1">
-                                            <button
-                                                type="button"
-                                                class="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-600"
-                                                @click="openAct(plan, 'approve')"
-                                            >
-                                                <i class="fa-solid fa-check" />
-                                                {{ t.approvalFlow.approve }}
-                                            </button>
-                                            <button
-                                                type="button"
-                                                class="inline-flex items-center gap-1 rounded-md bg-red-500 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-red-600"
-                                                @click="openAct(plan, 'reject')"
-                                            >
-                                                <i class="fa-solid fa-xmark" />
-                                                {{ t.approvalFlow.reject }}
-                                            </button>
-                                        </div>
-
-                                        <!-- Submit / resubmit -->
-                                        <button
-                                            v-else-if="plan.approval?.can_submit"
-                                            type="button"
-                                            :disabled="submittingId === plan.id"
-                                            class="inline-flex items-center gap-1 rounded-md border border-primary/40 px-2 py-1 text-[11px] font-semibold text-primary transition hover:bg-primary hover:text-white disabled:opacity-60"
-                                            @click="submitItem(plan)"
-                                        >
-                                            <i v-if="submittingId === plan.id" class="fa-solid fa-spinner fa-spin" />
-                                            <i v-else class="fa-solid fa-paper-plane" />
-                                            {{ plan.approval?.status === 'rejected' ? t.approvalFlow.resubmit : t.approvalFlow.submit }}
-                                        </button>
-
-                                        <!-- Not yet completed → submit is blocked -->
-                                        <span
-                                            v-else-if="canEdit
-                                                && (plan.approval?.status === 'draft' || plan.approval?.status === 'rejected')
-                                                && status.key !== 'completed'"
-                                            class="inline-flex items-center gap-1 text-[11px] text-slate-400"
-                                            :title="t.approvalFlow.completeFirstHint"
-                                        >
-                                            <i class="fa-solid fa-circle-info" />
-                                            {{ t.approvalFlow.completeFirst }}
-                                        </span>
-
-                                        <!-- View chain -->
-                                        <button
-                                            v-if="plan.approval && plan.approval.steps.length"
-                                            type="button"
-                                            class="text-[11px] font-medium text-slate-400 transition hover:text-primary hover:underline"
-                                            @click="openChain(plan)"
-                                        >
-                                            <i class="fa-solid fa-list-ol mr-0.5" />
-                                            {{ t.approvalFlow.viewChain }}
-                                        </button>
-                                    </div>
-                                </td>
-
-                                <!-- Actions -->
-                                <td v-if="canEdit" class="px-5 py-3.5 text-right">
-                                    <div class="inline-flex gap-1 opacity-60 transition group-hover:opacity-100">
-                                        <button
-                                            type="button"
-                                            class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
-                                            :title="t.idp.editPlan"
-                                            @click="openEdit(plan)"
-                                        >
-                                            <i class="fa-solid fa-pen text-xs" />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                                            :title="t.idp.form.delete"
-                                            @click="askDelete(plan)"
-                                        >
-                                            <i class="fa-solid fa-trash text-xs" />
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
+                            <PlanRow
+                                v-for="row in model.rows"
+                                :key="row.plan.id"
+                                :plan="row.plan"
+                                :competency-label="localize(competencyLabels, row.plan.competency_name)"
+                                :type-label="localize(competencyTypeLabels, row.plan.competency_type)"
+                                :program-label="localize(programLabels, row.plan.development_program)"
+                                :review-tool-label="localize(reviewToolLabels, row.plan.review_tools)"
+                                :timeline="row.timeline"
+                                :can-edit="rowsEditable"
+                                :submitting="submittingResultId === row.plan.id"
+                                @edit="openEdit(row.plan)"
+                                @delete="askDelete(row.plan)"
+                                @file-result="openResult(row.plan)"
+                                @submit-result="submitResult(row.plan)"
+                                @act="(d) => decideOnResult(row.plan, d)"
+                                @open-chain="openResultChain(row.plan)"
+                            />
                         </tbody>
                     </table>
                 </div>
 
-                <!-- Empty state -->
                 <div v-else class="flex flex-col items-center gap-3 px-5 py-10 text-center">
                     <div class="flex h-12 w-12 items-center justify-center rounded-full bg-slate-50 text-slate-300">
                         <i class="fa-regular fa-folder-open text-xl" />
@@ -1124,12 +947,8 @@ defineExpose({ openUpload })
             </section>
         </div>
 
-        <!-- Add / edit drawer -->
-        <Drawer
-            :show="modalOpen"
-            max-width="max-w-3xl"
-            @close="requestClosePlan"
-        >
+        <!-- Add / edit plan (stage 1 — planning fields only) -->
+        <Drawer :show="modalOpen" max-width="max-w-3xl" @close="requestClosePlan">
             <template #header>
                 <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
@@ -1149,18 +968,23 @@ defineExpose({ openUpload })
                 </div>
             </template>
 
-            <form
-                id="idp-form"
-                class="space-y-4"
-                @submit.prevent="submit"
-            >
+            <form id="idp-form" class="space-y-4" @submit.prevent="submitPlan">
+                <!-- Editing a signed-off row withdraws its approval; say so up
+                     front rather than letting it happen silently on save. -->
+                <div
+                    v-if="withdrawsApproval"
+                    class="flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800"
+                >
+                    <i class="fa-solid fa-rotate mt-0.5 text-xs" />
+                    <span>
+                        {{ editingId ? t.idp.stage.editWithdrawsApproval : t.idp.stage.addWithdrawsApproval }}
+                    </span>
+                </div>
+
                 <!-- Everything that failed validation, gathered at the top: the
                      fields themselves are spread down a scrolling drawer, so a
                      rejected save used to look like nothing happened. -->
-                <div
-                    v-if="errorList.length"
-                    class="rounded-xl border border-red-200 bg-red-50 px-4 py-3"
-                >
+                <div v-if="errorList.length" class="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
                     <p class="flex items-center gap-2 text-sm font-semibold text-red-800">
                         <i class="fa-solid fa-circle-exclamation text-xs" />
                         {{ t.idp.form.errorSummary }}
@@ -1201,10 +1025,7 @@ defineExpose({ openUpload })
 
                         <!-- Few types read best as one-click choices; a longer
                              master list falls back to a searchable select. -->
-                        <div
-                            v-else-if="competencyTypeOptions.length <= 3"
-                            class="grid gap-2 sm:grid-cols-3"
-                        >
+                        <div v-else-if="competencyTypeOptions.length <= 3" class="grid gap-2 sm:grid-cols-3">
                             <button
                                 v-for="option in competencyTypeOptions"
                                 :key="option.value"
@@ -1245,11 +1066,7 @@ defineExpose({ openUpload })
                         >
                             <i class="fa-solid fa-triangle-exclamation mt-0.5 text-[10px]" />
                             <span>
-                                {{
-                                    typeIsAMaster
-                                        ? t.idp.form.typeModelMismatch
-                                        : t.idp.form.inactiveMaster
-                                }}
+                                {{ typeIsAMaster ? t.idp.form.typeModelMismatch : t.idp.form.inactiveMaster }}
                             </span>
                         </p>
                     </div>
@@ -1324,9 +1141,7 @@ defineExpose({ openUpload })
                     <div>
                         <label class="mb-1.5 flex items-center gap-2 text-sm font-medium text-slate-700">
                             {{ t.idp.form.reviewTools }}
-                            <span
-                                class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
-                            >
+                            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
                                 {{ t.idp.form.optional }}
                             </span>
                         </label>
@@ -1408,9 +1223,7 @@ defineExpose({ openUpload })
                                 v-if="selectedProgramLabel"
                                 class="mt-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5"
                             >
-                                <p
-                                    class="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary/80"
-                                >
+                                <p class="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary/80">
                                     <i class="fa-solid fa-quote-left text-[9px]" />
                                     {{ t.idp.form.selectedProgram }}
                                 </p>
@@ -1426,9 +1239,7 @@ defineExpose({ openUpload })
                     <div>
                         <label class="mb-1.5 flex items-center gap-2 text-sm font-medium text-slate-700">
                             {{ t.idp.form.expectedOutcome }}
-                            <span
-                                class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
-                            >
+                            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
                                 {{ t.idp.form.optional }}
                             </span>
                         </label>
@@ -1503,68 +1314,13 @@ defineExpose({ openUpload })
                             {{ t.idp.form.endBeforeStart }}
                         </p>
                     </div>
-                </FormSection>
 
-                <!-- Step 4 — what came of it -->
-                <FormSection
-                    :step="4"
-                    :title="t.idp.form.sectionResult"
-                    icon="fa-solid fa-circle-check"
-                    :complete="resultComplete"
-                >
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div>
-                            <label class="mb-1.5 flex items-center gap-2 text-sm font-medium text-slate-700">
-                                {{ t.idp.form.realization }}
-                                <span
-                                    class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
-                                >
-                                    {{ t.idp.form.optional }}
-                                </span>
-                            </label>
-                            <DateInput v-model="form.realization_date" :invalid="!!form.errors.realization_date" />
-                            <p v-if="form.errors.realization_date" class="mt-1 text-xs text-red-600">
-                                {{ form.errors.realization_date }}
-                            </p>
-                        </div>
-
-                        <div>
-                            <label class="mb-1.5 flex items-center gap-2 text-sm font-medium text-slate-700">
-                                {{ t.idp.form.resultEvidence }}
-                                <span v-if="evidenceRequired" class="text-red-500">*</span>
-                                <span
-                                    v-else
-                                    class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
-                                >
-                                    {{ t.idp.form.optional }}
-                                </span>
-                            </label>
-
-                            <!-- Evidence is `required_with:realization_date` on the
-                                 server; mirror that by only opening the field once
-                                 a realization date is set. -->
-                            <p
-                                v-if="!evidenceRequired"
-                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
-                            >
-                                <i class="fa-solid fa-lock mt-0.5 text-[10px] text-slate-300" />
-                                <span>{{ t.idp.form.evidenceLocked }}</span>
-                            </p>
-
-                            <template v-else>
-                                <input
-                                    v-model="form.result_evidence"
-                                    type="text"
-                                    :placeholder="t.idp.form.resultEvidencePlaceholder"
-                                    class="w-full rounded-lg border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                                    :class="form.errors.result_evidence ? 'border-red-500' : 'border-border'"
-                                >
-                                <p v-if="form.errors.result_evidence" class="mt-1 text-xs text-red-600">
-                                    {{ form.errors.result_evidence }}
-                                </p>
-                            </template>
-                        </div>
-                    </div>
+                    <!-- The result is filed later, on its own — say so, so the
+                         two missing fields do not read as an oversight. -->
+                    <p class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500">
+                        <i class="fa-solid fa-circle-info mt-0.5 text-[10px] text-slate-400" />
+                        <span>{{ t.idp.stage.resultComesLater }}</span>
+                    </p>
                 </FormSection>
             </form>
 
@@ -1572,10 +1328,7 @@ defineExpose({ openUpload })
                 <!-- Which required fields are still missing, next to the button
                      that needs them — so a save that cannot succeed is visible
                      before it is attempted, not after. -->
-                <p
-                    v-if="missingRequired.length"
-                    class="mr-auto hidden items-center gap-2 text-xs text-slate-500 sm:flex"
-                >
+                <p v-if="missingRequired.length" class="mr-auto hidden items-center gap-2 text-xs text-slate-500 sm:flex">
                     <i class="fa-solid fa-circle-info text-[10px] text-slate-400" />
                     <span>
                         {{ t.idp.form.stillNeeded }}
@@ -1601,26 +1354,83 @@ defineExpose({ openUpload })
             </template>
         </Drawer>
 
-        <!-- Unsaved-changes confirmation, shown when the plan drawer is
-             closed with a dirty form. -->
+        <!-- Stage 3 — file a result -->
+        <ResultDrawer
+            :show="resultOpen"
+            :plan="resultPlan"
+            :competency-label="resultPlan ? localize(competencyLabels, resultPlan.competency_name) : ''"
+            :program-label="resultPlan ? localize(programLabels, resultPlan.development_program) : ''"
+            @close="resultOpen = false"
+        />
+
+        <!-- Approve / reject, either stage -->
+        <DecisionDrawer
+            :show="decision.open"
+            :decision="decision.kind"
+            :approval-id="decision.approvalId"
+            :subject="decision.subject"
+            :detail="decision.detail"
+            :level="decision.level"
+            :total-levels="decision.totalLevels"
+            @close="decision.open = false"
+        />
+
+        <!-- Read a chain, at either stage -->
+        <Drawer :show="chain.open" max-width="max-w-lg" @close="chain.open = false">
+            <template #header>
+                <div class="min-w-0">
+                    <h3 class="font-bold text-slate-800">{{ chain.title }}</h3>
+                    <p class="mt-0.5 truncate text-sm text-slate-500">{{ chain.subtitle }}</p>
+                </div>
+            </template>
+
+            <div class="space-y-5">
+                <ApprovalChain :approval="chain.approval" :preview="chain.preview" />
+
+                <!-- Earlier rounds of the same set, so a revised plan keeps its
+                     paper trail rather than replacing it. -->
+                <div v-if="chain.history.length" class="border-t border-border pt-4">
+                    <p class="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        <i class="fa-solid fa-clock-rotate-left text-[10px]" />
+                        {{ t.idp.stage.previousSubmissions }}
+                    </p>
+                    <div class="space-y-4">
+                        <div
+                            v-for="(past, i) in chain.history"
+                            :key="past.id ?? i"
+                            class="rounded-lg border border-border bg-slate-50/60 p-3"
+                        >
+                            <p class="mb-2 flex items-center justify-between gap-2 text-xs text-slate-500">
+                                <span class="font-medium">
+                                    {{ t.idp.stage.revision }} {{ chain.history.length - i }}
+                                </span>
+                                <span>{{ formatDateTime(past.submitted_at) }}</span>
+                            </p>
+                            <ApprovalChain :approval="past" compact />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <template #footer>
+                <button
+                    type="button"
+                    class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                    @click="chain.open = false"
+                >
+                    {{ t.approvalFlow.cancel }}
+                </button>
+            </template>
+        </Drawer>
+
+        <!-- Unsaved-changes confirmations -->
         <UnsavedChangesDialog
             :show="confirmingPlan"
             :message="t.idp.form.discardMessage"
             @confirm="discardPlan"
             @close="confirmingPlan = false"
         />
-
-        <UnsavedChangesDialog
-            :show="confirmingUpload"
-            @confirm="discardUpload"
-            @close="confirmingUpload = false"
-        />
-
-        <UnsavedChangesDialog
-            :show="confirmingAct"
-            @confirm="discardAct"
-            @close="confirmingAct = false"
-        />
+        <UnsavedChangesDialog :show="confirmingUpload" @confirm="discardUpload" @close="confirmingUpload = false" />
 
         <!-- Delete confirmation -->
         <ConfirmDialog
@@ -1640,17 +1450,18 @@ defineExpose({ openUpload })
             >
                 {{ localize(competencyLabels, pendingDelete.competency_name) }}
             </p>
+            <p
+                v-if="withdrawsApproval"
+                class="mt-2 flex items-start gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800"
+            >
+                <i class="fa-solid fa-rotate mt-0.5" />
+                <span>{{ t.idp.stage.deleteWithdrawsApproval }}</span>
+            </p>
         </ConfirmDialog>
 
         <!-- Upload development plan drawer -->
-        <Drawer
-            :show="uploadOpen"
-            :title="t.idp.upload.title"
-            max-width="max-w-lg"
-            @close="requestCloseUpload"
-        >
+        <Drawer :show="uploadOpen" :title="t.idp.upload.title" max-width="max-w-lg" @close="requestCloseUpload">
             <form id="idp-upload-form" class="space-y-5" @submit.prevent="submitUpload">
-                <!-- Step 1: download template + master data -->
                 <div class="space-y-2">
                     <p class="text-sm font-semibold text-slate-700">{{ t.idp.upload.step1 }}</p>
                     <div class="flex flex-wrap gap-2">
@@ -1673,7 +1484,6 @@ defineExpose({ openUpload })
                     </div>
                 </div>
 
-                <!-- Instructions -->
                 <div class="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sky-900">
                     <p class="flex items-center gap-2 text-sm font-semibold">
                         <i class="fa-solid fa-circle-info" />
@@ -1690,7 +1500,6 @@ defineExpose({ openUpload })
                     </ul>
                 </div>
 
-                <!-- Step 2: choose file -->
                 <div class="space-y-2">
                     <label for="idp-upload-file" class="text-sm font-semibold text-slate-700">{{ t.idp.upload.step2 }}</label>
                     <input
@@ -1721,154 +1530,6 @@ defineExpose({ openUpload })
                 >
                     <i v-if="uploadForm.processing" class="fa-solid fa-spinner fa-spin" />
                     {{ t.idp.upload.submit }}
-                </button>
-            </template>
-        </Drawer>
-
-        <!-- Approve / reject drawer (note required) -->
-        <Drawer
-            :show="actOpen"
-            max-width="max-w-lg"
-            @close="requestCloseAct"
-        >
-            <template #header>
-                <div class="min-w-0">
-                    <h3 class="font-bold text-slate-800">
-                        {{ actDecision === 'approve' ? t.approvalFlow.approveTitle : t.approvalFlow.rejectTitle }}
-                    </h3>
-                    <p v-if="actPlan" class="mt-0.5 truncate text-sm text-slate-500">
-                        {{ localize(competencyLabels, actPlan.competency_name) }} ·
-                        {{ localize(programLabels, actPlan.development_program) }}
-                    </p>
-                </div>
-            </template>
-
-            <form id="idp-act-form" class="space-y-4" @submit.prevent="submitAct">
-                <div
-                    class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
-                    :class="actDecision === 'approve'
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                        : 'border-red-200 bg-red-50 text-red-800'"
-                >
-                    <i :class="actDecision === 'approve' ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark'" />
-                    <span v-if="actPlan?.approval">
-                        {{ t.approvalFlow.layer }} {{ actPlan.approval.current_level }} / {{ actPlan.approval.total_levels }}
-                    </span>
-                </div>
-
-                <div>
-                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
-                        {{ t.approvalFlow.note }} <span class="text-red-500">*</span>
-                    </label>
-                    <textarea
-                        v-model="actForm.note"
-                        rows="4"
-                        :placeholder="t.approvalFlow.notePlaceholder"
-                        class="w-full rounded-lg border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="actForm.errors.note ? 'border-red-500' : 'border-border'"
-                    />
-                    <p v-if="actForm.errors.note" class="mt-1 text-xs text-red-600">{{ actForm.errors.note }}</p>
-                </div>
-            </form>
-
-            <template #footer>
-                <button
-                    type="button"
-                    class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-                    @click="requestCloseAct"
-                >
-                    {{ t.approvalFlow.cancel }}
-                </button>
-                <button
-                    type="submit"
-                    form="idp-act-form"
-                    :disabled="actForm.processing"
-                    class="inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-white transition disabled:opacity-60"
-                    :class="actDecision === 'approve' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-red-500 hover:bg-red-600'"
-                >
-                    <i v-if="actForm.processing" class="fa-solid fa-spinner fa-spin" />
-                    {{ actDecision === 'approve' ? t.approvalFlow.confirmApprove : t.approvalFlow.confirmReject }}
-                </button>
-            </template>
-        </Drawer>
-
-        <!-- Approval-chain detail drawer -->
-        <Drawer
-            :show="chainOpen"
-            :title="t.approvalFlow.chainTitle"
-            max-width="max-w-lg"
-            @close="chainOpen = false"
-        >
-            <div v-if="chainPlan?.approval" class="space-y-3">
-                <p class="truncate text-sm font-medium text-slate-700">
-                    {{ localize(competencyLabels, chainPlan.competency_name) }}
-                </p>
-
-                <!-- When it was submitted for approval -->
-                <p
-                    v-if="chainPlan.approval.submitted_at"
-                    class="flex items-center gap-1.5 text-xs text-slate-500"
-                >
-                    <i class="fa-solid fa-paper-plane text-slate-300" />
-                    <span>{{ t.approvalFlow.submittedAt }}: {{ fmtDateTime(chainPlan.approval.submitted_at) }}</span>
-                </p>
-
-                <ol class="space-y-3">
-                    <li
-                        v-for="step in chainPlan.approval.steps"
-                        :key="step.level"
-                        class="flex gap-3"
-                    >
-                        <div class="flex flex-col items-center">
-                            <span
-                                class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ring-1 ring-inset"
-                                :class="step.status === 'approved'
-                                    ? 'bg-emerald-50 text-emerald-600 ring-emerald-200'
-                                    : step.status === 'rejected'
-                                        ? 'bg-red-50 text-red-600 ring-red-200'
-                                        : chainPlan.approval.current_level === step.level && chainPlan.approval.status === 'pending'
-                                            ? 'bg-amber-50 text-amber-600 ring-amber-200'
-                                            : 'bg-slate-50 text-slate-400 ring-slate-200'"
-                            >
-                                {{ t.approvalFlow.layerShort }}{{ step.level }}
-                            </span>
-                            <span
-                                v-if="step.level < chainPlan.approval.steps.length"
-                                class="mt-1 w-px flex-1 bg-border"
-                            />
-                        </div>
-                        <div class="min-w-0 flex-1 pb-1">
-                            <div class="flex items-center gap-2">
-                                <i :class="[stepIcon(step.status).icon, stepIcon(step.status).color]" class="text-xs" />
-                                <span class="truncate text-sm font-semibold text-slate-800">
-                                    {{ step.approver_name ?? step.approver_id }}
-                                </span>
-                            </div>
-                            <p class="text-xs text-slate-400">
-                                <template v-if="step.status === 'approved'">{{ t.approvalFlow.approvedBy }}</template>
-                                <template v-else-if="step.status === 'rejected'">{{ t.approvalFlow.rejectedBy }}</template>
-                                <template v-else>{{ t.approvalFlow.pending }}</template>
-                                <span v-if="step.acted_at"> · {{ fmtDateTime(step.acted_at) }}</span>
-                            </p>
-                            <p
-                                v-if="step.note"
-                                class="mt-1 rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600"
-                            >
-                                <i class="fa-solid fa-quote-left mr-1 text-[10px] text-slate-300" />
-                                {{ step.note }}
-                            </p>
-                        </div>
-                    </li>
-                </ol>
-            </div>
-
-            <template #footer>
-                <button
-                    type="button"
-                    class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
-                    @click="chainOpen = false"
-                >
-                    {{ t.approvalFlow.cancel }}
                 </button>
             </template>
         </Drawer>

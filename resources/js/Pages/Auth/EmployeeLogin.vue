@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Head, Link, router } from '@inertiajs/vue3'
 import AuthLayout from '@/Layouts/AuthLayout.vue'
 import AuthBrand from '@/Components/UI/AuthBrand.vue'
@@ -16,31 +16,68 @@ interface EmployeeResult {
     group_company: string | null
 }
 
+// The server refuses to search on a shorter term, so it decides the threshold.
+const props = withDefaults(defineProps<{ minSearchLength?: number }>(), {
+    minSearchLength: 2,
+})
+
 const query = ref('')
 const results = ref<EmployeeResult[]>([])
 const searching = ref(false)
 const submittingId = ref<string | null>(null)
 
+const term = computed(() => query.value.trim())
+const longEnough = computed(() => term.value.length >= props.minSearchLength)
+
 let debounce: ReturnType<typeof setTimeout> | undefined
+// Every search carries a sequence number; a reply that is not the latest one
+// is dropped, so a slow early request can never overwrite a newer result set.
+let sequence = 0
 
 watch(query, () => {
     clearTimeout(debounce)
+
+    if (!longEnough.value) {
+        sequence += 1
+        results.value = []
+        searching.value = false
+
+        return
+    }
+
+    searching.value = true
     debounce = setTimeout(runSearch, 300)
 })
 
 async function runSearch() {
+    const current = ++sequence
+    const q = term.value
+
     searching.value = true
+
     try {
         const res = await fetch(
-            `${route('dev.login.search')}?q=${encodeURIComponent(query.value)}`,
+            `${route('dev.login.search')}?q=${encodeURIComponent(q)}`,
             { headers: { Accept: 'application/json' } },
         )
-        results.value = res.ok ? await res.json() : []
+        const found = res.ok ? await res.json() : []
+
+        if (current === sequence) {
+            results.value = found
+        }
     } catch {
-        results.value = []
+        if (current === sequence) {
+            results.value = []
+        }
     } finally {
-        searching.value = false
+        if (current === sequence) {
+            searching.value = false
+        }
     }
+}
+
+function clearSearch() {
+    query.value = ''
 }
 
 function loginAs(employee: EmployeeResult) {
@@ -51,9 +88,6 @@ function loginAs(employee: EmployeeResult) {
         { onFinish: () => (submittingId.value = null) },
     )
 }
-
-// Show an initial page of employees on load.
-runSearch()
 </script>
 
 <template>
@@ -77,6 +111,8 @@ runSearch()
             <input
                 v-model="query"
                 type="text"
+                autofocus
+                autocomplete="off"
                 :placeholder="t.auth.searchPlaceholder"
                 class="w-full rounded-md border border-border py-2.5 pl-9 pr-9 text-sm transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
             >
@@ -84,10 +120,31 @@ runSearch()
                 v-if="searching"
                 class="fa-solid fa-spinner fa-spin absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400"
             />
+            <button
+                v-else-if="query !== ''"
+                type="button"
+                :aria-label="t.auth.clearSearch"
+                :title="t.auth.clearSearch"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400 transition-colors hover:text-slate-600"
+                @click="clearSearch"
+            >
+                <i class="fa-solid fa-xmark" />
+            </button>
         </div>
 
+        <!-- Nothing is searched until the term is long enough. -->
+        <p
+            v-if="!longEnough"
+            class="mt-4 rounded-md border border-dashed border-border py-8 text-center text-sm text-slate-400"
+        >
+            {{ t.auth.typeToSearch.replace(':count', String(props.minSearchLength)) }}
+        </p>
+
         <!-- Results -->
-        <ul class="mt-4 max-h-80 space-y-2 overflow-y-auto">
+        <ul
+            v-else
+            class="mt-4 max-h-80 space-y-2 overflow-y-auto"
+        >
             <li
                 v-for="emp in results"
                 :key="emp.employee_id"
@@ -117,7 +174,14 @@ runSearch()
             </li>
 
             <li
-                v-if="!searching && results.length === 0"
+                v-if="searching && results.length === 0"
+                class="rounded-md border border-dashed border-border py-8 text-center text-sm text-slate-400"
+            >
+                {{ t.auth.searching }}
+            </li>
+
+            <li
+                v-else-if="!searching && results.length === 0"
                 class="rounded-md border border-dashed border-border py-8 text-center text-sm text-slate-400"
             >
                 {{ t.auth.noResults }}

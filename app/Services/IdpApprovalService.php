@@ -9,64 +9,138 @@ use App\Models\IdpApproval;
 use App\Models\IdpApprovalStep;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\User;
+use App\Services\Idp\IdpStageService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\ValidationException;
 
 /**
- * The approval runtime for IDP items. Submitting an item snapshots the
- * employee's approval chain and opens a staged workflow (L1 → L2 → …). Only the
- * approver whose turn it currently is may act; each decision carries a required
- * note. Every transition raises an in-app notification: a "need approval" alert
- * to the next approver, and the approved / rejected outcome back to the
- * submitter and the IDP owner.
+ * The approval runtime for both IDP stages.
+ *
+ *  - PLANNING: the employee's whole plan set for one development-model package
+ *    is submitted once and walks the chain once. Approving the final layer
+ *    stamps every plan in the set as planning-approved, which is what opens the
+ *    result stage.
+ *  - RESULT: each program's realization + evidence is submitted on its own and
+ *    walks the chain on its own.
+ *
+ * Either way, submitting snapshots the employee's approval chain and opens a
+ * staged workflow (L1 → L2 → …). Only the approver whose turn it currently is
+ * may act; each decision carries a required note. Every transition raises an
+ * in-app notification and an email: a "need approval" alert to the next
+ * approver, and the outcome back to the submitter and the IDP owner.
  */
 class IdpApprovalService
 {
-    public function __construct(private readonly ApprovalChainService $chain) {}
+    public function __construct(
+        private readonly ApprovalChainService $chain,
+        private readonly IdpStageService $stage,
+    ) {}
+
+    // ---------------------------------------------------------------- planning
 
     /**
-     * Open (or re-open) the approval workflow for an IDP item. A rejected item
-     * can be resubmitted, which starts a fresh chain from L1.
+     * Submit an employee's whole plan set for one package for planning
+     * approval. A revised set opens a NEW approval, so each round keeps its own
+     * chain and decisions.
      *
-     * @throws ValidationException when the workflow cannot be started.
+     * @throws ValidationException when the stage cannot be opened.
      */
-    public function submit(IndividualDevelopmentPlan $plan, User $user): IdpApproval
+    public function submitPlanning(string $employeeId, int $packageId, User $user): IdpApproval
     {
-        $existing = IdpApproval::where('individual_development_plan_id', $plan->id)->first();
+        $current = $this->stage->planningApproval($employeeId, $packageId);
+
+        if ($current?->status === 'pending') {
+            throw ValidationException::withMessages([
+                'approval' => 'This development plan is already awaiting planning approval.',
+            ]);
+        }
+
+        $plans = $this->stage->plansIn($employeeId, $packageId);
+
+        if ($plans->isEmpty()) {
+            throw ValidationException::withMessages([
+                'approval' => 'Add at least one development plan before submitting the planning for approval.',
+            ]);
+        }
+
+        // Nothing to approve: every row already carries a sign-off. Keyed on the
+        // rows rather than the header, for the same reason planningStatus() is.
+        if ($plans->every->isPlanningApproved()) {
+            throw ValidationException::withMessages([
+                'approval' => 'This development plan has already been approved and nothing has changed since.',
+            ]);
+        }
+
+        $layers = $this->requireLayers($employeeId);
+
+        return DB::transaction(function () use ($employeeId, $packageId, $user, $layers) {
+            $approval = IdpApproval::create([
+                'stage' => IdpApproval::STAGE_PLANNING,
+                'individual_development_plan_id' => null,
+                'development_model_package_id' => $packageId,
+                'employee_id' => $employeeId,
+                'status' => 'pending',
+                'current_level' => 1,
+                'layers' => $layers,
+                'submitted_by' => $user->id,
+                'submitted_at' => now(),
+            ]);
+
+            return $this->startChain($approval, $user, $layers);
+        });
+    }
+
+    // ------------------------------------------------------------------ result
+
+    /**
+     * Submit one program's result for approval. The row must already be part of
+     * an approved planning set, and must carry its realization date + evidence.
+     *
+     * @throws ValidationException
+     */
+    public function submitResult(IndividualDevelopmentPlan $plan, User $user): IdpApproval
+    {
+        $existing = IdpApproval::result()
+            ->where('individual_development_plan_id', $plan->id)
+            ->first();
 
         if ($existing && $existing->status === 'pending') {
             throw ValidationException::withMessages([
-                'approval' => 'This item is already awaiting approval.',
+                'approval' => 'The result of this program is already awaiting approval.',
             ]);
         }
 
         if ($existing && $existing->status === 'approved') {
             throw ValidationException::withMessages([
-                'approval' => 'This item has already been approved.',
+                'approval' => 'The result of this program has already been approved.',
             ]);
         }
 
-        // An item can only be submitted once it is completed (realized).
-        if (blank($plan->realization_date)) {
+        if (! $plan->isPlanningApproved()) {
             throw ValidationException::withMessages([
-                'approval' => 'This item must be completed (fill the realization date) before it can be submitted for approval.',
+                'approval' => 'The planning for this program has not been approved yet, so its result cannot be submitted.',
             ]);
         }
 
-        $layers = $this->chain->layersFor($plan->employee_id);
-
-        if (empty($layers)) {
+        if (! $plan->isRealized()) {
             throw ValidationException::withMessages([
-                'approval' => 'No approval superiors are configured for this employee. Set them on the Approval Layer screen first.',
+                'approval' => 'Fill in the realization date and the result evidence before submitting this result.',
             ]);
         }
+
+        $layers = $this->requireLayers($plan->employee_id);
 
         return DB::transaction(function () use ($plan, $user, $layers) {
             $approval = IdpApproval::updateOrCreate(
-                ['individual_development_plan_id' => $plan->id],
                 [
+                    'individual_development_plan_id' => $plan->id,
+                ],
+                [
+                    'stage' => IdpApproval::STAGE_RESULT,
+                    'development_model_package_id' => null,
                     'employee_id' => $plan->employee_id,
                     'status' => 'pending',
                     'current_level' => 1,
@@ -76,37 +150,50 @@ class IdpApprovalService
                 ],
             );
 
-            // Start each chain fresh.
+            // Start each chain fresh, so a rejected result resubmits from L1.
             $approval->steps()->delete();
 
-            foreach ($layers as $index => $approverId) {
-                IdpApprovalStep::create([
-                    'idp_approval_id' => $approval->id,
-                    'level' => $index + 1,
-                    'approver_employee_id' => $approverId,
-                    'status' => 'pending',
-                ]);
-            }
-
-            $approval->load('steps');
-
-            // Auto-approve the submitter's own layer (and any earlier layers).
-            // If the person submitting is themselves an approver in the chain —
-            // e.g. L1 submitting for their own team member — their approval is
-            // implicit, so the workflow skips straight to the next layer.
-            $submitterIndex = filled($user->employee_id)
-                ? array_search($user->employee_id, $layers, true)
-                : false;
-
-            if ($submitterIndex !== false) {
-                return $this->autoApproveThrough($approval, $user, $submitterIndex + 1);
-            }
-
-            // Normal flow: notify the first approver that their action is needed.
-            $this->notifyApprover($approval, 1);
-
-            return $approval;
+            return $this->startChain($approval, $user, $layers);
         });
+    }
+
+    // ------------------------------------------------------------- the chain
+
+    /**
+     * Lay out the steps for a freshly opened workflow and hand it to its first
+     * approver — or straight past the submitter's own layers, if they are in
+     * the chain themselves.
+     *
+     * @param  list<string>  $layers
+     */
+    private function startChain(IdpApproval $approval, User $user, array $layers): IdpApproval
+    {
+        foreach ($layers as $index => $approverId) {
+            IdpApprovalStep::create([
+                'idp_approval_id' => $approval->id,
+                'level' => $index + 1,
+                'approver_employee_id' => $approverId,
+                'status' => 'pending',
+            ]);
+        }
+
+        $approval->load('steps');
+
+        // Auto-approve the submitter's own layer (and any earlier layers). If
+        // the person submitting is themselves an approver in the chain — e.g. L1
+        // submitting for their own team member — their approval is implicit, so
+        // the workflow skips straight to the next layer.
+        $submitterIndex = filled($user->employee_id)
+            ? array_search($user->employee_id, $layers, true)
+            : false;
+
+        if ($submitterIndex !== false) {
+            return $this->autoApproveThrough($approval, $user, $submitterIndex + 1);
+        }
+
+        $this->notifyApprover($approval, 1);
+
+        return $approval;
     }
 
     /**
@@ -120,7 +207,7 @@ class IdpApprovalService
             if ($step->level <= $throughLevel && $step->status === 'pending') {
                 $step->update([
                     'status' => 'approved',
-                    'note' => 'Auto-approved on submission (submitted by this approver).',
+                    'note' => IdpApprovalStep::AUTO_NOTE,
                     'acted_by' => $user->id,
                     'acted_by_name' => $user->name,
                     'acted_at' => now(),
@@ -132,6 +219,7 @@ class IdpApprovalService
             // The submitter is the final approver — nothing left to sign off.
             $approval->update(['current_level' => $throughLevel, 'status' => 'approved']);
             $approval->load('steps');
+            $this->finalizeApproved($approval);
             $this->notifyOutcome($approval, 'approval_approved');
 
             return $approval;
@@ -139,7 +227,6 @@ class IdpApprovalService
 
         $approval->update(['current_level' => $throughLevel + 1]);
         $approval->load('steps');
-        // Hand off to the next pending layer.
         $this->notifyApprover($approval, $throughLevel + 1);
 
         return $approval;
@@ -172,6 +259,7 @@ class IdpApprovalService
             } else {
                 $approval->update(['status' => 'approved']);
                 $approval->load('steps');
+                $this->finalizeApproved($approval);
                 $this->notifyOutcome($approval, 'approval_approved');
             }
 
@@ -181,7 +269,7 @@ class IdpApprovalService
 
     /**
      * Record the current approver's rejection. The chain stops; the owner can
-     * revise the item and resubmit from L1.
+     * revise and resubmit from L1.
      *
      * @throws ValidationException
      */
@@ -207,6 +295,49 @@ class IdpApprovalService
     }
 
     /**
+     * What a fully approved workflow does beyond flipping its own status: a
+     * planning approval stamps every plan in its package as planning-approved,
+     * which is what opens the result stage for those rows.
+     */
+    private function finalizeApproved(IdpApproval $approval): void
+    {
+        if (! $approval->isPlanning() || ! $approval->development_model_package_id) {
+            return;
+        }
+
+        $modelIds = $this->stage->modelIdsFor($approval->development_model_package_id);
+
+        if (empty($modelIds)) {
+            return;
+        }
+
+        IndividualDevelopmentPlan::where('employee_id', $approval->employee_id)
+            ->whereIn('development_model_id', $modelIds)
+            ->whereNull('planning_approved_at')
+            ->update(['planning_approved_at' => now()]);
+    }
+
+    /**
+     * The employee's approval chain, refused when there is none configured.
+     *
+     * @return list<string>
+     *
+     * @throws ValidationException
+     */
+    private function requireLayers(string $employeeId): array
+    {
+        $layers = $this->chain->layersFor($employeeId);
+
+        if (empty($layers)) {
+            throw ValidationException::withMessages([
+                'approval' => 'No approval superiors are configured for this employee. Set them on the Approval Layer screen first.',
+            ]);
+        }
+
+        return $layers;
+    }
+
+    /**
      * The approval steps currently awaiting a given user's action (they are the
      * approver for the layer whose turn it is on a still-pending workflow).
      *
@@ -221,7 +352,7 @@ class IdpApprovalService
         return IdpApprovalStep::query()
             ->where('approver_employee_id', $user->employee_id)
             ->where('status', 'pending')
-            ->with('approval.plan')
+            ->with(['approval.plan', 'approval.package'])
             ->get()
             ->filter(fn (IdpApprovalStep $step) => $step->approval
                 && $step->approval->status === 'pending'
@@ -232,6 +363,55 @@ class IdpApprovalService
     public function pendingCountFor(User $user): int
     {
         return $this->pendingFor($user)->count();
+    }
+
+    /**
+     * The approval steps this user has already decided — their approval
+     * history, newest decision first.
+     *
+     * Keyed on who ACTED rather than on whose layer it is: the two differ when
+     * a chain auto-approves on submission, where one person's submission signs
+     * off their own layer and every layer below it. What they caused belongs in
+     * their history; a layer somebody else signed off on their behalf does not.
+     * Rows predating `acted_by` fall back to the layer's approver, the best
+     * attribution they carry.
+     *
+     * @return Collection<int, IdpApprovalStep>
+     */
+    public function decidedBy(User $user): Collection
+    {
+        return $this->decidedQuery($user)
+            ->with(['approval.plan', 'approval.package', 'approval.steps'])
+            ->orderByDesc('acted_at')
+            ->orderByDesc('id')
+            ->get()
+            ->filter(fn (IdpApprovalStep $step) => (bool) $step->approval)
+            ->values();
+    }
+
+    /**
+     * How many decisions this user has recorded — the same set decidedBy()
+     * returns, counted without loading it.
+     */
+    public function decidedCountFor(User $user): int
+    {
+        return $this->decidedQuery($user)->count();
+    }
+
+    private function decidedQuery(User $user): Builder
+    {
+        return IdpApprovalStep::query()
+            ->whereIn('status', ['approved', 'rejected'])
+            ->whereHas('approval')
+            ->where(function (Builder $query) use ($user) {
+                $query->where('acted_by', $user->id);
+
+                if (filled($user->employee_id)) {
+                    $query->orWhere(fn (Builder $legacy) => $legacy
+                        ->whereNull('acted_by')
+                        ->where('approver_employee_id', $user->employee_id));
+                }
+            });
     }
 
     /**
@@ -253,7 +433,7 @@ class IdpApprovalService
     {
         if ($approval->status !== 'pending') {
             throw ValidationException::withMessages([
-                'approval' => 'This item is no longer awaiting approval.',
+                'approval' => 'This request is no longer awaiting approval.',
             ]);
         }
 
@@ -261,12 +441,14 @@ class IdpApprovalService
 
         if (! $step || $step->approver_employee_id !== $user->employee_id) {
             throw ValidationException::withMessages([
-                'approval' => 'You are not the approver for the current layer of this item.',
+                'approval' => 'You are not the approver for the current layer of this request.',
             ]);
         }
 
         return $step;
     }
+
+    // ----------------------------------------------------------- notifications
 
     /**
      * Send a "need approval" alert to the approver of the given layer — in-app
@@ -283,8 +465,17 @@ class IdpApprovalService
 
         $ownerName = $this->employeeName($approval->employee_id);
         $approverId = $step->approver_employee_id;
-        $title = 'IDP approval needed';
-        $message = "{$ownerName} needs your approval (Layer {$level}) for a development plan item.";
+
+        if ($approval->isPlanning()) {
+            $count = $this->stage->plansIn($approval->employee_id, (int) $approval->development_model_package_id)->count();
+            $title = 'IDP planning approval needed';
+            $message = "{$ownerName} needs your approval (Layer {$level}) for their development plan — {$count} program(s).";
+        } else {
+            $program = $approval->plan?->development_program;
+            $title = 'IDP result approval needed';
+            $message = "{$ownerName} needs your approval (Layer {$level}) for the result of a development program"
+                .($program ? ": {$program}." : '.');
+        }
 
         $user = User::where('employee_id', $approverId)->first();
 
@@ -321,9 +512,21 @@ class IdpApprovalService
     private function notifyOutcome(IdpApproval $approval, string $type): void
     {
         $ownerName = $this->employeeName($approval->employee_id);
-        $decided = $type === 'approval_approved' ? 'approved' : 'rejected';
-        $title = $type === 'approval_approved' ? 'IDP item approved' : 'IDP item rejected';
-        $message = "The development plan item for {$ownerName} was {$decided}.";
+        $approved = $type === 'approval_approved';
+        $decided = $approved ? 'approved' : 'rejected';
+
+        if ($approval->isPlanning()) {
+            $title = $approved ? 'IDP planning approved' : 'IDP planning rejected';
+            $message = "The development plan for {$ownerName} was {$decided}."
+                .($approved ? ' Results can now be submitted for its programs.' : ' Revise it and submit it again.');
+        } else {
+            $program = $approval->plan?->development_program;
+            $title = $approved ? 'IDP result approved' : 'IDP result rejected';
+            $message = "The result for {$ownerName}"
+                .($program ? " on \"{$program}\"" : '')
+                ." was {$decided}.";
+        }
+
         $link = '/idp/'.$approval->employee_id;
         $url = $this->absoluteUrl($link);
 

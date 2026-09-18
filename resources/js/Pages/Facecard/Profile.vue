@@ -14,6 +14,7 @@ import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDate as fmtDate, formatDateTime } from '@/Composables/useDate'
 import { route } from '@/Config/route'
+import type { PackageOption, PlanningState, StageProgress } from '@/types/idp'
 
 const { t } = useLocale()
 
@@ -89,14 +90,21 @@ const props = defineProps<{
     canDownloadFacecard: boolean
     canViewIdp: boolean
     canDownloadIdp: boolean
-    // IDP tab (rendered inline via IdpPanel)
+    // IDP tab (rendered inline via IdpPanel) — the same payload the manage
+    // screen gets, including the two-stage workflow state.
     developmentModels: any[]
     options: {
+        competencyTypes: MasterOption[]
         competencyNames: MasterOption[]
         developmentPrograms: MasterOption[]
         reviewTools: MasterOption[]
     }
     competencyMap: Record<string, Array<MasterOption & { model_id: number | null }>>
+    planning: PlanningState
+    progress: StageProgress
+    packages: PackageOption[]
+    selectedPackageId: number | null
+    viewingActive: boolean
 }>()
 
 const emp = props.employee.data
@@ -567,6 +575,12 @@ function deletePhoto() {
                 :development-models="developmentModels"
                 :options="options"
                 :competency-map="competencyMap"
+                :planning="planning"
+                :progress="progress"
+                :packages="packages"
+                :selected-package-id="selectedPackageId"
+                :viewing-active="viewingActive"
+                :reload-url="route('employee.profile', emp.employee_id)"
                 :can-edit="false"
             />
         </div>

@@ -2,11 +2,12 @@
 
 namespace App\Imports;
 
-use App\Models\Competency;
+use App\Imports\Support\SkipsForeignSheets;
+use App\Models\CompetencyType;
 use App\Models\DevelopmentModel;
-use App\Models\DevelopmentProgram;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\ReviewTool;
+use App\Services\Idp\Rules\PlanMasterRules;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Concerns\ToCollection;
@@ -17,30 +18,37 @@ use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
  * Imports Individual Development Plans for a SINGLE employee (the "Upload
  * Development Plan" action on the IDP manage page). Each row adds a new plan.
  *
- * Rows are validated against the IDP master data:
- *  - development_model resolves by name or percentage
- *  - review_tools must exist in the master list (when given)
- *  - for a Soft Competency, competency_name + development_program must be a
- *    valid, linked combination in the master data
+ * It is a PLANNING import: a row carries what the plan drawer carries and
+ * nothing more. The realization date and the result evidence belong to stage 3
+ * and are filed per program through the result drawer, so that a result always
+ * passes the approval gate — a spreadsheet cannot slip one past it.
  *
- * Valid rows are created; invalid rows are skipped and reported via errors().
+ * Rows are validated by **`PlanMasterRules`**, the very object the plan form
+ * validates through, so the import cannot accept a plan the screen would reject
+ * and the two can never drift apart. Only the shape checks (required, dates,
+ * lengths) are done here.
+ *
+ * Everything is scoped to ONE development-model cycle: `development_model` is
+ * resolved against that package's models only, so a row can never land in
+ * another cycle.
  */
 class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRow
 {
-    /** development-model key (lowercase name / percentage) => id */
+    use SkipsForeignSheets;
+
+    /**
+     * What identifies the sheet that is actually imported. `time_frame_start`
+     * is the discriminator: the "Ref - Valid Combinations" tab carries the same
+     * four naming columns, so matching on those alone would read the reference
+     * rows as plans.
+     */
+    private const OUR_HEADINGS = ['development_model', 'competency_type', 'time_frame_start'];
+
+    /** development-model key (lowercase name / percentage) => id, this cycle only */
     private array $modelsMap = [];
 
-    /** lowercase competency name => canonical name */
-    private array $canonicalCompetency = [];
-
-    /** lowercase competency name => id */
-    private array $competencyMap = [];
-
-    /** "{modelId}_{lower program}" => program id */
-    private array $programMap = [];
-
-    /** competency id => string[] of linked program ids */
-    private array $relationsMap = [];
+    /** lowercase competency-type name => canonical name */
+    private array $competencyTypes = [];
 
     /** lowercase review-tool names */
     private array $validReviewTools = [];
@@ -50,26 +58,24 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
     /** @var array<int, string> */
     private array $errors = [];
 
-    public function __construct(private readonly string $employeeId)
-    {
-        foreach (DevelopmentModel::all() as $model) {
+    /**
+     * @param  list<int>  $modelIds  the models of the cycle being imported into
+     */
+    public function __construct(
+        private readonly string $employeeId,
+        array $modelIds,
+        private readonly PlanMasterRules $rules = new PlanMasterRules,
+    ) {
+        foreach (DevelopmentModel::whereIn('id', $modelIds ?: [0])->get() as $model) {
             $this->modelsMap[strtolower(trim($model->name))] = $model->id;
             $this->modelsMap[(string) $model->percentage] = $model->id;
             $this->modelsMap[$model->percentage.'%'] = $model->id;
         }
 
-        $competencies = Competency::with('developmentPrograms:id')->get();
-        foreach ($competencies as $competency) {
-            $key = strtolower(trim($competency->name_en));
-            $this->competencyMap[$key] = $competency->id;
-            $this->canonicalCompetency[$key] = $competency->name_en;
-            $this->relationsMap[$competency->id] = $competency->developmentPrograms
-                ->pluck('id')->map('strval')->all();
-        }
-
-        foreach (DevelopmentProgram::all() as $program) {
-            $key = $program->development_model_id.'_'.strtolower(trim($program->name_en));
-            $this->programMap[$key] = (string) $program->id;
+        // Every configured type, not a hard-coded pair: the catch-all "Others"
+        // and anything the client adds later are just as valid.
+        foreach (CompetencyType::get(['id', 'name_en']) as $type) {
+            $this->competencyTypes[strtolower(trim($type->name_en))] = $type->name_en;
         }
 
         $this->validReviewTools = ReviewTool::pluck('name_en')
@@ -79,6 +85,12 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
 
     public function collection(Collection $rows): void
     {
+        // A single-sheet importer is handed EVERY sheet in the workbook, and
+        // this template carries reference tabs.
+        if (! $this->isOurSheet($rows, self::OUR_HEADINGS)) {
+            return;
+        }
+
         foreach ($rows as $index => $row) {
             $line = $index + 2; // +1 heading row, +1 for 1-based display
 
@@ -89,32 +101,33 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
                 continue;
             }
 
-            $error = $this->validate($data, $line);
-            if ($error !== null) {
+            if ($error = $this->validateShape($data, $line)) {
                 $this->errors[] = $error;
 
                 continue;
             }
 
-            $modelId = $this->resolveModelId($data['development_model']);
-            $competencyName = $data['competency_name'];
-            if ($data['competency_type'] === 'Soft Competency') {
-                $competencyName = $this->canonicalCompetency[strtolower($competencyName)] ?? $competencyName;
-            }
-
-            IndividualDevelopmentPlan::create([
+            $attributes = [
                 'employee_id' => $this->employeeId,
-                'development_model_id' => $modelId,
-                'competency_type' => $data['competency_type'],
-                'competency_name' => $competencyName,
+                'development_model_id' => $this->resolveModelId($data['development_model']),
+                // Store the master's own spelling, not whatever case was typed.
+                'competency_type' => $this->competencyTypes[strtolower($data['competency_type'])] ?? $data['competency_type'],
+                'competency_name' => $data['competency_name'],
                 'development_program' => $data['development_program'],
                 'review_tools' => $data['review_tools'],
                 'expected_outcome' => $data['expected_outcome'],
                 'time_frame_start' => $data['time_frame_start'],
                 'time_frame_end' => $data['time_frame_end'],
-                'realization_date' => $data['realization_date'],
-                'result_evidence' => $data['result_evidence'],
-            ]);
+            ];
+
+            // The screen's own cascade, run verbatim.
+            if ($cascade = $this->rules->check($attributes)) {
+                $this->errors[] = "Row {$line}: ".reset($cascade);
+
+                continue;
+            }
+
+            IndividualDevelopmentPlan::create($attributes);
 
             $this->imported++;
         }
@@ -128,7 +141,9 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
     /** @return array<int, string> */
     public function errors(): array
     {
-        return $this->errors;
+        // Says so when no sheet matched at all, rather than reading as an empty
+        // file when it is really a mis-built one.
+        return $this->withSheetError($this->errors);
     }
 
     /**
@@ -147,8 +162,6 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
             'expected_outcome' => $get('expected_outcome') ?: null,
             'time_frame_start' => $this->parseDate($row->get('time_frame_start')),
             'time_frame_end' => $this->parseDate($row->get('time_frame_end')),
-            'realization_date' => $this->parseDate($row->get('realization_date')),
-            'result_evidence' => $get('result_evidence') ?: null,
         ];
     }
 
@@ -161,16 +174,24 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
     }
 
     /**
-     * Returns a human-readable error string, or null when the row is valid.
+     * The shape checks the cascade does not do: required fields, dates and
+     * lengths. Returns a human-readable error, or null when the row is well
+     * formed. Whether the values FIT the master data is PlanMasterRules' call.
      */
-    private function validate(array $data, int $line): ?string
+    private function validateShape(array $data, int $line): ?string
     {
-        if (! in_array($data['competency_type'], ['Soft Competency', 'Technical Competency'], true)) {
-            return "Row {$line}: competency_type must be 'Soft Competency' or 'Technical Competency'.";
+        if ($data['competency_type'] === '') {
+            return "Row {$line}: competency_type is required.";
+        }
+
+        if (! isset($this->competencyTypes[strtolower($data['competency_type'])])) {
+            $known = implode(', ', array_values($this->competencyTypes));
+
+            return "Row {$line}: competency_type '{$data['competency_type']}' is not a configured competency type (have: {$known}).";
         }
 
         if ($data['development_model'] === '' || $this->resolveModelId($data['development_model']) === null) {
-            return "Row {$line}: development_model '{$data['development_model']}' not found.";
+            return "Row {$line}: development_model '{$data['development_model']}' is not a model of the cycle being imported into.";
         }
 
         if ($data['competency_name'] === '') {
@@ -193,39 +214,8 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
             return "Row {$line}: time_frame_end cannot be before time_frame_start.";
         }
 
-        if ($data['realization_date']) {
-            if ($data['realization_date'] < $data['time_frame_start']) {
-                return "Row {$line}: realization_date cannot be before time_frame_start.";
-            }
-            if ($data['realization_date'] > now()->format('Y-m-d')) {
-                return "Row {$line}: realization_date cannot be a future date.";
-            }
-            if ($data['result_evidence'] === null) {
-                return "Row {$line}: result_evidence is required when realization_date is set.";
-            }
-        }
-
         if ($data['expected_outcome'] !== null && mb_strlen($data['expected_outcome']) > 500) {
             return "Row {$line}: expected_outcome must not exceed 500 characters.";
-        }
-
-        // Soft Competency: name + program must be a valid, linked combination.
-        if ($data['competency_type'] === 'Soft Competency') {
-            $competencyKey = strtolower($data['competency_name']);
-            if (! isset($this->competencyMap[$competencyKey])) {
-                return "Row {$line}: competency_name '{$data['competency_name']}' not found in master data.";
-            }
-
-            $modelId = $this->resolveModelId($data['development_model']);
-            $programId = $this->programMap[$modelId.'_'.strtolower($data['development_program'])] ?? null;
-            if ($programId === null) {
-                return "Row {$line}: development_program '{$data['development_program']}' is not valid for the selected model.";
-            }
-
-            $allowed = $this->relationsMap[$this->competencyMap[$competencyKey]] ?? [];
-            if (! in_array($programId, $allowed, true)) {
-                return "Row {$line}: '{$data['development_program']}' is not linked to competency '{$data['competency_name']}'.";
-            }
         }
 
         return null;

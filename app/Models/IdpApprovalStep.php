@@ -11,6 +11,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class IdpApprovalStep extends Model
 {
+    /**
+     * The note a layer carries when it was signed off implicitly, because the
+     * person submitting the request is themselves an approver on the chain.
+     * A constant so the history can tell such a step from a real decision
+     * without matching on prose.
+     */
+    public const AUTO_NOTE = 'Auto-approved on submission (submitted by this approver).';
+
     protected $connection = 'mysql';
 
     protected $table = 'idp_approval_steps';
@@ -34,5 +42,13 @@ class IdpApprovalStep extends Model
     public function approval(): BelongsTo
     {
         return $this->belongsTo(IdpApproval::class, 'idp_approval_id');
+    }
+
+    /**
+     * Signed off implicitly on submission rather than actually decided.
+     */
+    public function isAutoApproved(): bool
+    {
+        return $this->status === 'approved' && $this->note === self::AUTO_NOTE;
     }
 }

@@ -6,42 +6,34 @@ import PageHeader from '@/Components/UI/PageHeader.vue'
 import IdpPanel from '@/Components/Domain/IdpPanel.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
+import type {
+    DevelopmentModelView,
+    MasterOption,
+    PackageOption,
+    PlanningState,
+    ProgramOption,
+    StageProgress,
+} from '@/types/idp'
 
 const { t } = useLocale()
 
 const panel = ref<InstanceType<typeof IdpPanel> | null>(null)
 
-interface MasterOption {
-    value: string
-    value_en: string | null
-    value_id: string | null
-}
-
-interface Plan {
-    id: number
-    realization_date: string | null
-    [key: string]: any
-}
-
-interface Model {
-    id: number
-    name: string
-    percentage: number
-    description_en: string | null
-    description_id: string | null
-    can_add: boolean
-    plans: Plan[]
-}
-
 const props = defineProps<{
     employee: { data: { employee_id: string; fullname: string; designation_name: string | null } }
-    developmentModels: Model[]
+    developmentModels: DevelopmentModelView[]
     options: {
+        competencyTypes: MasterOption[]
         competencyNames: MasterOption[]
-        developmentPrograms: MasterOption[]
+        developmentPrograms: ProgramOption[]
         reviewTools: MasterOption[]
     }
-    competencyMap: Record<string, Array<MasterOption & { model_id: number | null }>>
+    competencyMap: Record<string, ProgramOption[]>
+    planning: PlanningState
+    progress: StageProgress
+    packages: PackageOption[]
+    selectedPackageId: number | null
+    viewingActive: boolean
 }>()
 
 const emp = props.employee.data
@@ -62,14 +54,14 @@ const emp = props.employee.data
                     {{ t.idp.upload.button }}
                 </button>
                 <a
-                    :href="route('idp.download_pdf', emp.employee_id)"
+                    :href="route('idp.download_pdf', { employeeId: emp.employee_id, package: selectedPackageId })"
                     class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
                 >
                     <i class="fa-solid fa-file-pdf text-xs" />
                     {{ t.idp.downloadPdf }}
                 </a>
                 <a
-                    :href="route('idp.export', emp.employee_id)"
+                    :href="route('idp.export', { employeeId: emp.employee_id, package: selectedPackageId })"
                     class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
                 >
                     <i class="fa-solid fa-file-excel text-xs" />
@@ -91,6 +83,12 @@ const emp = props.employee.data
             :development-models="developmentModels"
             :options="options"
             :competency-map="competencyMap"
+            :planning="planning"
+            :progress="progress"
+            :packages="packages"
+            :selected-package-id="selectedPackageId"
+            :viewing-active="viewingActive"
+            :reload-url="route('idp.show', emp.employee_id)"
         />
     </AppLayout>
 </template>

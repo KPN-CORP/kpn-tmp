@@ -151,7 +151,11 @@ class EmployeeController extends Controller
 
         $resultSummary = ResultSummary::where('employee_id', $employeeId)->first();
 
-        return Inertia::render('Facecard/Profile', array_merge($this->idp->manageData($employeeId, $user), [
+        // The profile's IDP tab is read-only, but it reads the same cycle
+        // picker — so a past package's plans can be looked at from here too.
+        $idp = $this->idp->manageData($employeeId, $user, packageId: $request->integer('package') ?: null);
+
+        return Inertia::render('Facecard/Profile', array_merge($idp, [
             'employee' => new EmployeeResource($employee),
             'photoUrl' => $this->photoUrl($employeeId),
             'formalEducations' => $this->safeGet(fn () => FormalEducation::where('employee_id', $employeeId)

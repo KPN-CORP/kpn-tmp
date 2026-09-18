@@ -60,8 +60,16 @@ class DevLoginController extends Controller
             return redirect()->route('dev.login');
         }
 
-        return Inertia::render('Auth/EmployeeLogin');
+        return Inertia::render('Auth/EmployeeLogin', [
+            'minSearchLength' => self::MIN_SEARCH_LENGTH,
+        ]);
     }
+
+    /**
+     * Shortest term the picker will search on. Below this the endpoint returns
+     * nothing rather than the head of the whole employee master.
+     */
+    public const MIN_SEARCH_LENGTH = 2;
 
     public function search(Request $request): JsonResponse
     {
@@ -69,14 +77,16 @@ class DevLoginController extends Controller
 
         $term = trim((string) $request->input('q', ''));
 
+        if (mb_strlen($term) < self::MIN_SEARCH_LENGTH) {
+            return response()->json([]);
+        }
+
         $employees = Employee::query()
-            ->when($term !== '', function ($query) use ($term) {
-                $query->where(function ($sub) use ($term) {
-                    $sub->where('employee_id', 'like', "%{$term}%")
-                        ->orWhere('fullname', 'like', "%{$term}%")
-                        ->orWhere('designation_name', 'like', "%{$term}%")
-                        ->orWhere('group_company', 'like', "%{$term}%");
-                });
+            ->where(function ($sub) use ($term) {
+                $sub->where('employee_id', 'like', "%{$term}%")
+                    ->orWhere('fullname', 'like', "%{$term}%")
+                    ->orWhere('designation_name', 'like', "%{$term}%")
+                    ->orWhere('group_company', 'like', "%{$term}%");
             })
             ->orderBy('fullname')
             ->limit(30)

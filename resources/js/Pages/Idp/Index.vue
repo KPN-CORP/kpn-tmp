@@ -7,9 +7,19 @@ import Pagination from '@/Components/UI/Pagination.vue'
 import DataTable, { type Column, type Sort } from '@/Components/Domain/DataTable.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
+import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
 import { route } from '@/Config/route'
+import type { PackageOption, PlanningStatus, Tone } from '@/types/idp'
 
 const { t } = useLocale()
+
+/** Where one employee stands in the cycle the list is reporting on. */
+interface CycleStatus {
+    plans: number
+    status: PlanningStatus
+    current_level: number | null
+    total_levels: number | null
+}
 
 interface EmployeeRow {
     employee_id: string
@@ -17,6 +27,7 @@ interface EmployeeRow {
     group_company: string | null
     job_level: string | null
     designation_name: string | null
+    cycle: CycleStatus | null
 }
 
 interface Paginator {
@@ -42,6 +53,10 @@ const props = defineProps<{
         jobLevels: string[]
         designations: string[]
     }
+    /** Every cycle, so one can be picked; the list reports on one at a time. */
+    packages: PackageOption[]
+    selectedPackageId: number | null
+    viewingActive: boolean
 }>()
 
 const state = reactive({
@@ -59,8 +74,47 @@ const columns: Column[] = [
     { key: 'group_company', label: t.value.facecard.table.businessUnit },
     { key: 'job_level', label: t.value.facecard.table.jobLevel },
     { key: 'designation_name', label: t.value.facecard.table.designation },
+    { key: 'cycle', label: t.value.idp.table.planning, sortable: false },
     { key: 'action', label: '', thClass: 'text-right', tdClass: 'text-right' },
 ]
+
+// --- The cycle the list reports on ----------------------------------------
+
+// One cycle is no choice at all, so the picker only appears once there are two.
+const canPickPackage = computed(() => props.packages.length > 1)
+
+const packageOptions = computed<Option[]>(() =>
+    props.packages.map((pkg) => ({
+        value: String(pkg.id),
+        label: pkg.name + (pkg.is_active ? ` · ${t.value.idp.stage.activeCycle}` : ''),
+    })),
+)
+
+/**
+ * A row's planning standing, as the same chip the manage screen uses. The
+ * pending case names the layer it is sitting with, which is what tells a stalled
+ * plan from one that was only just submitted.
+ */
+function cyclePill(cycle: CycleStatus): { tone: Tone; label: string; icon: string } {
+    const s = t.value.idp.stage
+
+    switch (cycle.status) {
+        case 'pending':
+            return {
+                tone: 'amber',
+                icon: 'fa-solid fa-hourglass-half',
+                label: `${t.value.approvalFlow.waiting} ${t.value.approvalFlow.layerShort}${cycle.current_level ?? 1}`,
+            }
+        case 'approved':
+            return { tone: 'emerald', icon: 'fa-solid fa-circle-check', label: s.planApproved }
+        case 'rejected':
+            return { tone: 'red', icon: 'fa-solid fa-circle-xmark', label: s.planRejected }
+        case 'revision':
+            return { tone: 'sky', icon: 'fa-solid fa-rotate', label: s.planChanged }
+        default:
+            return { tone: 'slate', icon: 'fa-regular fa-pen-to-square', label: s.planDraft }
+    }
+}
 
 // --- Row selection (persists across pages while the component stays mounted) ---
 const selected = ref<string[]>([])
@@ -97,6 +151,7 @@ function reload() {
             business_unit: state.business_unit || undefined,
             job_level: state.job_level || undefined,
             designation: state.designation || undefined,
+            package: props.selectedPackageId ?? undefined,
             sort: props.sort.key,
             direction: props.sort.dir,
             per_page: state.per_page,
@@ -113,6 +168,7 @@ function changeSort(sort: Sort) {
             business_unit: state.business_unit || undefined,
             job_level: state.job_level || undefined,
             designation: state.designation || undefined,
+            package: props.selectedPackageId ?? undefined,
             sort: sort.key,
             direction: sort.dir,
             per_page: state.per_page,
@@ -180,7 +236,8 @@ async function startBulkDownload() {
                 'Content-Type': 'application/json',
                 'X-XSRF-TOKEN': xsrf,
             },
-            body: JSON.stringify({ employee_ids: selected.value }),
+            // The zip covers the cycle the list is showing, like the row links.
+            body: JSON.stringify({ employee_ids: selected.value, package: props.selectedPackageId }),
         })
         const { job_id } = await res.json()
         pollStatus(job_id)
@@ -215,6 +272,26 @@ function stopBulk() {
     clearInterval(poll)
     bulk.running = false
 }
+
+/** Switching cycles re-reports the same employees against another package. */
+function selectPackage(id: number) {
+    if (id === props.selectedPackageId) return
+
+    router.get(
+        route('idp.list'),
+        {
+            search: state.search || undefined,
+            business_unit: state.business_unit || undefined,
+            job_level: state.job_level || undefined,
+            designation: state.designation || undefined,
+            package: id,
+            sort: props.sort.key,
+            direction: props.sort.dir,
+            per_page: state.per_page,
+        },
+        { preserveState: true, preserveScroll: true, replace: true },
+    )
+}
 </script>
 
 <template>
@@ -243,6 +320,38 @@ function stopBulk() {
         <p v-if="bulk.error" class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {{ bulk.error }}
         </p>
+
+        <!-- Which cycle the list reports on. One cycle is no choice, so the
+             picker only appears once there are two. -->
+        <div
+            v-if="canPickPackage"
+            class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-white px-4 py-3"
+        >
+            <span class="flex items-center gap-2 text-sm font-medium text-slate-600">
+                <i class="fa-solid fa-diagram-project text-xs text-primary" />
+                {{ t.idp.stage.selectCycle }}
+            </span>
+
+            <SearchableSelect
+                class="min-w-[16rem]"
+                :model-value="selectedPackageId === null ? '' : String(selectedPackageId)"
+                :options="packageOptions"
+                :placeholder="t.idp.stage.selectCycle"
+                @update:model-value="(id: string) => selectPackage(Number(id))"
+            />
+
+            <StatusPill
+                :tone="viewingActive ? 'emerald' : 'slate'"
+                :icon="viewingActive ? 'fa-solid fa-circle-play' : 'fa-solid fa-box-archive'"
+                :label="viewingActive ? t.idp.stage.activeCycle : t.idp.stage.closedCycle"
+                :dot="false"
+                size="sm"
+            />
+
+            <p v-if="!viewingActive" class="text-xs text-slate-500">
+                {{ t.idp.listClosedCycle }}
+            </p>
+        </div>
 
         <!-- Filters -->
         <div class="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -319,9 +428,19 @@ function stopBulk() {
                     @change="toggleRow(row.employee_id)"
                 >
             </template>
+            <template #cell-cycle="{ row }">
+                <div v-if="row.cycle" class="flex flex-col items-start gap-1">
+                    <StatusPill v-bind="cyclePill(row.cycle)" :dot="false" size="sm" />
+                    <span class="text-[11px] text-slate-400">
+                        {{ row.cycle.plans }}
+                        {{ row.cycle.plans === 1 ? t.idp.planSingular : t.idp.planPlural }}
+                    </span>
+                </div>
+                <span v-else class="text-xs text-slate-300">—</span>
+            </template>
             <template #cell-action="{ row }">
                 <Link
-                    :href="route('idp.show', row.employee_id)"
+                    :href="route('idp.show', { employeeId: row.employee_id, package: selectedPackageId })"
                     class="inline-flex items-center gap-1.5 rounded-md border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
                 >
                     <i class="fa-solid fa-seedling" />
