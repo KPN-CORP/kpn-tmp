@@ -338,8 +338,15 @@ class IdpApprovalService
     }
 
     /**
-     * The approval steps currently awaiting a given user's action (they are the
-     * approver for the layer whose turn it is on a still-pending workflow).
+     * Everything on a given user's approval desk: their own still-undecided
+     * step on every still-pending workflow they sit on — at ANY layer, not
+     * only the one whose turn it is.
+     *
+     * Seeing a request before it reaches you is the point. An L2 approver can
+     * read the plan (or the result) while L1 is still holding it, so the work
+     * is not a surprise when it lands. Whether they may act on it yet is a
+     * separate question, answered by actionableFor() — and enforced, whatever
+     * the UI offers, by guardCurrentApprover().
      *
      * @return Collection<int, IdpApprovalStep>
      */
@@ -352,17 +359,35 @@ class IdpApprovalService
         return IdpApprovalStep::query()
             ->where('approver_employee_id', $user->employee_id)
             ->where('status', 'pending')
-            ->with(['approval.plan', 'approval.package'])
+            ->with(['approval.plan', 'approval.package', 'approval.steps'])
             ->get()
             ->filter(fn (IdpApprovalStep $step) => $step->approval
-                && $step->approval->status === 'pending'
-                && $step->approval->current_level === $step->level)
+                && $step->approval->status === 'pending')
             ->values();
     }
 
+    /** How big the desk is — everything visible, at every layer. */
     public function pendingCountFor(User $user): int
     {
         return $this->pendingFor($user)->count();
+    }
+
+    /**
+     * The part of the desk this user may decide right now: the requests whose
+     * current layer is theirs. This is what "you have N approvals to do" means.
+     *
+     * @return Collection<int, IdpApprovalStep>
+     */
+    public function actionableFor(User $user): Collection
+    {
+        return $this->pendingFor($user)
+            ->filter(fn (IdpApprovalStep $step) => $step->approval->current_level === $step->level)
+            ->values();
+    }
+
+    public function actionableCountFor(User $user): int
+    {
+        return $this->actionableFor($user)->count();
     }
 
     /**

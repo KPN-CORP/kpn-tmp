@@ -57,7 +57,9 @@ class HandleInertiaRequests extends Middleware
 
             // In-app approval notifications for the signed-in user.
             'notifications' => fn () => $this->notifications($user),
-            // How many IDP items are awaiting this user's approval decision.
+            // How many IDP items this user can decide on right now. Their Task
+            // Box also lists the requests still with an earlier layer; those are
+            // not theirs to act on, so the badge does not count them.
             'pendingApprovals' => fn () => $this->pendingApprovals($user),
 
             'flash' => [
@@ -112,7 +114,7 @@ class HandleInertiaRequests extends Middleware
         }
 
         try {
-            return app(IdpApprovalService::class)->pendingCountFor($user);
+            return app(IdpApprovalService::class)->actionableCountFor($user);
         } catch (\Throwable) {
             return 0;
         }

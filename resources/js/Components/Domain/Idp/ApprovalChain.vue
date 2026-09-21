@@ -22,7 +22,10 @@ const props = withDefaults(
         approval: ApprovalInfo | null
         /** The chain is only a preview of where the request will go. */
         preview?: boolean
-        /** Drop the notes and timestamps; just who and what. */
+        /**
+         * Drop the notes and the submitted-at line; just who, what and when.
+         * The decision time stays — it is half of what a past round records.
+         */
         compact?: boolean
     }>(),
     { preview: false, compact: false },
@@ -98,7 +101,7 @@ function stateLabel(status: StepStatus, level: number): string {
                         </div>
                         <p class="text-xs text-slate-400">
                             {{ stateLabel(step.status, step.level) }}
-                            <span v-if="step.acted_at && !compact"> · {{ formatDateTime(step.acted_at) }}</span>
+                            <span v-if="step.acted_at"> · {{ formatDateTime(step.acted_at) }}</span>
                         </p>
                         <p
                             v-if="step.note && !compact"

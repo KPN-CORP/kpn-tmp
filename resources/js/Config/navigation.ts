@@ -10,7 +10,14 @@ import { route } from '@/Config/route'
  * An item may either link somewhere (`href`) or act as a collapsible parent
  * that groups `children`. A parent shows in the menu when at least one of its
  * children survives the permission filter.
+ *
+ * `badge` names a shared Inertia prop holding a count; the sidebar shows it as
+ * a pill, and hides it when the count is zero.
  */
+
+/** Shared Inertia props a nav item may draw its badge count from. */
+export type NavBadge = 'pendingApprovals'
+
 export interface NavChild {
     label: keyof LocaleMessages['nav']
     href: string
@@ -23,12 +30,14 @@ export interface NavItem {
     icon: string
     href?: string
     permission?: string
+    badge?: NavBadge
     children?: NavChild[]
 }
 
 export const navigation: NavItem[] = [
     // --- Main ---
-    // Dashboard is temporarily hidden from the menu (facecard is the default landing).
+    // Dashboard is temporarily hidden from the menu (signing in lands on the
+    // Task Box — see App\Support\Landing).
     // {
     //     section: 'main',
     //     label: 'dashboard',
@@ -37,9 +46,11 @@ export const navigation: NavItem[] = [
     // },
     {
         section: 'main',
-        label: 'facecard',
-        icon: 'fa-solid fa-id-card',
-        href: route('facecard.list'),
+        label: 'approvals',
+        icon: 'fa-solid fa-circle-check',
+        href: route('approvals.inbox'),
+        // How many IDP items are awaiting this user's decision.
+        badge: 'pendingApprovals',
     },
     {
         section: 'main',
@@ -49,25 +60,9 @@ export const navigation: NavItem[] = [
     },
     {
         section: 'main',
-        label: 'approvals',
-        icon: 'fa-solid fa-circle-check',
-        href: route('approvals.inbox'),
-    },
-
-    // --- Talent ---
-    {
-        section: 'talent',
-        label: 'report',
-        icon: 'fa-solid fa-chart-column',
-        href: route('report.show'),
-        permission: 'view_report_menu',
-    },
-    {
-        section: 'talent',
-        label: 'importCenter',
-        icon: 'fa-solid fa-file-import',
-        href: route('import.index'),
-        permission: 'view_import_center',
+        label: 'facecard',
+        icon: 'fa-solid fa-id-card',
+        href: route('facecard.list'),
     },
 
     // --- Administration ---
@@ -124,10 +119,17 @@ export const navigation: NavItem[] = [
     },
     {
         section: 'administration',
-        label: 'roles',
-        icon: 'fa-solid fa-user-shield',
-        href: route('roles.index'),
-        permission: 'view_admin_setting',
+        label: 'importCenter',
+        icon: 'fa-solid fa-file-import',
+        href: route('import.index'),
+        permission: 'view_import_center',
+    },
+    {
+        section: 'administration',
+        label: 'report',
+        icon: 'fa-solid fa-chart-column',
+        href: route('report.show'),
+        permission: 'view_report_menu',
     },
     {
         section: 'administration',
@@ -135,6 +137,13 @@ export const navigation: NavItem[] = [
         icon: 'fa-solid fa-list-check',
         href: route('approval.setting.index'),
         permission: 'view_approval_setting',
+    },
+    {
+        section: 'administration',
+        label: 'roles',
+        icon: 'fa-solid fa-user-shield',
+        href: route('roles.index'),
+        permission: 'view_admin_setting',
     },
     {
         section: 'administration',

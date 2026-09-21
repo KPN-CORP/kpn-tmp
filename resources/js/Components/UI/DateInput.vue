@@ -10,6 +10,9 @@ const props = defineProps<{
     modelValue: string | null
     invalid?: boolean
     id?: string
+    /** ISO bounds for the native calendar, which greys out the days outside them. */
+    min?: string | null
+    max?: string | null
 }>()
 
 const emit = defineEmits<{ (e: 'update:modelValue', value: string): void }>()
@@ -99,6 +102,8 @@ function onNative(event: Event) {
             type="date"
             class="pointer-events-none absolute bottom-0 right-2 h-0 w-0 opacity-0"
             :value="modelValue ?? ''"
+            :min="min || undefined"
+            :max="max || undefined"
             tabindex="-1"
             aria-hidden="true"
             @input="onNative"

@@ -13,6 +13,8 @@ export interface ResolvedNavItem {
     label: string
     icon: string
     href?: string
+    /** A count worth drawing attention to; only set when it is above zero. */
+    badge?: number
     children?: ResolvedNavChild[]
 }
 
@@ -21,7 +23,8 @@ export interface ResolvedNavItem {
  * current language, dropping anything the user lacks permission for. Returns a
  * flat list; the sidebar groups it by `section`. Parent items keep their
  * (permission-filtered) `children`; a parent with no surviving children is
- * dropped entirely.
+ * dropped entirely. An item's `badge` is read from the shared prop it names,
+ * and left off when the count is zero — there is nothing to flag.
  */
 export function useNavigation() {
     const page = usePage()
@@ -41,11 +44,14 @@ export function useNavigation() {
                         href: child.href,
                     }))
 
+                const count = item.badge ? Number(page.props[item.badge] ?? 0) : 0
+
                 return {
                     section: t.value.nav[item.section],
                     label: t.value.nav[item.label],
                     icon: item.icon,
                     href: item.href,
+                    badge: count > 0 ? count : undefined,
                     children,
                 }
             })

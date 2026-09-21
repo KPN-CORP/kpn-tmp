@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Support\Landing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use RealRashid\SweetAlert\Facades\Alert;
@@ -11,7 +12,7 @@ class SsoController extends Controller
 {
     public function dbauth(Request $request)
     {
-        return $this->handleDbauth($request, route('facecard.list'), 'kpntmp');
+        return $this->handleDbauth($request, Landing::url(), 'kpntmp');
     }
 
     private function handleDbauth(Request $request, $redirectRoute, $sessionValue)

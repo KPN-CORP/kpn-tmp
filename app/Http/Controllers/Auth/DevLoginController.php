@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
 use App\Models\User;
+use App\Support\Landing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -124,7 +125,7 @@ class DevLoginController extends Controller
         $request->session()->forget('dev_login_verified');
         $request->session()->regenerate();
 
-        return redirect()->route('facecard.list');
+        return redirect()->route(Landing::ROUTE);
     }
 
     private function verified(Request $request): bool

@@ -155,3 +155,59 @@ export interface StageProgress {
 
 /** The palette a status chip may take, shared by every IDP status surface. */
 export type Tone = 'slate' | 'amber' | 'emerald' | 'red' | 'sky' | 'primary'
+
+// --- The approver's desk ----------------------------------------------------
+
+/** One program as a request on the desk shows it. */
+export interface InboxPlan {
+    id: number
+    development_model: string | null
+    competency_type: string
+    competency_name: string
+    development_program: string
+    review_tools: string | null
+    expected_outcome: string | null
+    time_frame_start: string | null
+    time_frame_end: string | null
+    realization_date: string | null
+    result_evidence: string | null
+}
+
+/**
+ * One request on the approver's desk, in the one shape both of its surfaces
+ * read — the pending list and the decision log.
+ *
+ * A PLANNING request covers a whole package's plan set; a RESULT request covers
+ * exactly one program. Everything after `plans` belongs to one surface only.
+ */
+export interface InboxRequest {
+    /** Identifies the ROW: one request appears twice when the same person sits on two of its layers. */
+    step_id: number
+    approval_id: number
+    stage: 'planning' | 'result'
+    /** The viewer's own layer on this chain. */
+    level: number
+    total_levels: number
+    owner_id: string
+    owner_name: string
+    submitted_at: string | null
+    package: { id: number; name: string } | null
+    title: string | null
+    plans: InboxPlan[]
+
+    // Pending rows — whether this layer's turn has come, and who holds it while
+    // it has not.
+    can_act?: boolean
+    awaiting_level?: number | null
+    awaiting_name?: string | null
+
+    // History rows — what this person decided, and what became of it.
+    decision?: 'approved' | 'rejected'
+    decided_at?: string | null
+    note?: string | null
+    auto?: boolean
+    outcome?: 'pending' | 'approved' | 'rejected'
+
+    /** The whole chain — on both surfaces, so a card always shows where it sits. */
+    chain?: ApprovalInfo
+}

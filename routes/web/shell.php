@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\NotificationController;
+use App\Support\Landing;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -10,7 +11,8 @@ use Inertia\Inertia;
  * belong to no single feature. Loaded inside the `auth` group in web.php.
  */
 
-Route::get('/', fn () => redirect()->route('facecard.list'))->name('home');
+// The app's front door. Every sign-in lands here too — see App\Support\Landing.
+Route::get('/', fn () => redirect()->route(Landing::ROUTE))->name('home');
 Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
 // Renders the shared "coming soon" screen. The path and route name are already

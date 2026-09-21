@@ -2,72 +2,39 @@
 /**
  * The approver's desk, in two views over the same kind of card:
  *
- *  - PENDING — every IDP request waiting on this person's decision, at either
- *    stage.
+ *  - PENDING — every IDP request this person sits on the chain of, at either
+ *    stage. That includes the ones still with an earlier layer: they are read
+ *    now and decided when they arrive, so only a card with `can_act` offers
+ *    the Approve / Reject buttons.
  *  - HISTORY — the decisions they have already recorded, newest first, each
  *    with the note they left and where the request went afterwards.
  *
- * Requests are cards rather than table rows because the two stages are not the
- * same size: a PLAN request covers every program at once and has to be readable
- * in full before it is signed off, while a RESULT request covers one program and
- * is mostly about the evidence. Each card opens in place to show exactly what is
- * being approved, so a decision never needs another screen.
+ * This page owns the desk: the tabs, the filters, the sorting, which cards are
+ * open, and the decision drawer. What one request looks like is RequestCard's
+ * job — it is the same card on both views, so a state reads the same wherever
+ * it appears.
+ *
+ * A waiting request opens EXPANDED. Signing something off means reading it, so
+ * the detail is the default rather than something to go and find; the log opens
+ * collapsed, because a log is for scanning.
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { Head, Link, router } from '@inertiajs/vue3'
+import { Head, router } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
-import ApprovalChain from '@/Components/Domain/Idp/ApprovalChain.vue'
 import DecisionDrawer from '@/Components/Domain/Idp/DecisionDrawer.vue'
-import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
+import RequestCard from '@/Components/Domain/Idp/RequestCard.vue'
 import { useLocale } from '@/Composables/useLocale'
-import { formatDate as fmt, formatDateTime as fmtDateTime } from '@/Composables/useDate'
 import { route } from '@/Config/route'
-import type { ApprovalInfo, Tone } from '@/types/idp'
+import type { InboxRequest } from '@/types/idp'
 
 const { t } = useLocale()
 
-interface InboxPlan {
-    id: number
-    development_model: string | null
-    competency_type: string
-    competency_name: string
-    development_program: string
-    review_tools: string | null
-    expected_outcome: string | null
-    time_frame_start: string | null
-    time_frame_end: string | null
-    realization_date: string | null
-    result_evidence: string | null
-}
-
-interface InboxItem {
-    /** Identifies the ROW: one request appears twice when the same person sits on two of its layers. */
-    step_id: number
-    approval_id: number
-    stage: 'planning' | 'result'
-    level: number
-    total_levels: number
-    owner_id: string
-    owner_name: string
-    submitted_at: string | null
-    package: { id: number; name: string } | null
-    title: string | null
-    plans: InboxPlan[]
-    // History rows only — what this person decided, and what became of it.
-    decision?: 'approved' | 'rejected'
-    decided_at?: string | null
-    note?: string | null
-    auto?: boolean
-    outcome?: 'pending' | 'approved' | 'rejected'
-    chain?: ApprovalInfo
-}
-
 interface Paginator {
-    data: InboxItem[]
+    data: InboxRequest[]
     links: { url: string | null; label: string; active: boolean }[]
     total: number
     from: number | null
@@ -87,7 +54,10 @@ const props = defineProps<{
     filters: { search: string; stage: string; type: string }
     sort: Sort
     filterOptions: { types: string[] }
+    /** Everything on the desk, at every layer. */
     pendingTotal: number
+    /** The subset this person may decide right now — what the menu badge counts. */
+    actionableTotal: number
     stageTotals: { planning: number; result: number }
     historyTotal: number
 }>()
@@ -226,24 +196,23 @@ const sortOptions = computed<Option[]>(() =>
 /** Whether this desk holds anything at all, before any filter is applied. */
 const hasAnything = computed(() => (isHistory.value ? props.historyTotal > 0 : props.pendingTotal > 0))
 
-// --- Reading a request -----------------------------------------------------
+// --- Which cards are open ---------------------------------------------------
 
-// Plan requests open by default: signing off a plan means reading it, so
-// hiding it behind a click would be the wrong way round. Result requests are
-// one program and their headline already says which. A decided request opens
-// closed either way — the history is for scanning.
+/**
+ * A waiting request opens EXPANDED — both stages. Deciding means reading, so
+ * the substance is on screen from the start rather than behind a control the
+ * reader has to notice. The log opens collapsed: it is read by scanning, and
+ * the decision is already recorded on the card face.
+ */
 function initialExpanded(): Set<number> {
-    if (isHistory.value) {
-        return new Set()
-    }
-
-    return new Set(props.items.data.filter((i) => i.stage === 'planning').map((i) => i.step_id))
+    return isHistory.value ? new Set() : new Set(props.items.data.map((i) => i.step_id))
 }
 
 const expanded = ref<Set<number>>(initialExpanded())
 
-// The component survives a partial reload, so switching desks has to re-seed it.
-watch(() => props.view, () => (expanded.value = initialExpanded()))
+// The component survives a partial reload, so a new page of rows — or the other
+// desk — has to re-seed it, or rows arrive closed on a desk that opens them.
+watch(() => [props.view, props.items.data], () => (expanded.value = initialExpanded()), { deep: false })
 
 function toggle(id: number) {
     const next = new Set(expanded.value)
@@ -251,51 +220,13 @@ function toggle(id: number) {
     expanded.value = next
 }
 
-// Programs grouped by development model — how the plan itself is laid out, so
-// the approver reads it the same way it was written.
-function grouped(item: InboxItem): Array<{ model: string; plans: InboxPlan[] }> {
-    const groups = new Map<string, InboxPlan[]>()
-    for (const plan of item.plans) {
-        const key = plan.development_model ?? '—'
-        groups.set(key, [...(groups.get(key) ?? []), plan])
-    }
-    return [...groups.entries()].map(([model, plans]) => ({ model, plans }))
-}
+/** Open when anything is closed; otherwise close everything. */
+const allOpen = computed(
+    () => props.items.data.length > 0 && props.items.data.every((i) => expanded.value.has(i.step_id)),
+)
 
-function isUrl(value: string | null): boolean {
-    return !!value && /^https?:\/\//i.test(value.trim())
-}
-
-// --- A decided request ------------------------------------------------------
-
-function decisionLabel(item: InboxItem): string {
-    if (item.auto) return t.value.approvalFlow.autoApproved
-    return item.decision === 'rejected' ? t.value.approvalFlow.youRejected : t.value.approvalFlow.youApproved
-}
-
-function decisionTone(item: InboxItem): Tone {
-    if (item.auto) return 'slate'
-    return item.decision === 'rejected' ? 'red' : 'emerald'
-}
-
-/** Where the request ended up after this layer signed it off. */
-function outcome(item: InboxItem): { label: string; tone: Tone } {
-    if (item.outcome === 'approved') {
-        return { label: t.value.approvalFlow.outcomeApproved, tone: 'emerald' }
-    }
-
-    if (item.outcome === 'rejected') {
-        return { label: t.value.approvalFlow.outcomeRejected, tone: 'red' }
-    }
-
-    // "Still with layer" already names the layer; only the number is missing.
-    const level = item.chain?.current_level
-    return {
-        label: level
-            ? `${t.value.approvalFlow.outcomePending} ${level}`
-            : t.value.approvalFlow.outcomeMoving,
-        tone: 'amber',
-    }
+function toggleAll() {
+    expanded.value = allOpen.value ? new Set() : new Set(props.items.data.map((i) => i.step_id))
 }
 
 // --- Deciding --------------------------------------------------------------
@@ -310,7 +241,7 @@ const decision = ref<{
     totalLevels: number | null
 }>({ open: false, kind: 'approve', approvalId: null, subject: '', detail: null, level: null, totalLevels: null })
 
-function decide(item: InboxItem, kind: 'approve' | 'reject') {
+function decide(item: InboxRequest, kind: 'approve' | 'reject') {
     decision.value = {
         open: true,
         kind,
@@ -333,12 +264,17 @@ function decide(item: InboxItem, kind: 'approve' | 'reject') {
         <div class="flex flex-wrap items-start justify-between gap-3">
             <PageHeader :title="t.approvalFlow.inboxTitle" :subtitle="t.approvalFlow.inboxSubtitle" />
 
+            <!--
+                The pill counts what this person can decide, not the size of the
+                desk — the desk also holds requests still with an earlier layer.
+                It is the same number the menu badge shows.
+            -->
             <span
-                v-if="pendingTotal > 0"
+                v-if="actionableTotal > 0"
                 class="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800"
             >
                 <i class="fa-solid fa-hourglass-half text-[10px]" />
-                {{ pendingTotal }} {{ t.approvalFlow.pendingCount }}
+                {{ actionableTotal }} {{ t.approvalFlow.pendingCount }}
             </span>
         </div>
 
@@ -438,225 +374,34 @@ function decide(item: InboxItem, kind: 'approve' | 'reject') {
                 </button>
             </div>
 
-            <!-- The requests -->
+            <!--
+                The list itself. One card per request, with a single control for
+                opening or closing them all — useful once a desk runs long,
+                where the default (everything open) is a lot of scrolling.
+            -->
+            <div class="mb-2 flex items-center justify-end">
+                <button
+                    v-if="items.data.length"
+                    type="button"
+                    class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                    @click="toggleAll"
+                >
+                    <i :class="allOpen ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'" class="text-[10px]" />
+                    {{ allOpen ? t.approvalFlow.collapseAll : t.approvalFlow.expandAll }}
+                </button>
+            </div>
+
             <div class="space-y-4">
-                <article
+                <RequestCard
                     v-for="item in items.data"
                     :key="item.step_id"
-                    class="overflow-hidden rounded-xl border border-border bg-white shadow-sm"
-                >
-                    <!-- Who, what, and the decision -->
-                    <header class="flex flex-col gap-3 border-b border-border px-5 py-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div class="flex min-w-0 items-start gap-3">
-                            <span
-                                class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
-                                :class="item.stage === 'planning' ? 'bg-primary/10 text-primary' : 'bg-emerald-50 text-emerald-600'"
-                            >
-                                <i :class="item.stage === 'planning' ? 'fa-solid fa-file-signature' : 'fa-solid fa-clipboard-check'" />
-                            </span>
+                    :item="item"
+                    :history="isHistory"
+                    :open="expanded.has(item.step_id)"
+                    @toggle="toggle(item.step_id)"
+                    @decide="(kind: 'approve' | 'reject') => decide(item, kind)"
+                />
 
-                            <div class="min-w-0">
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <StatusPill
-                                        :tone="item.stage === 'planning' ? 'primary' : 'emerald'"
-                                        :label="item.stage === 'planning' ? t.approvalFlow.stagePlanning : t.approvalFlow.stageResult"
-                                        :dot="false"
-                                        size="sm"
-                                    />
-                                    <h3 class="truncate font-bold text-slate-800">{{ item.owner_name }}</h3>
-                                    <span class="text-xs text-slate-400">{{ item.owner_id }}</span>
-                                </div>
-
-                                <!-- What was actually being approved -->
-                                <p class="mt-1 text-sm text-slate-600">
-                                    <template v-if="item.stage === 'planning'">
-                                        {{ t.approvalFlow.planningSubject }}
-                                        <span class="text-slate-400">·</span>
-                                        <span class="font-medium">{{ item.plans.length }} {{ t.approvalFlow.programs }}</span>
-                                        <span v-if="item.package" class="text-slate-400"> · {{ item.package.name }}</span>
-                                    </template>
-                                    <template v-else>{{ item.title }}</template>
-                                </p>
-
-                                <p class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
-                                    <span>
-                                        <i class="fa-solid fa-layer-group mr-1" />
-                                        {{ t.approvalFlow.layer }} {{ item.level }} / {{ item.total_levels }}
-                                    </span>
-                                    <span v-if="item.submitted_at">
-                                        <i class="fa-solid fa-paper-plane mr-1" />
-                                        {{ fmtDateTime(item.submitted_at) }}
-                                    </span>
-                                    <Link
-                                        :href="route('idp.show', item.owner_id)"
-                                        class="font-medium text-primary hover:underline"
-                                    >
-                                        <i class="fa-solid fa-arrow-up-right-from-square mr-1 text-[10px]" />
-                                        {{ t.approvalFlow.openEmployeeIdp }}
-                                    </Link>
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="flex shrink-0 items-center gap-2">
-                            <StatusPill
-                                v-if="isHistory"
-                                :tone="decisionTone(item)"
-                                :label="decisionLabel(item)"
-                                :icon="item.decision === 'rejected' ? 'fa-solid fa-circle-xmark' : 'fa-solid fa-circle-check'"
-                            />
-
-                            <button
-                                type="button"
-                                class="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
-                                @click="toggle(item.step_id)"
-                            >
-                                <i :class="expanded.has(item.step_id) ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'" class="text-[10px]" />
-                                {{
-                                    expanded.has(item.step_id)
-                                        ? (item.stage === 'planning' ? t.approvalFlow.hidePlan : t.approvalFlow.hideProgram)
-                                        : (item.stage === 'planning' ? t.approvalFlow.showPlan : t.approvalFlow.showProgram)
-                                }}
-                            </button>
-
-                            <template v-if="!isHistory">
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-600"
-                                    @click="decide(item, 'approve')"
-                                >
-                                    <i class="fa-solid fa-check text-xs" />
-                                    {{ t.approvalFlow.approve }}
-                                </button>
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3.5 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50"
-                                    @click="decide(item, 'reject')"
-                                >
-                                    <i class="fa-solid fa-xmark text-xs" />
-                                    {{ t.approvalFlow.reject }}
-                                </button>
-                            </template>
-                        </div>
-                    </header>
-
-                    <!-- What this person decided, and what became of the request -->
-                    <div
-                        v-if="isHistory"
-                        class="border-b border-border bg-slate-50/70 px-5 py-3"
-                    >
-                        <div class="flex flex-wrap items-center justify-between gap-2">
-                            <p class="flex items-center gap-2 text-xs text-slate-500">
-                                <i
-                                    :class="item.decision === 'rejected'
-                                        ? 'fa-solid fa-circle-xmark text-red-500'
-                                        : 'fa-solid fa-circle-check text-emerald-500'"
-                                />
-                                <span class="font-semibold text-slate-700">{{ decisionLabel(item) }}</span>
-                                <span v-if="item.decided_at">· {{ fmtDateTime(item.decided_at) }}</span>
-                                <span>· {{ t.approvalFlow.layerShort }}{{ item.level }}</span>
-                            </p>
-
-                            <StatusPill :tone="outcome(item).tone" :label="outcome(item).label" size="sm" />
-                        </div>
-
-                        <p
-                            v-if="item.note && !item.auto"
-                            class="mt-2 rounded-md bg-white px-2.5 py-1.5 text-xs leading-relaxed text-slate-600 ring-1 ring-inset ring-border"
-                        >
-                            <i class="fa-solid fa-quote-left mr-1 text-[10px] text-slate-300" />
-                            {{ item.note }}
-                        </p>
-                    </div>
-
-                    <!-- What was being approved, in full -->
-                    <div v-if="expanded.has(item.step_id)" class="divide-y divide-border">
-                        <div v-for="group in grouped(item)" :key="group.model">
-                            <p
-                                v-if="item.stage === 'planning'"
-                                class="bg-slate-50/70 px-5 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500"
-                            >
-                                {{ group.model }}
-                                <span class="font-normal text-slate-400">· {{ group.plans.length }}</span>
-                            </p>
-
-                            <div
-                                v-for="plan in group.plans"
-                                :key="plan.id"
-                                class="grid grid-cols-1 gap-3 px-5 py-3.5 lg:grid-cols-[1.2fr_1.5fr_auto]"
-                            >
-                                <!-- What it develops -->
-                                <div class="min-w-0">
-                                    <p class="text-sm font-medium text-slate-800">{{ plan.competency_name }}</p>
-                                    <div class="mt-1 flex flex-wrap items-center gap-1.5">
-                                        <span class="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700">
-                                            {{ plan.competency_type }}
-                                        </span>
-                                        <span
-                                            v-if="plan.review_tools"
-                                            class="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500"
-                                        >
-                                            <i class="fa-solid fa-clipboard-check text-[10px]" />
-                                            {{ plan.review_tools }}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                <!-- How, and what was expected of it -->
-                                <div class="min-w-0 text-sm text-slate-600">
-                                    <p class="leading-relaxed">{{ plan.development_program }}</p>
-                                    <p v-if="plan.expected_outcome" class="mt-1 whitespace-pre-line text-xs text-slate-400">
-                                        <span class="font-medium">{{ t.idp.outcomeLabel }}:</span>
-                                        {{ plan.expected_outcome }}
-                                    </p>
-                                </div>
-
-                                <!-- When, and — for a result — what came of it -->
-                                <div class="shrink-0 text-xs text-slate-500 lg:text-right">
-                                    <p class="whitespace-nowrap">
-                                        <i class="fa-regular fa-calendar mr-1 text-slate-300" />
-                                        {{ fmt(plan.time_frame_start) }}
-                                        <i class="fa-solid fa-arrow-right-long mx-1 text-[10px] text-slate-300" />
-                                        {{ plan.time_frame_end ? fmt(plan.time_frame_end) : '—' }}
-                                    </p>
-
-                                    <template v-if="item.stage === 'result'">
-                                        <p v-if="plan.realization_date" class="mt-1 whitespace-nowrap font-medium text-emerald-700">
-                                            <i class="fa-regular fa-calendar-check mr-1" />
-                                            {{ fmt(plan.realization_date) }}
-                                        </p>
-                                        <a
-                                            v-if="isUrl(plan.result_evidence)"
-                                            :href="plan.result_evidence!"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            class="mt-1 inline-flex items-center gap-1 font-medium text-primary hover:underline"
-                                        >
-                                            <i class="fa-solid fa-link text-[10px]" />
-                                            {{ t.idp.evidenceLabel }}
-                                        </a>
-                                        <p v-else-if="plan.result_evidence" class="mt-1 max-w-xs text-slate-500 lg:ml-auto">
-                                            {{ plan.result_evidence }}
-                                        </p>
-                                    </template>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- The programs it covered are gone; the decision is not -->
-                        <p v-if="!item.plans.length" class="px-5 py-4 text-xs text-slate-400">
-                            {{ t.approvalFlow.planGone }}
-                        </p>
-
-                        <!-- Who else was on it, and what they made of it -->
-                        <div v-if="isHistory && item.chain" class="px-5 py-4">
-                            <p class="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                {{ t.approvalFlow.fullChain }}
-                            </p>
-                            <ApprovalChain :approval="item.chain" />
-                        </div>
-                    </div>
-                </article>
 
                 <p
                     v-if="!items.data.length"

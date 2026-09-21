@@ -225,8 +225,11 @@ class IdpApprovalController extends Controller
     /**
      * The signed-in user's approval desk, in two views:
      *
-     *  - PENDING (the default) — everything awaiting their decision, at either
-     *    stage, as a searchable / sortable / paginated list.
+     *  - PENDING (the default) — every request they sit on the chain of, at
+     *    either stage, as a searchable / sortable / paginated list. That is
+     *    EVERY layer, not only the one whose turn it is: an approver reads a
+     *    request from the moment it is submitted, and the card says whether it
+     *    is theirs to decide yet.
      *  - HISTORY (`?view=history`) — the decisions they have already recorded,
      *    newest first, each with the note they left and where the request ended
      *    up afterwards.
@@ -313,6 +316,11 @@ class IdpApprovalController extends Controller
             'sort' => $sort,
             'filterOptions' => ['types' => $types],
             'pendingTotal' => $history ? $this->approvals->pendingCountFor($user) : $pending->count(),
+            // Of those, the ones this user may decide right now — what the menu
+            // badge counts. The rest are on the desk to be read, not acted on.
+            'actionableTotal' => $history
+                ? $this->approvals->actionableCountFor($user)
+                : $pending->where('can_act', true)->count(),
             'stageTotals' => $history
                 ? $this->pendingStageTotals($user)
                 : [
@@ -324,8 +332,8 @@ class IdpApprovalController extends Controller
     }
 
     /**
-     * Pending counts per stage, for the tab strip on the history view — where
-     * the pending rows themselves are never resolved.
+     * Desk counts per stage, for the tab strip on the history view — where the
+     * pending rows themselves are never resolved.
      *
      * @return array{planning: int, result: int}
      */
@@ -342,15 +350,49 @@ class IdpApprovalController extends Controller
     }
 
     /**
-     * Every approval awaiting this user's decision, shaped for the inbox.
+     * Every request on this user's desk, shaped for the inbox — including the
+     * ones still with an earlier layer, which they may read but not decide.
+     *
+     * Each row says which of the two it is (`can_act`) and, when it is not
+     * theirs yet, which layer is holding it. The whole chain rides along so the
+     * card can show where the request sits.
      *
      * @return Collection<int, array<string, mixed>>
      */
     private function inboxRows(User $user): Collection
     {
+        $steps = $this->approvals->pendingFor($user);
+        $presenter = new ApprovalPresenter;
+
+        // Every approver on every chain shown, named in one query.
+        $presenter->prime(
+            $steps->flatMap(fn ($step) => $step->approval->steps->pluck('approver_employee_id')),
+        );
+
         // A pending request with nothing left to approve is not worth showing:
         // the plans it covered have since been removed.
-        return $this->requestRows($this->approvals->pendingFor($user), new ApprovalPresenter, requirePlans: true);
+        $rows = $this->requestRows($steps, $presenter, requirePlans: true)->keyBy('step_id');
+
+        return $steps->map(function (IdpApprovalStep $step) use ($rows, $presenter, $user) {
+            $row = $rows->get($step->id);
+
+            if (! $row) {
+                return null;
+            }
+
+            $approval = $step->approval;
+            $current = $approval->currentStep();
+
+            return $row + [
+                // Only the layer whose turn it is may decide. The same rule the
+                // service enforces on the way in, so the card cannot offer a
+                // button the server would refuse.
+                'can_act' => $this->approvals->isCurrentApprover($approval, $user->employee_id),
+                'awaiting_level' => $approval->current_level,
+                'awaiting_name' => $presenter->name($current?->approver_employee_id),
+                'chain' => $presenter->approval($approval, $user->employee_id),
+            ];
+        })->filter()->values();
     }
 
     /**

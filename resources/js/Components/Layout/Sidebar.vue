@@ -60,6 +60,12 @@ function isExpanded(menu: (typeof menus.value)[number]) {
 function toggle(menu: (typeof menus.value)[number]) {
     expanded[menu.label] = !isExpanded(menu)
 }
+
+// Badge counts are rendered as-is up to 99; beyond that the exact number stops
+// mattering and would stretch the pill out of the row.
+function badgeLabel(count: number) {
+    return count > 99 ? '99+' : String(count)
+}
 </script>
 
 <template>
@@ -155,6 +161,13 @@ function toggle(menu: (typeof menus.value)[number]) {
                     >
                         <i :class="menu.icon" class="w-5 text-center" />
                         <span>{{ menu.label }}</span>
+                        <span
+                            v-if="menu.badge"
+                            class="ml-auto inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[0.6875rem] font-bold leading-none text-white"
+                            :aria-label="`${menu.badge} ${menu.label}`"
+                        >
+                            {{ badgeLabel(menu.badge) }}
+                        </span>
                     </Link>
                 </template>
             </div>

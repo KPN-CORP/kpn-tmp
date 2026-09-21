@@ -12,6 +12,7 @@ import { computed } from 'vue'
 import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDate } from '@/Composables/useDate'
+import { planningKey, resultKey } from '@/Components/Domain/Idp/planStatus'
 import type { Plan, Tone } from '@/types/idp'
 
 const { t } = useLocale()
@@ -42,24 +43,29 @@ const s = computed(() => t.value.idp.stage)
 const stage = computed(() => props.plan.stage)
 const result = computed(() => stage.value.result)
 
+// Both pills read the shared state helpers, so what a chip says and what the
+// filter bar puts a row under are decided in one place.
+
 /** The PLANNING state of this one row, within the set's own state. */
 const planningPill = computed<{ tone: Tone; label: string; icon: string }>(() => {
-    if (stage.value.planning_approved) {
-        return { tone: 'emerald', icon: 'fa-solid fa-circle-check', label: s.value.planApproved }
+    switch (planningKey(props.plan)) {
+        case 'approved':
+            return { tone: 'emerald', icon: 'fa-solid fa-circle-check', label: s.value.planApproved }
+        case 'inReview':
+            return { tone: 'amber', icon: 'fa-solid fa-hourglass-half', label: s.value.inReview }
+        default:
+            return { tone: 'slate', icon: 'fa-regular fa-pen-to-square', label: s.value.notApprovedYet }
     }
-    if (stage.value.frozen_by_planning) {
-        return { tone: 'amber', icon: 'fa-solid fa-hourglass-half', label: s.value.inReview }
-    }
-    return { tone: 'slate', icon: 'fa-regular fa-pen-to-square', label: s.value.notApprovedYet }
 })
 
 const resultPill = computed<{ tone: Tone; label: string; icon: string }>(() => {
-    switch (result.value.status) {
+    switch (resultKey(props.plan)) {
         case 'approved':
             return { tone: 'emerald', icon: 'fa-solid fa-circle-check', label: t.value.approvalFlow.statusApproved }
         case 'rejected':
             return { tone: 'red', icon: 'fa-solid fa-circle-xmark', label: t.value.approvalFlow.statusRejected }
         case 'pending':
+            // Whose turn it is is a rendering detail, not a different state.
             return result.value.can_act
                 ? { tone: 'amber', icon: 'fa-solid fa-gavel', label: t.value.approvalFlow.needsYourApproval }
                 : {
@@ -67,10 +73,10 @@ const resultPill = computed<{ tone: Tone; label: string; icon: string }>(() => {
                     icon: 'fa-solid fa-hourglass-half',
                     label: `${t.value.approvalFlow.waiting} ${t.value.approvalFlow.layerShort}${result.value.approval?.current_level ?? 1}`,
                 }
-        case 'open':
-            return result.value.filled
-                ? { tone: 'sky', icon: 'fa-solid fa-paper-plane', label: r.value.readyToSubmit }
-                : { tone: 'slate', icon: 'fa-regular fa-circle', label: r.value.notFiled }
+        case 'ready':
+            return { tone: 'sky', icon: 'fa-solid fa-paper-plane', label: r.value.readyToSubmit }
+        case 'notFiled':
+            return { tone: 'slate', icon: 'fa-regular fa-circle', label: r.value.notFiled }
         default:
             return { tone: 'slate', icon: 'fa-solid fa-lock', label: r.value.locked }
     }

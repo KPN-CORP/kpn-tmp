@@ -22,10 +22,18 @@ import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.
 import FormSection from '@/Components/UI/FormSection.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
 import StageTracker from '@/Components/Domain/Idp/StageTracker.vue'
-import PlanRow from '@/Components/Domain/Idp/PlanRow.vue'
+import PlanTable from '@/Components/Domain/Idp/PlanTable.vue'
 import ResultDrawer from '@/Components/Domain/Idp/ResultDrawer.vue'
 import DecisionDrawer from '@/Components/Domain/Idp/DecisionDrawer.vue'
 import ApprovalChain from '@/Components/Domain/Idp/ApprovalChain.vue'
+import PlanFilters from '@/Components/Domain/Idp/PlanFilters.vue'
+import {
+    blankPlanFilters,
+    hasPlanFilters,
+    matchesPlanFilters,
+    type PlanFilterState,
+} from '@/Components/Domain/Idp/planFilters'
+import { timelineKey, type TimelineKey } from '@/Components/Domain/Idp/planStatus'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDateTime } from '@/Composables/useDate'
@@ -451,9 +459,7 @@ const errorList = computed(() =>
 
 // --- The plans table -------------------------------------------------------
 
-type StatusKey = 'completed' | 'overdue' | 'inProgress' | 'upcoming' | 'planned'
-
-const statusStyle: Record<StatusKey, { badge: string; dot: string }> = {
+const statusStyle: Record<TimelineKey, { badge: string; dot: string }> = {
     completed: { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20', dot: 'bg-emerald-500' },
     inProgress: { badge: 'bg-amber-50 text-amber-700 ring-amber-600/20', dot: 'bg-amber-500' },
     upcoming: { badge: 'bg-sky-50 text-sky-700 ring-sky-600/20', dot: 'bg-sky-500' },
@@ -461,35 +467,57 @@ const statusStyle: Record<StatusKey, { badge: string; dot: string }> = {
     planned: { badge: 'bg-slate-100 text-slate-600 ring-slate-500/20', dot: 'bg-slate-400' },
 }
 
+// `solid` is the filled percentage badge on a model's card; `chip` and `bar`
+// are the tinted pill and the edge stripe.
 const accents = [
-    { bar: 'bg-emerald-500', chip: 'bg-emerald-50 text-emerald-700' },
-    { bar: 'bg-sky-500', chip: 'bg-sky-50 text-sky-700' },
-    { bar: 'bg-violet-500', chip: 'bg-violet-50 text-violet-700' },
-    { bar: 'bg-amber-500', chip: 'bg-amber-50 text-amber-700' },
+    { bar: 'bg-emerald-500', chip: 'bg-emerald-50 text-emerald-700', solid: 'bg-emerald-500' },
+    { bar: 'bg-sky-500', chip: 'bg-sky-50 text-sky-700', solid: 'bg-sky-500' },
+    { bar: 'bg-violet-500', chip: 'bg-violet-50 text-violet-700', solid: 'bg-violet-500' },
+    { bar: 'bg-amber-500', chip: 'bg-amber-50 text-amber-700', solid: 'bg-amber-500' },
 ]
 
-/** Where the program sits against its own timeline (not its approval state). */
-function statusKey(plan: Plan): StatusKey {
-    if (plan.realization_date) return 'completed'
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const start = plan.time_frame_start ? new Date(plan.time_frame_start) : null
-    const end = plan.time_frame_end ? new Date(plan.time_frame_end) : null
-    if (end && today > end) return 'overdue'
-    if (start && today < start) return 'upcoming'
-    if (start) return 'inProgress'
-    return 'planned'
-}
+// The table is narrowed entirely in the browser: every plan of the cycle is
+// already in the props, so filtering costs nothing and the tracker's totals —
+// which describe the plan, not the current view of it — stay untouched.
+const filters = ref<PlanFilterState>(blankPlanFilters())
+const filtering = computed(() => hasPlanFilters(filters.value))
+
+// A cycle switch reloads with `preserveState`, so this component — and its
+// filters — survive it. Carried over to another cycle's plans they would match
+// nothing while every select read its "All …" placeholder, since a value the new
+// cycle does not offer resolves to no label; on a cycle with no plans at all they
+// would also replace the per-model "Add plan" panels with "no plan matches".
+watch(
+    () => props.selectedPackageId,
+    () => {
+        filters.value = blankPlanFilters()
+    },
+)
+const allPlans = computed(() => props.developmentModels.flatMap((m) => m.plans))
 
 const modelsView = computed(() =>
     props.developmentModels.map((model, index) => ({
         ...model,
         accent: accents[index % accents.length],
-        rows: model.plans.map((plan) => {
-            const key = statusKey(plan)
-            return { plan, timeline: { key, label: t.value.idp.status[key], ...statusStyle[key] } }
-        }),
+        rows: model.plans
+            .filter((plan) => matchesPlanFilters(plan, filters.value))
+            .map((plan) => {
+                const key = timelineKey(plan)
+                return { plan, timeline: { key, label: t.value.idp.status[key], ...statusStyle[key] } }
+            }),
     })),
+)
+
+const shownPlans = computed(() => modelsView.value.reduce((n, m) => n + m.rows.length, 0))
+
+/**
+ * While filtering, a model with no surviving row is dropped rather than shown
+ * empty — three "no plans" panels say nothing about the one competency being
+ * looked for. Unfiltered, every model stays visible: an empty one is where the
+ * next plan gets added.
+ */
+const visibleModels = computed(() =>
+    filtering.value ? modelsView.value.filter((m) => m.rows.length > 0) : modelsView.value,
 )
 
 /** Results that are filled in and could be submitted right now. */
@@ -845,106 +873,62 @@ defineExpose({ openUpload })
             </div>
         </div>
 
+        <!-- Narrow the table (client-side; the tracker's totals stay whole) -->
+        <PlanFilters
+            v-if="allPlans.length"
+            v-model="filters"
+            :plans="allPlans"
+            :models="developmentModels"
+            :competency-labels="competencyLabels"
+            :type-labels="competencyTypeLabels"
+            :review-tool-labels="reviewToolLabels"
+            :shown="shownPlans"
+        />
+
         <!-- Plans grouped by development model -->
         <div class="space-y-6">
-            <section
-                v-for="model in modelsView"
+            <PlanTable
+                v-for="model in visibleModels"
                 :key="model.id"
-                class="overflow-hidden rounded-xl border border-border bg-white shadow-sm"
+                :model="model"
+                :rows="model.rows"
+                :total="model.plans.length"
+                :filtering="filtering"
+                :competency-labels="competencyLabels"
+                :type-labels="competencyTypeLabels"
+                :program-labels="programLabels"
+                :review-tool-labels="reviewToolLabels"
+                :can-edit="canEdit"
+                :viewing-active="viewingActive"
+                :plans-editable="planning.plans_editable"
+                :rows-editable="rowsEditable"
+                :submitting-result-id="submittingResultId"
+                @add="openCreate(model.id)"
+                @edit="openEdit"
+                @delete="askDelete"
+                @file-result="openResult"
+                @submit-result="submitResult"
+                @act="decideOnResult"
+                @open-chain="openResultChain"
+            />
+
+            <div
+                v-if="filtering && !visibleModels.length"
+                class="flex flex-col items-center gap-3 rounded-xl border border-border bg-white px-5 py-12 text-center shadow-sm"
             >
-                <div class="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
-                    <div class="flex min-w-0 items-center gap-3">
-                        <span class="h-9 w-1.5 shrink-0 rounded-full" :class="model.accent.bar" />
-                        <div class="min-w-0">
-                            <h3 class="truncate font-semibold text-slate-800">{{ model.name }}</h3>
-                            <p class="text-xs text-slate-400">
-                                {{ model.rows.length }}
-                                {{ model.rows.length === 1 ? t.idp.planSingular : t.idp.planPlural }}
-                            </p>
-                        </div>
-                        <span
-                            class="ml-1 shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold"
-                            :class="model.accent.chip"
-                        >
-                            {{ model.percentage }}%
-                        </span>
-                    </div>
-
-                    <div class="flex shrink-0 items-center gap-2">
-                        <!-- The set is frozen while its approval is in flight, so
-                             say why the add button is gone rather than hiding it
-                             silently. (A closed cycle says so once, in the
-                             tracker, rather than on every model.) -->
-                        <span
-                            v-if="canEdit && viewingActive && !planning.plans_editable"
-                            class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700"
-                            :title="t.idp.stage.lockedInReview"
-                        >
-                            <i class="fa-solid fa-lock text-[10px]" />
-                            {{ t.idp.stage.locked }}
-                        </span>
-                        <button
-                            v-if="canEdit && model.can_add"
-                            type="button"
-                            class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-hover"
-                            @click="openCreate(model.id)"
-                        >
-                            <i class="fa-solid fa-plus" />
-                            {{ t.idp.addPlan }}
-                        </button>
-                    </div>
+                <div class="flex h-12 w-12 items-center justify-center rounded-full bg-slate-50 text-slate-300">
+                    <i class="fa-solid fa-filter-circle-xmark text-xl" />
                 </div>
-
-                <div v-if="model.rows.length" class="overflow-x-auto">
-                    <table class="w-full min-w-[960px] text-left text-sm">
-                        <thead>
-                            <tr class="border-b border-border bg-slate-50/60 text-[11px] uppercase tracking-wider text-slate-400">
-                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.competency }}</th>
-                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.timeframe }}</th>
-                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.planning }}</th>
-                                <th class="px-5 py-2.5 font-semibold">{{ t.idp.table.result }}</th>
-                                <th v-if="rowsEditable" class="px-5 py-2.5 text-right font-semibold" />
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <PlanRow
-                                v-for="row in model.rows"
-                                :key="row.plan.id"
-                                :plan="row.plan"
-                                :competency-label="localize(competencyLabels, row.plan.competency_name)"
-                                :type-label="localize(competencyTypeLabels, row.plan.competency_type)"
-                                :program-label="localize(programLabels, row.plan.development_program)"
-                                :review-tool-label="localize(reviewToolLabels, row.plan.review_tools)"
-                                :timeline="row.timeline"
-                                :can-edit="rowsEditable"
-                                :submitting="submittingResultId === row.plan.id"
-                                @edit="openEdit(row.plan)"
-                                @delete="askDelete(row.plan)"
-                                @file-result="openResult(row.plan)"
-                                @submit-result="submitResult(row.plan)"
-                                @act="(d) => decideOnResult(row.plan, d)"
-                                @open-chain="openResultChain(row.plan)"
-                            />
-                        </tbody>
-                    </table>
-                </div>
-
-                <div v-else class="flex flex-col items-center gap-3 px-5 py-10 text-center">
-                    <div class="flex h-12 w-12 items-center justify-center rounded-full bg-slate-50 text-slate-300">
-                        <i class="fa-regular fa-folder-open text-xl" />
-                    </div>
-                    <p class="text-sm text-slate-400">{{ t.idp.noPlans }}</p>
-                    <button
-                        v-if="canEdit && model.can_add"
-                        type="button"
-                        class="inline-flex items-center gap-1.5 rounded-md border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
-                        @click="openCreate(model.id)"
-                    >
-                        <i class="fa-solid fa-plus" />
-                        {{ t.idp.addPlan }}
-                    </button>
-                </div>
-            </section>
+                <p class="text-sm text-slate-400">{{ t.idp.filters.noMatches }}</p>
+                <button
+                    type="button"
+                    class="inline-flex items-center gap-1.5 rounded-md border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
+                    @click="filters = blankPlanFilters()"
+                >
+                    <i class="fa-solid fa-xmark" />
+                    {{ t.idp.filters.clear }}
+                </button>
+            </div>
         </div>
 
         <!-- Add / edit plan (stage 1 — planning fields only) -->
