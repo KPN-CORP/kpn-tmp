@@ -45,6 +45,9 @@ interface KeyBehavior {
 
 interface ProficiencyLevel {
     id?: number
+    // The rung's short identifier, unique within this competency. Null on the
+    // rows that predate the column; the form requires one from now on.
+    code: string | null
     name_en: string
     name_id: string | null
     description_en: string | null
@@ -106,6 +109,16 @@ function masterName(item: {
  * and then land back on the list.
  */
 
+/**
+ * What the ladder actually posts: both `sequence` fields are server-assigned
+ * from the row order, so the form never sends them back.
+ */
+type KeyBehaviorPayload = Omit<KeyBehavior, 'sequence'>
+
+type ProficiencyLevelPayload = Omit<ProficiencyLevel, 'sequence' | 'key_behaviors'> & {
+    key_behaviors: KeyBehaviorPayload[]
+}
+
 const form = useForm({
     code: props.competency?.code ?? '',
     // Canonical `value` tracks the English name (value_en) server-side.
@@ -116,7 +129,7 @@ const form = useForm({
     competency_type_id: props.competency?.competency_type_id ?? null,
     // Both kept in sync from their row lists below.
     sub_competencies: [] as SubCompetency[],
-    proficiency_levels: [] as ProficiencyLevel[],
+    proficiency_levels: [] as ProficiencyLevelPayload[],
     // New competencies are usable straight away.
     is_active: props.competency?.is_active ?? true,
 })
@@ -205,12 +218,15 @@ const namedSubCount = computed(
  * so the list order is the only thing that says where a row sits.
  */
 
-interface BehaviorRow extends Omit<KeyBehavior, 'sequence'> {
+interface BehaviorRow extends KeyBehaviorPayload {
     uid: number
 }
 
-interface LadderRow extends Omit<ProficiencyLevel, 'key_behaviors' | 'sequence'> {
+interface LadderRow extends Omit<ProficiencyLevelPayload, 'key_behaviors'> {
     uid: number
+    // Narrowed: a row on the form always holds a string, blank where the stored
+    // rung predates the column.
+    code: string
     key_behaviors: BehaviorRow[]
 }
 
@@ -231,6 +247,7 @@ function newLadderRow(level?: ProficiencyLevel): LadderRow {
     return {
         uid: ++ladderUid,
         id: level?.id,
+        code: level?.code ?? '',
         name_en: level?.name_en ?? '',
         name_id: level?.name_id ?? '',
         description_en: level?.description_en ?? '',
@@ -294,7 +311,7 @@ function moveBehaviorRow(row: LadderRow, index: number, delta: number) {
 
 function levelError(
     index: number,
-    field: 'name_en' | 'name_id',
+    field: 'code' | 'name_en' | 'name_id',
 ): string | undefined {
     return flatError(`proficiency_levels.${index}.${field}`)
 }
@@ -750,6 +767,26 @@ function submit() {
                                     <i class="fa-solid fa-chevron-down text-[10px]" />
                                 </button>
                             </div>
+
+                            <!-- The rung's code. Not language-specific, so it
+                                 sits in the header rather than in either of the
+                                 language columns below. -->
+                            <div>
+                                <input
+                                    v-model="row.code"
+                                    maxlength="50"
+                                    :placeholder="t.idp.settings.code"
+                                    :aria-label="t.idp.settings.code"
+                                    class="w-28 rounded-md border bg-white px-2 py-1.5 font-mono text-xs focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                    :class="
+                                        levelError(i, 'code')
+                                            ? 'border-red-500'
+                                            : 'border-border'
+                                    "
+                                >
+                            </div>
+
+                            <span class="text-red-500">*</span>
                         </div>
 
                         <div class="flex items-center gap-2">
@@ -796,6 +833,13 @@ function submit() {
                             </button>
                         </div>
                     </div>
+
+                    <p
+                        v-if="levelError(i, 'code')"
+                        class="mb-3 text-xs text-red-600"
+                    >
+                        {{ levelError(i, 'code') }}
+                    </p>
 
                     <!-- Rung name, both languages. -->
                     <div class="grid gap-3 sm:grid-cols-2">

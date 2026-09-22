@@ -36,10 +36,11 @@ use Maatwebsite\Excel\Events\AfterImport;
  *   no ladder rows keeps the ladder it has. So a rung can be removed by leaving
  *   it out of a file that still lists its siblings, but a list cannot be
  *   emptied entirely — that is the form's job.
- * - **Child rows are matched to existing rows by name**, and their ids are sent
- *   back. Without that the service would delete and recreate every rung on each
- *   import, and the implementations, trainings and programs pointing at those
- *   rungs would lose their link.
+ * - **Child rows are matched to existing rows** — a rung by its code, then by
+ *   its name; a sub-competency or a key behavior by name, which is all it has —
+ *   and their ids are sent back. Without that the service would delete and
+ *   recreate every rung on each import, and the implementations, trainings and
+ *   programs pointing at those rungs would lose their link.
  */
 class CompetencyImport implements ReportsImportOutcome, SkipsUnknownSheets, WithEvents, WithMultipleSheets
 {
@@ -379,12 +380,25 @@ class CompetencyImport implements ReportsImportOutcome, SkipsUnknownSheets, With
         ?Competency $existing,
         int $line,
     ): ?array {
+        // A ladder is imported whole — the rows listed replace what was stored,
+        // so a rung skipped over a bad cell would be a rung DELETED. Any error
+        // raised while building it therefore costs the whole competency, which
+        // is what this watermark measures.
+        $errorsBefore = count($this->errors);
+
         $stored = $existing === null
             ? collect()
-            : $existing->proficiencyLevels()->with('keyBehaviors')->get()
-                ->keyBy(fn ($level) => mb_strtolower(trim((string) $level->name_en)));
+            : $existing->proficiencyLevels()->with('keyBehaviors')->get();
 
-        // Key behaviors, bucketed by the rung they name.
+        // Stored rungs, reachable by either identifier: the code is what a rung
+        // is matched on, so importing over a ladder that predates the column is
+        // what gives its rungs their codes instead of replacing them.
+        $storedByCode = $stored->filter(fn ($level) => (string) $level->code !== '')
+            ->keyBy(fn ($level) => mb_strtolower(trim((string) $level->code)));
+        $storedByName = $stored->keyBy(fn ($level) => mb_strtolower(trim((string) $level->name_en)));
+
+        // Key behaviors, bucketed by the rung they name — its code or its
+        // English name, whichever the sheet used.
         $byRung = [];
         foreach ($behaviors[$codeKey] ?? [] as $row) {
             $rung = $this->cell($row['cells'], 'proficiency_level');
@@ -400,34 +414,64 @@ class CompetencyImport implements ReportsImportOutcome, SkipsUnknownSheets, With
 
         $out = [];
         $kept = [];
+        $seenCodes = [];
 
         foreach ($rows as $row) {
+            $rungCode = $this->cell($row['cells'], 'code');
             $name = $this->cell($row['cells'], 'name_en');
 
-            if ($name === null) {
-                $this->errors[] = "{$row['sheet']} row {$row['line']}: name_en is required.";
+            if ($rungCode === null || $name === null) {
+                $this->errors[] = "{$row['sheet']} row {$row['line']}: code and name_en are both required.";
 
                 continue;
             }
 
-            $key = mb_strtolower($name);
-            $level = $stored->get($key);
+            if (mb_strlen($rungCode) > 50 || mb_strlen($name) > 255) {
+                $this->errors[] = "{$row['sheet']} row {$row['line']}: code may not exceed "
+                    .'50 characters, name_en 255.';
+
+                continue;
+            }
+
+            $rungCodeKey = mb_strtolower($rungCode);
+
+            // Unique within the competency, which is the whole ladder here:
+            // the rows listed replace what was stored.
+            if (isset($seenCodes[$rungCodeKey])) {
+                $this->errors[] = "{$row['sheet']} row {$row['line']}: code '{$rungCode}' is already "
+                    ."used by row {$seenCodes[$rungCodeKey]} of this competency.";
+
+                continue;
+            }
+
+            $seenCodes[$rungCodeKey] = $row['line'];
+
+            $nameKey = mb_strtolower($name);
+            $level = $storedByCode->get($rungCodeKey) ?? $storedByName->get($nameKey);
 
             if ($level !== null) {
                 $kept[] = $level->id;
             }
 
+            // Key behaviors may name their rung either way, and a rung matched
+            // by name may have been given a new code on this very row — so both
+            // buckets are drained.
+            $rungBehaviors = [];
+            foreach (array_unique([$rungCodeKey, $nameKey]) as $key) {
+                $rungBehaviors = array_merge($rungBehaviors, $byRung[$key] ?? []);
+                unset($byRung[$key]);
+            }
+
             $out[] = [
                 'id' => $level?->id,
+                'code' => $rungCode,
                 'name_en' => $name,
                 'name_id' => $this->cell($row['cells'], 'name_id'),
                 'description_en' => $this->cell($row['cells'], 'description_en'),
                 'description_id' => $this->cell($row['cells'], 'description_id'),
                 'is_active' => $this->flag($row['cells'], 'is_active'),
-                'key_behaviors' => $this->behaviorRows($byRung[$key] ?? [], $level),
+                'key_behaviors' => $this->behaviorRows($rungBehaviors, $level),
             ];
-
-            unset($byRung[$key]);
         }
 
         // Whatever is left named a rung this competency's ladder does not have.
@@ -435,13 +479,20 @@ class CompetencyImport implements ReportsImportOutcome, SkipsUnknownSheets, With
             $first = $rows[0];
             $this->errors[] = "{$first['sheet']} row {$first['line']}: proficiency_level "
                 ."'".$this->cell($first['cells'], 'proficiency_level')."' is not one of "
-                ."'{$first['code']}'s proficiency level rows.";
+                ."'{$first['code']}'s proficiency level rows (give its code or its English name).";
         }
 
         // The service deletes the rungs the list leaves out, and a rung another
         // screen points at must not go that way.
         if ($existing !== null && ($blocker = $this->rules->removalBlocker($existing, $kept))) {
             $this->errors[] = "Row {$line}: {$blocker}";
+
+            return null;
+        }
+
+        if (count($this->errors) > $errorsBefore) {
+            $this->errors[] = "Row {$line}: skipped — its proficiency level rows have errors, "
+                .'and a ladder is imported whole (fix them and upload again).';
 
             return null;
         }

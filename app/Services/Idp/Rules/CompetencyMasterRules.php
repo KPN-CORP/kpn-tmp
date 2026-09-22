@@ -91,9 +91,12 @@ class CompetencyMasterRules
         );
 
         $named = fn (array $row) => $any($row, ['name_en', 'name_id']);
+        // A code counts as filled in: a rung carrying one but no name has to
+        // report that rather than vanishing, same as one carrying a
+        // description.
         $filled = fn (array $row) => $any(
             $row,
-            ['name_en', 'name_id', 'description_en', 'description_id'],
+            ['code', 'name_en', 'name_id', 'description_en', 'description_id'],
         );
 
         $rows = collect((array) $request->input('proficiency_levels'))
@@ -135,10 +138,10 @@ class CompetencyMasterRules
     }
 
     /**
-     * Two rungs may not share a name inside one competency, and two behaviors
-     * may not share a name inside one rung - the tables enforce both, so a
-     * duplicate has to be reported as a field message rather than a database
-     * error.
+     * Two rungs may not share a code or a name inside one competency, and two
+     * behaviors may not share a name inside one rung - the tables enforce all
+     * three, so a duplicate has to be reported as a field message rather than a
+     * database error.
      *
      * There is nothing to check about the ordering: both sequences are assigned
      * from the submitted row order, so they cannot collide.
@@ -148,6 +151,17 @@ class CompetencyMasterRules
     private function assertProficiencyLadderConsistent(array $data): void
     {
         $rows = collect($data['proficiency_levels'] ?? [])->map(fn ($row) => (array) $row);
+
+        $codes = $rows
+            ->map(fn (array $row) => strtolower(trim((string) ($row['code'] ?? ''))))
+            ->filter();
+
+        if ($codes->count() !== $codes->unique()->count()) {
+            $this->fail(
+                'proficiency_levels',
+                'Each proficiency level needs its own code; two of them are the same.'
+            );
+        }
 
         $names = $rows
             ->map(fn (array $row) => strtolower(trim((string) ($row['name_en'] ?? ''))))

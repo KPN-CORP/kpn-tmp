@@ -108,10 +108,16 @@ class MasterOptionService
             ->map(fn (CompetencyProficiencyLevel $level) => $this->option($level) + [
                 'competency_id' => $level->competency_id,
                 'sequence' => $level->sequence,
+                // The rung's short identifier, unique within its competency.
+                // Null on the rows that predate the column. Every list that
+                // shows a rung shows it, through the shared cell component.
+                'code' => $level->code,
                 // What the rung actually means. The Master Implementation list
                 // prints it under the level, the way the competency list does.
                 'description_en' => $level->description_en,
                 'description_id' => $level->description_id,
+                // `is_active` rides along from option(): the rung carries the
+                // flag, so every list can badge one that has been switched off.
             ]);
     }
 
@@ -178,6 +184,10 @@ class MasterOptionService
             'proficiency_levels' => $competency->proficiencyLevels->map(
                 fn (CompetencyProficiencyLevel $level) => [
                     'id' => $level->id,
+                    // The rung's short identifier, unique within this
+                    // competency. Null on the rows that predate the column —
+                    // the form requires one from now on.
+                    'code' => $level->code,
                     'name_en' => $level->name_en,
                     'name_id' => $level->name_id,
                     'description_en' => $level->description_en,

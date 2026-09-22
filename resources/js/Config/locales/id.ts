@@ -498,6 +498,14 @@ const id: LocaleMessages = {
             editTraining: 'Ubah pelatihan',
             deleteTraining: 'Hapus pelatihan',
             noTrainingsMatch: 'Tidak ada pelatihan yang cocok.',
+            // Filter di atas tabel pelatihan. Pilihan kompetensi menyempit
+            // sesuai tipe yang dipilih, lokasi kerja sesuai unit bisnis.
+            allCompetencyTypes: 'Semua tipe kompetensi',
+            allCompetencies: 'Semua kompetensi',
+            allProficiencyLevels: 'Semua level kemahiran',
+            allGrades: 'Semua grade',
+            allBusinessUnits: 'Semua unit bisnis',
+            allWorkLocations: 'Semua lokasi kerja',
             noTrainings: 'Belum ada pelatihan di katalog. Tambahkan di halaman Master Training.',
             // Cakupan master training: kompetensi yang dibangun dan sasarannya.
             workLocation: 'Lokasi Kerja',

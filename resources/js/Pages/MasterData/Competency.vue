@@ -10,6 +10,7 @@ import Pagination from '@/Components/UI/Pagination.vue'
 import { useLocale } from '@/Composables/useLocale'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
+import ProficiencyLevelCell from '@/Components/Domain/ProficiencyLevelCell.vue'
 import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
@@ -55,6 +56,9 @@ interface KeyBehavior {
 
 interface ProficiencyLevel {
     id: number
+    // The rung's short identifier, unique within this competency. Null on the
+    // rows that predate the column — the form requires one from now on.
+    code: string | null
     name_en: string
     name_id: string | null
     description_en: string | null
@@ -323,6 +327,9 @@ const competencyRows = computed(() => {
 interface CompetencyLine {
     // Level cell: rendered only on the first line of its level group.
     levelName: string | null
+    levelCode: string | null
+    // The rung's position on the ladder, rendered as the cell's badge.
+    levelSequence: number | null
     levelActive: boolean
     levelRowspan: number
     // 2 when the competency has no levels at all — the empty level cell then
@@ -330,7 +337,7 @@ interface CompetencyLine {
     levelColspan: number
     levelDescription: string | null
     behaviorName: string | null
-    // The behavior's position within its rung, rendered as the B1..Bn badge.
+    // The behavior's position within its rung, rendered as the cell's badge.
     behaviorSequence: number | null
 }
 
@@ -342,6 +349,8 @@ function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLi
     if (levels.length === 0) {
         return [{
             levelName: null,
+            levelCode: null,
+            levelSequence: null,
             levelActive: true,
             levelRowspan: 1,
             levelColspan: 2,
@@ -353,7 +362,7 @@ function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLi
 
     const lines: CompetencyLine[] = []
 
-    for (const level of levels) {
+    for (const [position, level] of levels.entries()) {
         // The stored sequence is the badge's number; it is server-assigned
         // 1..n within the rung, so a gap in it would be a bug rather than
         // something to paper over — but fall back to the position anyway.
@@ -367,6 +376,10 @@ function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLi
             lines.push({
                 // Only the group's first line paints the level cell.
                 levelName: i === 0 ? rowName(level) : null,
+                levelCode: i === 0 ? level.code || null : null,
+                // Same fallback as the behaviors': the sequence is
+                // server-assigned 1..n, so a gap would be a bug.
+                levelSequence: i === 0 ? level.sequence || position + 1 : null,
                 levelActive: level.is_active,
                 levelRowspan: i === 0 ? span : 0,
                 levelColspan: 1,
@@ -766,32 +779,17 @@ function changeCompetencyPerPage(size: number) {
                                         ? 'border-b border-border/40'
                                         : ''"
                                 >
-                                    <span
+                                    <ProficiencyLevelCell
                                         v-if="line.levelName"
-                                        class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
-                                        :class="
-                                            line.levelActive
-                                                ? 'bg-emerald-50 text-emerald-600'
-                                                : 'bg-slate-100 text-slate-400 line-through'
-                                        "
-                                        :title="
-                                            line.levelActive
-                                                ? undefined
-                                                : t.idp.settings.inactiveBadge
-                                        "
-                                    >
-                                        {{ line.levelName }}
-                                    </span>
+                                        :name="line.levelName"
+                                        :sequence="line.levelSequence"
+                                        :code="line.levelCode"
+                                        :description="line.levelDescription"
+                                        :active="line.levelActive"
+                                    />
                                     <span v-else class="text-xs italic text-slate-300">
                                         {{ t.idp.settings.noProficiencyLevel }}
                                     </span>
-
-                                    <p
-                                        v-if="line.levelDescription"
-                                        class="mt-1 whitespace-pre-line text-[11px] leading-snug text-slate-400"
-                                    >
-                                        {{ line.levelDescription }}
-                                    </p>
                                 </td>
 
                                 <!-- Key behavior: one per line, unless the
@@ -805,14 +803,15 @@ function changeCompetencyPerPage(size: number) {
                                 >
                                     <template v-if="line.behaviorName">
                                         <span
-                                            class="mr-1.5 inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-700"
-                                            :title="t.idp.settings.keyBehavior"
+                                            class="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700"
                                         >
-                                            B{{ line.behaviorSequence }}
+                                            {{ t.idp.settings.keyBehavior }} -
+                                            {{ line.behaviorSequence }}
                                         </span>
-                                        <span class="text-slate-600">
+
+                                        <p class="mt-1 text-slate-600">
                                             {{ line.behaviorName }}
-                                        </span>
+                                        </p>
                                     </template>
                                     <span v-else class="text-xs italic text-slate-300">
                                         —

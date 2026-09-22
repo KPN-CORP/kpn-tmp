@@ -348,6 +348,11 @@ class IdpMasterService
             }
 
             $attributes = [
+                // Trimmed for the same reason the masters' codes are: the code
+                // is unique within the competency, and trailing whitespace
+                // would make two codes that read alike collide on neither the
+                // index nor the eye.
+                'code' => $this->code($row),
                 'name_en' => $name,
                 'name_id' => $this->nullIfBlank($row['name_id'] ?? null),
                 'description_en' => $this->nullIfBlank($row['description_en'] ?? null),

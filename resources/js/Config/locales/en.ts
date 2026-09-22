@@ -495,7 +495,16 @@ export default {
             addTraining: 'Add training',
             editTraining: 'Edit training',
             deleteTraining: 'Delete training',
-            noTrainingsMatch: 'No trainings match your search.',
+            noTrainingsMatch: 'No trainings match your search or filters.',
+            // Filter dropdowns above the trainings table. A competency's
+            // options narrow to the chosen type, a work location's to the
+            // chosen business unit.
+            allCompetencyTypes: 'All competency types',
+            allCompetencies: 'All competencies',
+            allProficiencyLevels: 'All proficiency levels',
+            allGrades: 'All grades',
+            allBusinessUnits: 'All business units',
+            allWorkLocations: 'All work locations',
             noTrainings: 'No trainings in the catalogue yet. Add one on the Master Training page.',
             // Master training scope: what the training builds, and who it is for.
             workLocation: 'Work Location',

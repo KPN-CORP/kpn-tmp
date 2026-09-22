@@ -15,6 +15,7 @@ import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.
 import FormSection from '@/Components/UI/FormSection.vue'
 import MultiSelect from '@/Components/UI/MultiSelect.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
+import ProficiencyLevelCell from '@/Components/Domain/ProficiencyLevelCell.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
@@ -49,6 +50,9 @@ interface Competency extends Localized {
 interface ProficiencyLevel extends Localized {
     competency_id: number
     sequence: number
+    // The rung's short identifier, unique within its competency. Null on the
+    // rows that predate the column.
+    code: string | null
     is_active: boolean
     description_en: string | null
     description_id: string | null
@@ -435,6 +439,175 @@ const identityComplete = computed(() => form.value_en.trim() !== '')
 
 const search = ref('')
 
+/**
+ * --------------------------------------------------------------------------
+ * Filters: competency type -> competency, business unit -> work location
+ * --------------------------------------------------------------------------
+ *
+ * Every option is derived from the trainings on this page rather than from the
+ * masters, so picking one can never leave the table empty: a competency type
+ * no training is filed under, or a corporate site no training is offered at,
+ * is simply not offered.
+ *
+ * Two of them cascade. A competency can be picked on its own — the type only
+ * SHORTENS its option list — and the same holds for a work location and its
+ * business unit. Picking a parent that no longer offers the child's current
+ * value drops that value (the watchers below), so the table can never be
+ * narrowed by something the dropdown does not show.
+ */
+
+const typeFilter = ref('')
+const competencyFilter = ref('')
+const businessUnitFilter = ref('')
+const workLocationFilter = ref('')
+
+const hasFilters = computed(
+    () =>
+        typeFilter.value !== '' ||
+        competencyFilter.value !== '' ||
+        businessUnitFilter.value !== '' ||
+        workLocationFilter.value !== '',
+)
+
+function clearFilters() {
+    typeFilter.value = ''
+    competencyFilter.value = ''
+    businessUnitFilter.value = ''
+    workLocationFilter.value = ''
+}
+
+// "All …" first, then one option per distinct value, by label.
+function withAllOption(label: string, options: Option[]): Option[] {
+    return [
+        { value: '', label },
+        ...options.sort((a, b) => a.label.localeCompare(b.label)),
+    ]
+}
+
+const typeFilterOptions = computed<Option[]>(() => {
+    const seen = new Map<number, string>()
+
+    for (const tr of props.trainings) {
+        if (tr.competency_type_id == null) continue
+        const type = competencyTypeById.value.get(tr.competency_type_id)
+        seen.set(tr.competency_type_id, masterName(type) || String(tr.competency_type_id))
+    }
+
+    return withAllOption(
+        t.value.idp.settings.allCompetencyTypes,
+        [...seen].map(([id, label]) => ({ value: String(id), label })),
+    )
+})
+
+// The competencies of the trainings the type filter leaves — every training's
+// competency when no type is picked.
+const competencyFilterOptions = computed<Option[]>(() => {
+    const seen = new Map<number, string>()
+
+    for (const tr of props.trainings) {
+        if (tr.competency_id == null) continue
+        if (typeFilter.value !== '' && String(tr.competency_type_id ?? '') !== typeFilter.value) {
+            continue
+        }
+
+        const competency = competencyById.value.get(tr.competency_id)
+        seen.set(tr.competency_id, masterName(competency) || String(tr.competency_id))
+    }
+
+    return withAllOption(
+        t.value.idp.settings.allCompetencies,
+        [...seen].map(([id, label]) => ({ value: String(id), label })),
+    )
+})
+
+// Business units stand on their own — they are not narrowed by the competency
+// cascade, since where a training is offered says nothing about what it builds.
+const businessUnitFilterOptions = computed<Option[]>(() => {
+    const seen = new Set<string>()
+
+    for (const tr of props.trainings) {
+        for (const unit of tr.business_units ?? []) seen.add(unit)
+    }
+
+    return withAllOption(
+        t.value.idp.settings.allBusinessUnits,
+        [...seen].map((unit) => ({ value: unit, label: unit })),
+    )
+})
+
+/**
+ * The sites of the trainings the business-unit filter leaves — and, once a
+ * unit is picked, only the sites corporate files under THAT unit. A training
+ * offered in several units carries the sites of all of them, so without the
+ * second narrowing picking "Property" would still list plantation estates.
+ */
+const workLocationFilterOptions = computed<Option[]>(() => {
+    const unit = businessUnitFilter.value
+    const ofUnit = unit === '' ? null : new Set(props.workLocationsByBu[unit] ?? [])
+    const seen = new Set<string>()
+
+    for (const tr of props.trainings) {
+        if (unit !== '' && !(tr.business_units ?? []).includes(unit)) continue
+
+        for (const location of tr.work_locations ?? []) {
+            // A site corporate no longer maps to the chosen unit stays
+            // filterable with no unit picked, just not under that unit.
+            if (ofUnit && !ofUnit.has(location)) continue
+            seen.add(location)
+        }
+    }
+
+    return withAllOption(
+        t.value.idp.settings.allWorkLocations,
+        [...seen].map((location) => ({ value: location, label: location })),
+    )
+})
+
+// Drop a child value its narrowed list no longer offers. Watching the option
+// list rather than the parent covers a reload changing the trainings too.
+watch(competencyFilterOptions, (options) => {
+    if (competencyFilter.value !== '' && !options.some((o) => o.value === competencyFilter.value)) {
+        competencyFilter.value = ''
+    }
+})
+
+watch(workLocationFilterOptions, (options) => {
+    if (
+        workLocationFilter.value !== '' &&
+        !options.some((o) => o.value === workLocationFilter.value)
+    ) {
+        workLocationFilter.value = ''
+    }
+})
+
+// Whole trainings are filtered, never single proficiency lines — keeping only
+// the matching line would break the group it belongs to.
+function matchesFilters(tr: Training): boolean {
+    if (typeFilter.value !== '' && String(tr.competency_type_id ?? '') !== typeFilter.value) {
+        return false
+    }
+
+    if (competencyFilter.value !== '' && String(tr.competency_id ?? '') !== competencyFilter.value) {
+        return false
+    }
+
+    if (
+        businessUnitFilter.value !== '' &&
+        !(tr.business_units ?? []).includes(businessUnitFilter.value)
+    ) {
+        return false
+    }
+
+    if (
+        workLocationFilter.value !== '' &&
+        !(tr.work_locations ?? []).includes(workLocationFilter.value)
+    ) {
+        return false
+    }
+
+    return true
+}
+
 interface TrainingRow {
     key: string
     training: Training
@@ -452,7 +625,10 @@ interface TrainingRow {
     name: string
     description: string
     proficiency: string
+    proficiency_sequence: number | null
+    proficiency_code: string | null
     proficiency_description: string
+    proficiency_active: boolean
     business_units: string[]
     work_locations: string[]
     is_active: boolean
@@ -462,6 +638,8 @@ const filtered = computed<TrainingRow[]>(() => {
     const q = search.value.trim().toLowerCase()
 
     const trainings = props.trainings
+        // The dropdowns first, then the search box below.
+        .filter(matchesFilters)
         .map((r) => {
             const levels = (r.proficiency_level_ids ?? [])
                 .map((id) => proficiencyLevelById.value.get(id))
@@ -499,6 +677,7 @@ const filtered = computed<TrainingRow[]>(() => {
                       r.competency_name,
                       r.competency_code,
                       ...r.levels.map((l) => masterName(l)),
+                      ...r.levels.map((l) => l.code ?? ''),
                       ...(r.training.business_units ?? []),
                       ...(r.training.work_locations ?? []),
                   ].some((v) => v.toLowerCase().includes(q))
@@ -539,7 +718,15 @@ const filtered = computed<TrainingRow[]>(() => {
         }
 
         if (r.levels.length === 0) {
-            rows.push({ ...base, key: `${tr.id}-0`, proficiency: '', proficiency_description: '' })
+            rows.push({
+                ...base,
+                key: `${tr.id}-0`,
+                proficiency: '',
+                proficiency_sequence: null,
+                proficiency_code: null,
+                proficiency_description: '',
+                proficiency_active: true,
+            })
             continue
         }
 
@@ -548,13 +735,20 @@ const filtered = computed<TrainingRow[]>(() => {
                 ...base,
                 key: `${tr.id}-${level.id}`,
                 proficiency: masterName(level),
+                proficiency_sequence: level.sequence,
+                proficiency_code: level.code,
                 proficiency_description: rowDescription(level),
+                proficiency_active: level.is_active,
             })
         }
     }
 
     return rows
 })
+
+// How many TRAININGS the search + filters leave, not how many rows: a
+// training spans one row per proficiency level it targets.
+const visibleTrainingCount = computed(() => new Set(filtered.value.map((r) => r.id)).size)
 
 const columns = computed<Column[]>(() => [
     {
@@ -659,7 +853,11 @@ function confirmDelete() {
                         <h3 class="flex items-center gap-2 text-base font-semibold text-slate-800">
                             {{ t.idp.settings.trainings }}
                             <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
-                                {{ trainings.length }}
+                                {{ visibleTrainingCount }}
+                                <span
+                                    v-if="visibleTrainingCount !== trainings.length"
+                                    class="font-normal text-slate-400"
+                                >/ {{ trainings.length }}</span>
                             </span>
                         </h3>
                         <p class="mt-0.5 text-sm text-slate-400">
@@ -688,6 +886,50 @@ function confirmDelete() {
                             <i class="fa-solid fa-plus text-xs" />
                             {{ t.idp.settings.training }}
                         </button>
+                    </div>
+                </div>
+
+                <!-- Filters: competency type -> competency, business unit ->
+                     work location. Each child's options are narrowed by its
+                     parent; either can still be picked on its own. -->
+                <div class="border-b border-border/60 bg-slate-50/60 px-5 py-4">
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <SearchableSelect
+                            v-model="typeFilter"
+                            :options="typeFilterOptions"
+                            :placeholder="t.idp.settings.allCompetencyTypes"
+                        />
+
+                        <SearchableSelect
+                            v-model="competencyFilter"
+                            :options="competencyFilterOptions"
+                            :placeholder="t.idp.settings.allCompetencies"
+                        />
+
+                        <SearchableSelect
+                            v-model="businessUnitFilter"
+                            :options="businessUnitFilterOptions"
+                            :placeholder="t.idp.settings.allBusinessUnits"
+                        />
+
+                        <div class="flex gap-2">
+                            <SearchableSelect
+                                v-model="workLocationFilter"
+                                class="min-w-0 flex-1"
+                                :options="workLocationFilterOptions"
+                                :placeholder="t.idp.settings.allWorkLocations"
+                            />
+
+                            <button
+                                v-if="hasFilters"
+                                type="button"
+                                class="shrink-0 rounded-md border border-border bg-white px-3 text-sm text-slate-500 transition hover:bg-slate-50"
+                                :title="t.idp.settings.clearFilters"
+                                @click="clearFilters"
+                            >
+                                <i class="fa-solid fa-xmark" />
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -748,18 +990,17 @@ function confirmDelete() {
                         </span>
                     </template>
 
-                    <!-- The one unmerged column: a line per level, name over
-                         its description. -->
+                    <!-- The one unmerged column: a line per level, laid out
+                         as on the Master Competency list. -->
                     <template #cell-proficiency="{ row }">
-                        <div v-if="row.proficiency">
-                            <div class="font-medium text-slate-700">{{ row.proficiency }}</div>
-                            <p
-                                v-if="row.proficiency_description"
-                                class="mt-0.5 text-xs leading-snug text-slate-400"
-                            >
-                                {{ row.proficiency_description }}
-                            </p>
-                        </div>
+                        <ProficiencyLevelCell
+                            v-if="row.proficiency"
+                            :name="row.proficiency"
+                            :sequence="row.proficiency_sequence"
+                            :code="row.proficiency_code"
+                            :description="row.proficiency_description"
+                            :active="row.proficiency_active"
+                        />
                         <span v-else class="text-xs italic text-slate-300">&#8212;</span>
                     </template>
 
@@ -819,7 +1060,7 @@ function confirmDelete() {
                     </template>
 
                     <template #empty>
-                        {{ search ? t.idp.settings.noTrainingsMatch : t.idp.settings.none }}
+                        {{ search || hasFilters ? t.idp.settings.noTrainingsMatch : t.idp.settings.none }}
                     </template>
                 </ClientTable>
             </section>

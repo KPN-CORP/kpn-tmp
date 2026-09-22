@@ -13,7 +13,7 @@ use Maatwebsite\Excel\Concerns\WithMultipleSheets;
  * key behaviors observed at each rung. Two independent lists cannot share one
  * grid without a cross-product, so each gets a sheet of its own, joined back to
  * the competency by its `code`. Key behaviors join one step further, naming
- * their rung.
+ * their rung by the rung's own `code` (or its English name).
  *
  * A fifth sheet lists the competency types on offer, since `competency_type` is
  * checked against that master.
@@ -77,13 +77,13 @@ class CompetencyTemplateExport implements WithMultipleSheets
 
             new ArraySheet(
                 '3. Proficiency Level',
-                ['competency_code', 'name_en', 'name_id', 'description_en', 'description_id', 'is_active'],
+                ['competency_code', 'code', 'name_en', 'name_id', 'description_en', 'description_id', 'is_active'],
                 [
-                    ['COMM', 'Basic', 'Dasar', 'Communicates within the immediate team.', 'Berkomunikasi di dalam tim sendiri.', 'yes'],
-                    ['COMM', 'Intermediate', 'Menengah', 'Communicates across teams.', 'Berkomunikasi lintas tim.', 'yes'],
-                    ['COMM', 'Advanced', 'Mahir', 'Communicates with external parties on the company behalf.', 'Berkomunikasi dengan pihak luar atas nama perusahaan.', 'yes'],
-                    ['PROB', 'Basic', 'Dasar', 'Solves familiar problems with guidance.', 'Menyelesaikan masalah yang sudah dikenal dengan arahan.', 'yes'],
-                    ['PROB', 'Advanced', 'Mahir', 'Solves problems with no precedent.', 'Menyelesaikan masalah yang belum ada contohnya.', 'yes'],
+                    ['COMM', 'PL1', 'Basic', 'Dasar', 'Communicates within the immediate team.', 'Berkomunikasi di dalam tim sendiri.', 'yes'],
+                    ['COMM', 'PL2', 'Intermediate', 'Menengah', 'Communicates across teams.', 'Berkomunikasi lintas tim.', 'yes'],
+                    ['COMM', 'PL3', 'Advanced', 'Mahir', 'Communicates with external parties on the company behalf.', 'Berkomunikasi dengan pihak luar atas nama perusahaan.', 'yes'],
+                    ['PROB', 'PL1', 'Basic', 'Dasar', 'Solves familiar problems with guidance.', 'Menyelesaikan masalah yang sudah dikenal dengan arahan.', 'yes'],
+                    ['PROB', 'PL2', 'Advanced', 'Mahir', 'Solves problems with no precedent.', 'Menyelesaikan masalah yang belum ada contohnya.', 'yes'],
                 ],
             ),
 
@@ -91,12 +91,12 @@ class CompetencyTemplateExport implements WithMultipleSheets
                 '4. Key Behavior',
                 ['competency_code', 'proficiency_level', 'name_en', 'name_id'],
                 [
-                    ['COMM', 'Basic', 'Listens without interrupting', 'Mendengarkan tanpa memotong'],
-                    ['COMM', 'Basic', 'Shares information the team needs', 'Membagikan informasi yang dibutuhkan tim'],
-                    ['COMM', 'Intermediate', 'Adapts the message to the audience', 'Menyesuaikan pesan dengan lawan bicara'],
-                    ['COMM', 'Advanced', 'Facilitates discussion between conflicting parties', 'Memfasilitasi diskusi antar pihak yang berselisih'],
-                    ['PROB', 'Basic', 'Identifies the symptoms of a problem', 'Mengenali gejala suatu masalah'],
-                    ['PROB', 'Advanced', 'Designs a fix that holds', 'Merancang solusi yang bertahan'],
+                    ['COMM', 'PL1', 'Listens without interrupting', 'Mendengarkan tanpa memotong'],
+                    ['COMM', 'PL1', 'Shares information the team needs', 'Membagikan informasi yang dibutuhkan tim'],
+                    ['COMM', 'PL2', 'Adapts the message to the audience', 'Menyesuaikan pesan dengan lawan bicara'],
+                    ['COMM', 'PL3', 'Facilitates discussion between conflicting parties', 'Memfasilitasi diskusi antar pihak yang berselisih'],
+                    ['PROB', 'PL1', 'Identifies the symptoms of a problem', 'Mengenali gejala suatu masalah'],
+                    ['PROB', 'PL2', 'Designs a fix that holds', 'Merancang solusi yang bertahan'],
                 ],
             ),
 
@@ -161,11 +161,11 @@ class CompetencyTemplateExport implements WithMultipleSheets
                     ['2. Sub Competency', 'competency_code', 'a "code" on sheet 1.'],
                     ['3. Proficiency Level', 'competency_code', 'a "code" on sheet 1.'],
                     ['4. Key Behavior', 'competency_code', 'a "code" on sheet 1.'],
-                    ['4. Key Behavior', 'proficiency_level', 'a "name_en" on sheet 3, for that same competency.'],
+                    ['4. Key Behavior', 'proficiency_level', 'a rung on sheet 3, for that same competency — its "code", or its "name_en".'],
                     [
                         '',
                         'Worked example',
-                        'Sheet 1 has code COMM. Sheet 3 has COMM / Basic. Sheet 4 has COMM / Basic / "Listens without interrupting" — that behavior lands under the first rung of Communication.',
+                        'Sheet 1 has code COMM. Sheet 3 has COMM / PL1 / Basic. Sheet 4 has COMM / PL1 / "Listens without interrupting" — that behavior lands under the first rung of Communication.',
                     ],
                 ],
             ],
@@ -175,7 +175,7 @@ class CompetencyTemplateExport implements WithMultipleSheets
                 'rows' => [
                     ['Step 1', 'On sheet 1, list your competencies. Give each a short, unique code.', ''],
                     ['Step 2', 'On sheets 2, 3 and 4, add the child rows — putting the competency code in the first column of each.', ''],
-                    ['Step 3', 'On sheet 3, put the rungs in order. The first row for a competency becomes level 1, the next level 2, and so on.', ''],
+                    ['Step 3', 'On sheet 3, put the rungs in order and give each its own code. The first row for a competency becomes level 1, the next level 2, and so on.', ''],
                     ['Step 4', 'Save the file and upload it in the Import Center under "Master Competency".', ''],
                 ],
             ],
@@ -183,16 +183,17 @@ class CompetencyTemplateExport implements WithMultipleSheets
                 'heading' => 'THE COLUMNS',
                 'columns' => ['Column', 'Required?', 'What to put in it'],
                 'rows' => [
-                    ['code (sheet 1)', 'Required', 'A short identifier, up to 50 characters — for example COMM. Unique, and how the row is matched.'],
+                    ['code (sheet 1)', 'Required', 'A short identifier, up to 50 characters — for example COMM. Unique across every competency, and how the row is matched.'],
                     ['competency_type (sheet 1)', 'Required', 'From "Ref - Competency Types" — its Code, or its Name if it has none.'],
-                    ['name_en', 'Required', 'The English name. On sheet 1 it must be unique across all competencies.'],
+                    ['code (sheet 3)', 'Required', 'A short identifier for the rung, up to 50 characters — for example PL1. Unique within its own competency only, so every ladder can start at PL1. How the rung is matched.'],
+                    ['name_en', 'Required', 'The English name. On sheet 1 it must be unique across every competency; on sheet 3, within its own competency.'],
                     ['name_id', 'Optional', 'The Indonesian name, shown when the app is set to Indonesian.'],
                     ['description_en / description_id', 'Optional', 'A sentence of explanation.'],
                     ['is_active', 'Optional', 'yes or no. Blank means yes.'],
                 ],
             ],
             GuideSheet::goodToKnow(
-                'A row is matched on its code first, then on name_en. Anything unmatched adds a new competency.',
+                'A row is matched on its code first, then on name_en — competencies on sheet 1 and rungs on sheet 3 alike. Anything unmatched is added as new.',
                 [
                     [
                         'Leaving a sheet empty',

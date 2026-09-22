@@ -12,6 +12,7 @@ import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import FormSection from '@/Components/UI/FormSection.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
+import ProficiencyLevelCell from '@/Components/Domain/ProficiencyLevelCell.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
@@ -101,8 +102,14 @@ interface ProficiencyLevel {
     value_id: string | null
     competency_id: number
     sequence: number
+    // The rung's short identifier, unique within its competency. Null on the
+    // rows that predate the column.
+    code: string | null
     description_en: string | null
     description_id: string | null
+    // A rung switched off is struck through in the list; the program keeps it,
+    // since what a row already stores is never rejected.
+    is_active: boolean
 }
 
 /** A training in the Master Training catalogue, as a name option. */
@@ -831,12 +838,16 @@ interface ProgramRow {
     competencyCode: string
     competencyName: string
     proficiency: string
+    proficiencySequence: number | null
+    proficiencyCode: string | null
     proficiencyDescription: string
+    proficiencyActive: boolean
     grades: string[]
 }
 
-const programRows = computed<ProgramRow[]>(() => {
-    const q = programSearch.value.trim().toLowerCase()
+// Every row, sorted but unfiltered. The filter option lists read this, so
+// they offer what the data holds rather than what the current filters left.
+const baseRows = computed<ProgramRow[]>(() => {
     const rows: ProgramRow[] = []
 
     for (const p of props.developmentPrograms) {
@@ -857,7 +868,10 @@ const programRows = computed<ProgramRow[]>(() => {
             proficiency: level
                 ? masterName(level)
                 : p.custom_proficiency_level ?? '',
+            proficiencySequence: level?.sequence ?? null,
+            proficiencyCode: level?.code ?? null,
             proficiencyDescription: level ? rowDescription(level) : '',
+            proficiencyActive: level?.is_active ?? true,
             grades: p.grades ?? [],
         }
 
@@ -914,6 +928,216 @@ const programRows = computed<ProgramRow[]>(() => {
         return a.name.localeCompare(b.name)
     })
 
+    return rows
+})
+
+/**
+ * --------------------------------------------------------------------------
+ * Column filters
+ * --------------------------------------------------------------------------
+ * One per grouping column, in the same order the table nests them. Each one's
+ * options are drawn from the rows themselves, narrowed by the filters ABOVE it
+ * in the cascade, so a filter can never offer a value that would empty the
+ * table — and a choice that stops being offered is cleared rather than left
+ * silently applied.
+ *
+ * They deliberately ignore the package/model tabs: the tab counts already point
+ * at where the matches are, so keeping the option lists stable across tabs is
+ * more useful than hiding a competency that lives in the next cycle.
+ */
+
+const filterType = ref('')
+const filterCompetency = ref('')
+const filterLevel = ref('')
+const filterGrade = ref('')
+
+const hasFilters = computed(
+    () =>
+        filterType.value !== '' ||
+        filterCompetency.value !== '' ||
+        filterLevel.value !== '' ||
+        filterGrade.value !== '',
+)
+
+function clearFilters() {
+    filterType.value = ''
+    filterCompetency.value = ''
+    filterLevel.value = ''
+    filterGrade.value = ''
+}
+
+// "All …" first, then one option per distinct value, by label — the same shape
+// Master Training's filters use, so the two toolbars behave identically.
+function withAllOption(
+    label: string,
+    options: Option[],
+    sorted = true,
+): Option[] {
+    return [
+        { value: '', label },
+        ...(sorted
+            ? options.sort((a, b) => a.label.localeCompare(b.label))
+            : options),
+    ]
+}
+
+// Distinct (value, label) pairs drawn from the rows. A blank value is skipped:
+// "no competency at all" is legacy data, not something worth offering.
+function distinctOptions(
+    rows: ProgramRow[],
+    value: (row: ProgramRow) => string,
+    label: (row: ProgramRow) => string,
+): Option[] {
+    const seen = new Map<string, string>()
+    for (const row of rows) {
+        const v = value(row)
+        const l = label(row)
+        if (v === '' || l === '' || seen.has(v)) continue
+        seen.set(v, l)
+    }
+    return [...seen].map(([v, l]) => ({ value: v, label: l }))
+}
+
+// The cascade: each stage is the rows left after the filters above it.
+const rowsForType = computed(() => baseRows.value)
+
+const rowsForCompetency = computed(() =>
+    filterType.value === ''
+        ? rowsForType.value
+        : rowsForType.value.filter(
+              (row) => row.competencyTypeKey === filterType.value,
+          ),
+)
+
+const rowsForLevel = computed(() =>
+    filterCompetency.value === ''
+        ? rowsForCompetency.value
+        : rowsForCompetency.value.filter(
+              (row) => row.competencyKey === filterCompetency.value,
+          ),
+)
+
+const rowsForGrade = computed(() =>
+    filterLevel.value === ''
+        ? rowsForLevel.value
+        : rowsForLevel.value.filter(
+              (row) => String(row.proficiencySequence ?? '') === filterLevel.value,
+          ),
+)
+
+const typeFilterOptions = computed<Option[]>(() =>
+    withAllOption(
+        t.value.idp.settings.allCompetencyTypes,
+        distinctOptions(
+            rowsForType.value,
+            (row) => row.competencyTypeKey,
+            (row) => row.competencyTypeName,
+        ),
+    ),
+)
+
+const competencyFilterOptions = computed<Option[]>(() =>
+    withAllOption(
+        t.value.idp.settings.allCompetencies,
+        distinctOptions(
+            rowsForCompetency.value,
+            (row) => row.competencyKey,
+            (row) => row.competencyName,
+        ),
+    ),
+)
+
+/**
+ * Levels are keyed on the rung's SEQUENCE, not its id and not its name.
+ *
+ * A rung belongs to exactly one competency (Phase 5.19), so the id would answer
+ * "this competency's first rung" when the question is "everything at rung 1".
+ * The sequence is the rung's position on its competency's ladder, which is the
+ * thing every competency has in common — and an integer compare rather than a
+ * string one.
+ *
+ * The label is still the name, because that is what the table prints. Ladders
+ * almost always name rung N the same way, so one name normally covers the whole
+ * option; when they disagree, every name at that rung is listed rather than one
+ * being picked to stand for the rest.
+ */
+const levelFilterOptions = computed<Option[]>(() => {
+    const names = new Map<number, Set<string>>()
+
+    for (const row of rowsForLevel.value) {
+        const seq = row.proficiencySequence
+        // A free-typed level (an "Others" program) has no rung, so it has no
+        // sequence to file under and is not offered here.
+        if (seq == null) continue
+        if (!names.has(seq)) names.set(seq, new Set())
+        if (row.proficiency !== '') names.get(seq)!.add(row.proficiency)
+    }
+
+    const options = [...names]
+        .sort(([a], [b]) => a - b)
+        .map(([seq, labels]) => ({
+            value: String(seq),
+            label: labels.size ? [...labels].sort().join(' / ') : String(seq),
+        }))
+
+    return withAllOption(
+        t.value.idp.settings.allProficiencyLevels,
+        options,
+        false,
+    )
+})
+
+const gradeFilterOptions = computed<Option[]>(() => {
+    const seen = new Set<string>()
+    for (const row of rowsForGrade.value) {
+        for (const g of row.grades) seen.add(g)
+    }
+    return withAllOption(
+        t.value.idp.settings.allGrades,
+        [...seen].map((g) => ({ value: g, label: g })),
+    )
+})
+
+// A choice the cascade no longer offers is dropped, so the table never filters
+// on something the toolbar cannot show.
+watch(competencyFilterOptions, (opts) => {
+    if (
+        filterCompetency.value !== '' &&
+        !opts.some((o) => o.value === filterCompetency.value)
+    ) {
+        filterCompetency.value = ''
+    }
+})
+
+watch(levelFilterOptions, (opts) => {
+    if (
+        filterLevel.value !== '' &&
+        !opts.some((o) => o.value === filterLevel.value)
+    ) {
+        filterLevel.value = ''
+    }
+})
+
+watch(gradeFilterOptions, (opts) => {
+    if (
+        filterGrade.value !== '' &&
+        !opts.some((o) => o.value === filterGrade.value)
+    ) {
+        filterGrade.value = ''
+    }
+})
+
+// Search is applied last and deliberately does NOT narrow the option lists:
+// free text that reshuffles four dropdowns as it is typed is unreadable.
+const programRows = computed<ProgramRow[]>(() => {
+    const rows =
+        filterGrade.value === ''
+            ? rowsForGrade.value
+            : rowsForGrade.value.filter((row) =>
+                  row.grades.includes(filterGrade.value),
+              )
+
+    const q = programSearch.value.trim().toLowerCase()
     if (!q) return rows
 
     return rows.filter((row) =>
@@ -924,6 +1148,7 @@ const programRows = computed<ProgramRow[]>(() => {
             row.competencyCode,
             row.competencyTypeName,
             row.competencyTypeCode,
+            row.proficiency,
         ].some((field) => field.toLowerCase().includes(q)),
     )
 })
@@ -990,6 +1215,18 @@ const packageTabs = computed<PackageTab[]>(() => {
     return tabs
 })
 
+// The package is a select rather than a strip of buttons: it is a "which cycle
+// am I looking at" choice, made once, and packages accumulate over the years.
+// The count rides in the label so it survives in the closed trigger, which
+// shows the label alone.
+const packageFilterOptions = computed<Option[]>(() =>
+    packageTabs.value.map((tab) => ({
+        value: tab.key,
+        label: `${tab.label} (${tab.count})`,
+        description: tab.isActive ? t.value.idp.settings.activeBadge : undefined,
+    })),
+)
+
 // Open on the package in force — the cycle being worked on.
 const selectedPackageKey = ref<string | null>(null)
 
@@ -1004,6 +1241,10 @@ const activePackageKey = computed<string>(() => {
 
     return current?.key ?? tabs[0]?.key ?? NO_MODEL_KEY
 })
+
+const activePackageTab = computed(() =>
+    packageTabs.value.find((tab) => tab.key === activePackageKey.value) ?? null,
+)
 
 interface ModelTab {
     key: string
@@ -1051,6 +1292,12 @@ const activeModelKey = computed<string>(() => {
 
 const visibleRows = computed(() =>
     programRows.value.filter((row) => row.modelKey === activeModelKey.value),
+)
+
+// How many PROGRAMS the tabs + filters + search leave, not how many rows: a
+// program with two competencies is one program on two lines.
+const visibleProgramCount = computed(
+    () => new Set(visibleRows.value.map((row) => row.id)).size,
 )
 
 /**
@@ -1124,7 +1371,11 @@ const programColumns = computed<Column[]>(() => [
                         <h3 class="flex items-center gap-2 text-base font-semibold text-slate-800">
                             {{ t.idp.settings.programs }}
                             <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
-                                {{ developmentPrograms.length }}
+                                {{ visibleProgramCount }}
+                                <span
+                                    v-if="visibleProgramCount !== developmentPrograms.length"
+                                    class="font-normal text-slate-400"
+                                >/ {{ developmentPrograms.length }}</span>
                             </span>
                         </h3>
                         <p class="mt-0.5 text-sm text-slate-400">
@@ -1156,56 +1407,46 @@ const programColumns = computed<Column[]>(() => [
                 </div>
             </div>
 
-                <!-- Two levels: which model package, then which of its
+                <!-- Which cycle: the model package, then which of ITS
                      development models. A model belongs to exactly one package,
-                     so splitting them apart is what says which is which. -->
+                     so keeping them on one line — select, divider, tabs — says
+                     which models the package on the left is offering. -->
                 <div
-                    v-if="packageTabs.length > 1"
-                    class="flex flex-wrap items-center gap-2 border-b border-border/60 bg-slate-50/60 px-5 py-3"
+                    v-if="packageTabs.length > 1 || modelTabs.length"
+                    class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/60 px-5 py-3"
                 >
-                    <span class="mr-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                        {{ t.idp.settings.packages }}
-                    </span>
-                    <button
-                        v-for="tab in packageTabs"
-                        :key="tab.key"
-                        type="button"
-                        class="inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition"
-                        :class="
-                            activePackageKey === tab.key
-                                ? 'border-primary bg-primary/5 text-primary'
-                                : 'border-border bg-white text-slate-600 hover:bg-slate-50'
-                        "
-                        @click="selectedPackageKey = tab.key"
-                    >
-                        {{ tab.label }}
-                        <span
-                            v-if="tab.isActive"
-                            class="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-600"
-                        >
-                            {{ t.idp.settings.statusActive }}
+                    <template v-if="packageTabs.length > 1">
+                        <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                            {{ t.idp.settings.packages }}
                         </span>
+                        <div class="w-64">
+                            <SearchableSelect
+                                :model-value="activePackageKey"
+                                :options="packageFilterOptions"
+                                @update:model-value="selectedPackageKey = $event"
+                            />
+                        </div>
+                        <!-- The closed trigger shows the label alone, so the
+                             pin saying which cycle is in force sits outside. -->
                         <span
-                            class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
-                            :class="activePackageKey === tab.key ? 'bg-primary/15' : 'bg-slate-100 text-slate-500'"
+                            v-if="activePackageTab?.isActive"
+                            class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-600"
                         >
-                            {{ tab.count }}
+                            {{ t.idp.settings.activeBadge }}
                         </span>
-                    </button>
-                </div>
 
-                <div
-                    v-if="modelTabs.length"
-                    class="flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-3"
-                >
-                    <span class="mr-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                        {{ t.idp.settings.model }}
-                    </span>
+                        <span
+                            v-if="modelTabs.length"
+                            aria-hidden="true"
+                            class="mx-1 hidden h-7 w-px bg-border sm:block"
+                        />
+                    </template>
+
                     <button
                         v-for="tab in modelTabs"
                         :key="tab.key"
                         type="button"
-                        class="inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium transition"
+                        class="inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition"
                         :class="
                             activeModelKey === tab.key
                                 ? 'border-primary bg-primary/5 text-primary'
@@ -1214,7 +1455,9 @@ const programColumns = computed<Column[]>(() => [
                         @click="selectedModelKey = tab.key"
                     >
                         {{ tab.label }}
-                        <span class="text-slate-400">{{ tab.percentage }}%</span>
+                        <span class="text-xs font-normal text-slate-400">
+                            {{ tab.percentage }}%
+                        </span>
                         <span
                             class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
                             :class="activeModelKey === tab.key ? 'bg-primary/15' : 'bg-slate-100 text-slate-500'"
@@ -1224,12 +1467,55 @@ const programColumns = computed<Column[]>(() => [
                     </button>
                 </div>
 
+                <!-- Filters, one per grouping column in the table's own nesting
+                     order; each child's options are narrowed by its parent. -->
+                <div class="border-b border-border/60 bg-slate-50/60 px-5 py-4">
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <SearchableSelect
+                            v-model="filterType"
+                            :options="typeFilterOptions"
+                            :placeholder="t.idp.settings.allCompetencyTypes"
+                        />
+
+                        <SearchableSelect
+                            v-model="filterCompetency"
+                            :options="competencyFilterOptions"
+                            :placeholder="t.idp.settings.allCompetencies"
+                        />
+
+                        <SearchableSelect
+                            v-model="filterLevel"
+                            :options="levelFilterOptions"
+                            :placeholder="t.idp.settings.allProficiencyLevels"
+                        />
+
+                        <div class="flex gap-2">
+                            <SearchableSelect
+                                v-model="filterGrade"
+                                class="min-w-0 flex-1"
+                                :options="gradeFilterOptions"
+                                :placeholder="t.idp.settings.allGrades"
+                            />
+
+                            <button
+                                v-if="hasFilters"
+                                type="button"
+                                class="shrink-0 rounded-md border border-border bg-white px-3 text-sm text-slate-500 transition hover:bg-slate-50"
+                                :title="t.idp.settings.clearFilters"
+                                @click="clearFilters"
+                            >
+                                <i class="fa-solid fa-xmark" />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Grouped: competency type → competency → program -->
                 <ClientTable
                     :columns="programColumns"
                     :rows="visibleRows"
                     row-key="key"
-                    :per-page="10"
+                    :per-page="20"
                     bordered
                 >
                     <!-- One cell per competency type, merged across the
@@ -1280,18 +1566,18 @@ const programColumns = computed<Column[]>(() => [
                         <span class="font-semibold text-slate-800">{{ row.name }}</span>
                     </template>
 
+                    <!-- Laid out as on the Master Competency list. A
+                         free-typed proficiency has no rung behind it, so it
+                         arrives with no sequence and shows no badge. -->
                     <template #cell-proficiency="{ row }">
-                        <div v-if="row.proficiency">
-                            <div class="font-medium text-slate-700">
-                                {{ row.proficiency }}
-                            </div>
-                            <p
-                                v-if="row.proficiencyDescription"
-                                class="mt-0.5 text-xs leading-snug text-slate-400"
-                            >
-                                {{ row.proficiencyDescription }}
-                            </p>
-                        </div>
+                        <ProficiencyLevelCell
+                            v-if="row.proficiency"
+                            :name="row.proficiency"
+                            :sequence="row.proficiencySequence"
+                            :code="row.proficiencyCode"
+                            :description="row.proficiencyDescription"
+                            :active="row.proficiencyActive"
+                        />
                         <span v-else class="text-xs italic text-slate-300">&#8212;</span>
                     </template>
 
@@ -1327,7 +1613,7 @@ const programColumns = computed<Column[]>(() => [
 
                     <template #empty>
                         {{
-                            programSearch
+                            programSearch || hasFilters
                                 ? t.idp.settings.noProgramsMatch
                                 : t.idp.settings.none
                         }}

@@ -186,6 +186,10 @@ class MasterDataValidator
             // reads off the submitted order.
             'proficiency_levels' => ['nullable', 'array'],
             'proficiency_levels.*.id' => ['nullable', 'integer'],
+            // Unique within the competency, which the ladder's own consistency
+            // check covers: the whole ladder is replaced on every save, so the
+            // submitted rows are the only rows there will be.
+            'proficiency_levels.*.code' => ['required', 'string', 'max:50'],
             'proficiency_levels.*.name_en' => ['required', 'string', 'max:255'],
             'proficiency_levels.*.name_id' => ['nullable', 'string', 'max:255'],
             'proficiency_levels.*.description_en' => ['nullable', 'string'],
@@ -241,6 +245,8 @@ class MasterDataValidator
             'sub_competencies.*.name_en.required' => 'Every sub competency needs an English name.',
             'sub_competencies.*.name_en.max' => 'A sub competency name may not be longer than 255 characters.',
             'sub_competencies.*.name_id.max' => 'A sub competency name may not be longer than 255 characters.',
+            'proficiency_levels.*.code.required' => 'Every proficiency level needs a code.',
+            'proficiency_levels.*.code.max' => 'A proficiency level code may not be longer than 50 characters.',
             'proficiency_levels.*.name_en.required' => 'Every proficiency level needs an English name.',
             'proficiency_levels.*.name_en.max' => 'A proficiency level name may not be longer than 255 characters.',
             'proficiency_levels.*.name_id.max' => 'A proficiency level name may not be longer than 255 characters.',

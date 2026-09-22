@@ -16,6 +16,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * `sequence` is the rung's position on the competency form, assigned from the
  * submitted order rather than typed in, so it is always 1..n with no gaps.
  *
+ * `code` is the short identifier typed alongside the name, unique within the
+ * competency — PL1 is the natural code for a first rung, so every ladder gets
+ * to use it. Null on the rows that predate the column.
+ *
  * Owned by the competency and typed in on its form. Since the shared
  * `proficiency_levels` master was retired this is the only kind of proficiency
  * level there is: Master Implementation, Master Training and the
@@ -29,6 +33,7 @@ class CompetencyProficiencyLevel extends Model
 
     protected $fillable = [
         'competency_id',
+        'code',
         'name_en',
         'name_id',
         'description_en',

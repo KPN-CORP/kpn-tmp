@@ -15,6 +15,7 @@ import Pagination from '@/Components/UI/Pagination.vue'
 import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
+import ProficiencyLevelCell from '@/Components/Domain/ProficiencyLevelCell.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
@@ -54,6 +55,9 @@ interface Competency extends Localized {
 interface ProficiencyLevel extends Localized {
     competency_id: number
     sequence: number
+    // The rung's short identifier, unique within its competency. Null on the
+    // rows that predate the column.
+    code: string | null
     is_active: boolean
     description_en: string | null
     description_id: string | null
@@ -449,7 +453,7 @@ const labelledImpls = computed(() =>
             type_name: masterName(type),
             type_code: type?.code ?? '',
             levels,
-            proficiency_names: levels.map((p) => masterName(p)),
+            proficiency_names: levels.flatMap((p) => [masterName(p), p.code ?? '']),
         }
     }),
 )
@@ -643,38 +647,30 @@ function changeImplPerPage(size: number) {
  * One rendered <tr> of a mapping block: a single proficiency level, or one
  * blank line when the mapping pins none.
  *
- * The badge is the rung's position on its competency's ladder — PL1, PL2 —
- * mirroring the B1..Bn badges the competency list gives key behaviors, with
- * what the rung means printed under it, the way the competency list prints a
- * level's description.
- *
- * The name only earns a place beside the badge when it says something the
- * badge does not: the ladders are named "PL<n>" in English but descriptively
- * in Indonesian ("Dasar", "Mahir"), so the badge is what stays constant.
+ * The fields are what ProficiencyLevelCell reads, so a rung is laid out here
+ * exactly as it is on the Master Competency list — badge, code, name, then what
+ * it means.
  */
 interface ImplLine {
-    badge: string | null
     name: string | null
+    sequence: number | null
+    code: string | null
     description: string | null
     active: boolean
 }
 
 function linesFor(levels: ProficiencyLevel[]): ImplLine[] {
     if (levels.length === 0) {
-        return [{ badge: null, name: null, description: null, active: true }]
+        return [{ name: null, sequence: null, code: null, description: null, active: true }]
     }
 
-    return levels.map((level) => {
-        const badge = `PL${level.sequence}`
-        const name = masterName(level)
-
-        return {
-            badge,
-            name: name === badge ? null : name,
-            description: rowDescription(level) || null,
-            active: level.is_active,
-        }
-    })
+    return levels.map((level) => ({
+        name: masterName(level),
+        sequence: level.sequence,
+        code: level.code,
+        description: rowDescription(level) || null,
+        active: level.is_active,
+    }))
 }
 
 // The mappings on the current page, each expanded into its rendered lines.
@@ -917,7 +913,10 @@ function confirmDelete() {
                                         />
                                     </span>
                                 </th>
-                                <th class="w-48 px-4 py-2.5 font-semibold">
+                                <!-- w-56 like the other two level columns: the
+                                     badge names the level in full now, so w-48
+                                     wrapped it. -->
+                                <th class="w-56 px-4 py-2.5 font-semibold">
                                     {{ t.idp.settings.proficiencyLevel }}
                                 </th>
                                 <th class="w-40 px-4 py-2.5 font-semibold">
@@ -995,35 +994,14 @@ function confirmDelete() {
                                         class="border-r border-border/40 px-4 py-3 align-top"
                                         :class="i < block.lines.length - 1 ? 'border-b border-border/40' : ''"
                                     >
-                                        <template v-if="line.badge">
-                                            <span
-                                                class="inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold"
-                                                :class="
-                                                    line.active
-                                                        ? 'bg-emerald-50 text-emerald-700'
-                                                        : 'bg-slate-100 text-slate-400 line-through'
-                                                "
-                                                :title="line.active ? undefined : t.idp.settings.inactiveBadge"
-                                            >
-                                                {{ line.badge }}
-                                            </span>
-                                            <span
-                                                v-if="line.name"
-                                                class="ml-1.5 text-slate-600"
-                                                :class="line.active ? '' : 'text-slate-400 line-through'"
-                                            >
-                                                {{ line.name }}
-                                            </span>
-
-                                            <!-- What the rung means, under it,
-                                                 as on the competency list. -->
-                                            <p
-                                                v-if="line.description"
-                                                class="mt-1 whitespace-pre-line text-[11px] leading-snug text-slate-400"
-                                            >
-                                                {{ line.description }}
-                                            </p>
-                                        </template>
+                                        <ProficiencyLevelCell
+                                            v-if="line.name"
+                                            :name="line.name"
+                                            :sequence="line.sequence"
+                                            :code="line.code"
+                                            :description="line.description"
+                                            :active="line.active"
+                                        />
                                         <span v-else class="text-xs italic text-slate-300">
                                             {{ t.idp.settings.noProficiencyLevel }}
                                         </span>
