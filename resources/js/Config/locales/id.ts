@@ -585,6 +585,12 @@ const id: LocaleMessages = {
             activate: 'Aktifkan',
             deactivate: 'Nonaktifkan',
             statusHistory: 'Riwayat aktivasi',
+            // Konfirmasi sebelum tombol Aktif/Nonaktif menulis ke database.
+            activateTitle: 'Aktifkan item ini?',
+            deactivateTitle: 'Nonaktifkan item ini?',
+            confirmActivate: 'Item ini akan kembali ditawarkan di semua tempat yang relevan.',
+            confirmDeactivate:
+                'Item tetap ada di daftar ini, tetapi tidak lagi ditawarkan untuk pilihan baru. Data yang sudah memakainya tetap berjalan.',
             noStatusHistory: 'Belum ada perubahan aktivasi.',
             changedBy: 'Diubah oleh',
             activatedBadge: 'Diaktifkan',

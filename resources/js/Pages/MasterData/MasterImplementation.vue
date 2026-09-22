@@ -6,6 +6,7 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import ConfirmActiveStateDialog from '@/Components/Domain/ConfirmActiveStateDialog.vue'
 import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import FormSection from '@/Components/UI/FormSection.vue'
@@ -17,6 +18,7 @@ import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import ProficiencyLevelCell from '@/Components/Domain/ProficiencyLevelCell.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { useActiveStateToggle } from '@/Composables/useActiveStateToggle'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
 
@@ -728,20 +730,17 @@ const implBlocks = computed(() => {
  * which the history drawer reads back.
  */
 
-const togglingId = ref<number | null>(null)
+const { pendingToggle, togglingId, requestToggle, confirmToggle, cancelToggle } =
+    useActiveStateToggle(reloadOnly)
 
 function toggleActive(row: Implementation) {
-    router.put(
-        route('idp.setting.implementations.active', row.id),
-        { is_active: !row.is_active },
-        {
-            preserveScroll: true,
-            preserveState: true,
-            only: reloadOnly,
-            onStart: () => (togglingId.value = row.id),
-            onFinish: () => (togglingId.value = null),
-        },
-    )
+    requestToggle({
+        id: row.id,
+        activating: !row.is_active,
+        url: route('idp.setting.implementations.active', row.id),
+        // A mapping has no name of its own — the competency it maps labels it.
+        name: implLabel(row),
+    })
 }
 
 const historyImpl = ref<Implementation | null>(null)
@@ -1390,6 +1389,14 @@ function confirmDelete() {
         <!-- ================================================================
              ACTIVATION HISTORY
         ================================================================= -->
+
+        <!-- Activating / deactivating writes on the spot, so the badge asks. -->
+        <ConfirmActiveStateDialog
+            :target="pendingToggle"
+            :processing="togglingId !== null"
+            @confirm="confirmToggle"
+            @close="cancelToggle"
+        />
 
         <MasterStatusHistory
             :show="historyImpl !== null"

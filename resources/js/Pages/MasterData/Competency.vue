@@ -5,12 +5,14 @@ import { Head, Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import ConfirmActiveStateDialog from '@/Components/Domain/ConfirmActiveStateDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
 import { useLocale } from '@/Composables/useLocale'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import ProficiencyLevelCell from '@/Components/Domain/ProficiencyLevelCell.vue'
+import { useActiveStateToggle } from '@/Composables/useActiveStateToggle'
 import { route } from '@/Config/route'
 
 const { t, locale } = useLocale()
@@ -522,20 +524,16 @@ const competencyBlocks = computed(() => {
  * the history drawer reads back.
  */
 
-const togglingId = ref<number | null>(null)
+const { pendingToggle, togglingId, requestToggle, confirmToggle, cancelToggle } =
+    useActiveStateToggle(reloadOnly)
 
 function toggleActive(competency: Competency) {
-    router.put(
-        route('idp.setting.masters.active', [MASTER_TYPE, competency.id]),
-        { is_active: !competency.is_active },
-        {
-            preserveScroll: true,
-            preserveState: true,
-            only: reloadOnly,
-            onStart: () => (togglingId.value = competency.id),
-            onFinish: () => (togglingId.value = null),
-        },
-    )
+    requestToggle({
+        id: competency.id,
+        activating: !competency.is_active,
+        url: route('idp.setting.masters.active', [MASTER_TYPE, competency.id]),
+        name: masterName(competency),
+    })
 }
 
 const historyCompetency = ref<Competency | null>(null)
@@ -884,6 +882,14 @@ function changeCompetencyPerPage(size: number) {
         <!-- ================================================================
              ACTIVATION HISTORY
         ================================================================= -->
+
+        <!-- Activating / deactivating writes on the spot, so the badge asks. -->
+        <ConfirmActiveStateDialog
+            :target="pendingToggle"
+            :processing="togglingId !== null"
+            @confirm="confirmToggle"
+            @close="cancelToggle"
+        />
 
         <MasterStatusHistory
             :show="historyCompetency !== null"

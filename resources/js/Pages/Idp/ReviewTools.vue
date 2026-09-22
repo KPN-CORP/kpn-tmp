@@ -6,6 +6,7 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
+import ConfirmActiveStateDialog from '@/Components/Domain/ConfirmActiveStateDialog.vue'
 import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
@@ -13,6 +14,7 @@ import ActiveStateField from '@/Components/Domain/ActiveStateField.vue'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { useActiveStateToggle } from '@/Composables/useActiveStateToggle'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
 
@@ -152,20 +154,16 @@ const modalTitle = computed(() =>
  * audit log on disk, which the history drawer reads back.
  */
 
-const togglingId = ref<number | null>(null)
+const { pendingToggle, togglingId, requestToggle, confirmToggle, cancelToggle } =
+    useActiveStateToggle(reloadOnly)
 
 function toggleActive(tool: ReviewTool) {
-    router.put(
-        route('idp.setting.masters.active', ['review_tools', tool.id]),
-        { is_active: !tool.is_active },
-        {
-            preserveScroll: true,
-            preserveState: true,
-            only: reloadOnly,
-            onStart: () => (togglingId.value = tool.id),
-            onFinish: () => (togglingId.value = null),
-        },
-    )
+    requestToggle({
+        id: tool.id,
+        activating: !tool.is_active,
+        url: route('idp.setting.masters.active', ['review_tools', tool.id]),
+        name: toolName(tool),
+    })
 }
 
 const historyTool = ref<ReviewTool | null>(null)
@@ -385,6 +383,14 @@ function confirmDelete() {
         <!-- ================================================================
              ACTIVATION HISTORY
         ================================================================= -->
+
+        <!-- Activating / deactivating writes on the spot, so the badge asks. -->
+        <ConfirmActiveStateDialog
+            :target="pendingToggle"
+            :processing="togglingId !== null"
+            @confirm="confirmToggle"
+            @close="cancelToggle"
+        />
 
         <MasterStatusHistory
             :show="historyTool !== null"

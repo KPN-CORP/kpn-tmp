@@ -584,6 +584,13 @@ export default {
             activate: 'Activate',
             deactivate: 'Deactivate',
             statusHistory: 'Activation history',
+            // Confirmation in front of the Active/Inactive badge: it writes
+            // to the database on the spot, so the click only asks.
+            activateTitle: 'Activate this item?',
+            deactivateTitle: 'Deactivate this item?',
+            confirmActivate: 'It will be offered again everywhere it applies.',
+            confirmDeactivate:
+                'It stays on this list but stops being offered anywhere new. Whatever already points at it keeps working.',
             noStatusHistory: 'No activation change yet.',
             changedBy: 'Changed by',
             activatedBadge: 'Activated',
