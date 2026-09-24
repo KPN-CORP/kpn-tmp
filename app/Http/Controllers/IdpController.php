@@ -13,11 +13,13 @@ use App\Jobs\GenerateIdpZip;
 use App\Models\BusinessUnit;
 use App\Models\Competency;
 use App\Models\DevelopmentModel;
+use App\Models\Employee;
 use App\Models\IdpApproval;
 use App\Models\ImportLog;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\JobStatus;
 use App\Models\ReviewTool;
+use App\Models\User;
 use App\Services\EmployeeScopeService;
 use App\Services\Idp\IdpStageService;
 use App\Services\IdpService;
@@ -53,7 +55,9 @@ class IdpController extends Controller
     ) {}
 
     /**
-     * Employee list — each row links to its IDP manage screen.
+     * The team list — every employee this user may see EXCEPT themselves; each
+     * row links to its IDP manage screen. The user's own plan has its own page
+     * (`mine`), so the two menus never show the same person.
      */
     public function index(Request $request): Response
     {
@@ -64,7 +68,7 @@ class IdpController extends Controller
             'employee_id', 'fullname', 'group_company', 'job_level', 'designation_name',
         ], 'fullname');
 
-        $base = $this->scope->accessibleQuery($user, ...self::IDP_VIEW);
+        $base = $this->teamQuery($user, self::IDP_VIEW);
 
         // Which cycle the list is reporting on. The picker has no per-employee
         // count to show, so it asks for none.
@@ -97,6 +101,50 @@ class IdpController extends Controller
             'viewingActive' => $selectedPackageId !== null && $selectedPackageId === $activePackageId,
             'filterOptions' => $this->filterOptions(clone $base),
         ]);
+    }
+
+    /**
+     * The signed-in user's own development plan — the manage screen, opened on
+     * their own employee record with no list in between.
+     *
+     * A user with no employee record (a pure admin account), or one the IDP
+     * data-access rules do not let see themselves, gets the page's empty state
+     * rather than a 403: the menu item is shown to everyone.
+     */
+    public function mine(Request $request): Response
+    {
+        $user = $request->user();
+        $employeeId = $user->employee_id;
+
+        $employee = $employeeId
+            ? $this->scope->accessibleQuery($user, ...self::IDP_VIEW)->where('employee_id', $employeeId)->first()
+            : null;
+
+        if (! $employee) {
+            return Inertia::render('Idp/Mine', ['employee' => null]);
+        }
+
+        return Inertia::render('Idp/Mine', array_merge(
+            ['employee' => new EmployeeResource($employee)],
+            $this->idp->manageData(
+                $employeeId,
+                $user,
+                canManage: true,
+                packageId: $request->integer('package') ?: null,
+            ),
+        ));
+    }
+
+    /**
+     * Everyone the user may see for a capability, minus the user themselves —
+     * what "team" means on the list and its bulk download.
+     *
+     * @param  array{0: string, 1: string}  $capability
+     */
+    private function teamQuery(User $user, array $capability): Builder
+    {
+        return $this->scope->accessibleQuery($user, ...$capability)
+            ->when($user->employee_id, fn ($q, $own) => $q->where('employee_id', '!=', $own));
     }
 
     /**
@@ -202,24 +250,47 @@ class IdpController extends Controller
     public function show(Request $request, string $employeeId): Response
     {
         $user = $request->user();
-        abort_unless($this->scope->canAccess($user, $employeeId, ...self::IDP_VIEW), 403);
+        $inScope = $this->scope->canAccess($user, $employeeId, ...self::IDP_VIEW);
 
-        $employee = $this->scope->accessibleQuery($user, ...self::IDP_VIEW)
-            ->where('employee_id', $employeeId)
-            ->firstOrFail();
+        // Approving happens on this screen (the Task Box only links here), and
+        // an approval chain may name someone the visibility rules do not cover
+        // — an L2 manager, or an override chain. Being named on any of this
+        // employee's approvals opens the screen READ-ONLY: they can decide what
+        // is theirs to decide, but not edit or submit the plan.
+        $isApprover = ! $inScope && $this->isApproverFor($user, $employeeId);
+        abort_unless($inScope || $isApprover, 403);
+
+        $employee = $inScope
+            ? $this->scope->accessibleQuery($user, ...self::IDP_VIEW)->where('employee_id', $employeeId)->firstOrFail()
+            : Employee::where('employee_id', $employeeId)->firstOrFail();
 
         return Inertia::render('Idp/Manage', array_merge(
-            ['employee' => new EmployeeResource($employee)],
+            [
+                'employee' => new EmployeeResource($employee),
+                'canManage' => $inScope,
+            ],
             // The manage screen may edit + submit the IDP for approval — but
             // only while it is showing the ACTIVE cycle; the service decides
             // that from the package asked for.
             $this->idp->manageData(
                 $employeeId,
                 $user,
-                canManage: true,
+                canManage: $inScope,
                 packageId: $request->integer('package') ?: null,
             ),
         ));
+    }
+
+    /** Whether the user sits on any layer of any of this employee's approvals. */
+    private function isApproverFor(User $user, string $employeeId): bool
+    {
+        if (! $user->employee_id) {
+            return false;
+        }
+
+        return IdpApproval::where('employee_id', $employeeId)
+            ->whereHas('steps', fn ($q) => $q->where('approver_employee_id', $user->employee_id))
+            ->exists();
     }
 
     /**
@@ -402,7 +473,7 @@ class IdpController extends Controller
             ->map(fn ($id) => (string) $id)
             ->unique();
 
-        $employeeIds = $this->scope->accessibleQuery($user, ...self::IDP_DOWNLOAD)
+        $employeeIds = $this->teamQuery($user, self::IDP_DOWNLOAD)
             ->when($requested->isNotEmpty(), fn ($q) => $q->whereIn('employee_id', $requested->all()))
             ->orderBy('fullname')
             ->pluck('employee_id')

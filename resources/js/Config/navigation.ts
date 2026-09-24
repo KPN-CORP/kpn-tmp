@@ -22,6 +22,8 @@ export interface NavChild {
     label: keyof LocaleMessages['nav']
     href: string
     permission?: string
+    /** Also active on the pages beneath `href` (see the sidebar's isChildActive). */
+    matchPrefix?: boolean
 }
 
 export interface NavItem {
@@ -53,10 +55,15 @@ export const navigation: NavItem[] = [
         badge: 'pendingApprovals',
     },
     {
+        // Split by whose plan it is: the user's own, and their team's.
         section: 'main',
         label: 'idp',
         icon: 'fa-solid fa-seedling',
-        href: route('idp.list'),
+        children: [
+            { label: 'idpMine', href: route('idp.mine') },
+            // One team member's plan (`/idp/{id}`) belongs to this item too.
+            { label: 'idpTeam', href: route('idp.list'), matchPrefix: true },
+        ],
     },
     {
         section: 'main',

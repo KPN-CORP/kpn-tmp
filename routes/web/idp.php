@@ -20,8 +20,10 @@ Route::prefix('idp')->name('idp.')->group(function () {
         Route::get('file/{jobStatus}', [IdpController::class, 'bulkFile'])->name('file');
     });
 
-    // Static path — must stay above the `{employeeId}` routes below.
+    // Static paths — must stay above the `{employeeId}` routes below.
     Route::get('master-pdf', [IdpController::class, 'downloadMasterPdf'])->name('master_pdf');
+    // The signed-in user's own plan (the list above is their team).
+    Route::get('my', [IdpController::class, 'mine'])->name('mine');
 
     // --- One employee's plans: documents, import, and the manage screen ---
     Route::get('{employeeId}/pdf', [IdpController::class, 'downloadPdf'])->name('download_pdf');

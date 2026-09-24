@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * The plan table's filter bar. Every value it filters on is already in the
+ * The plan table's filters: one button beside the table, the fields in a
+ * right-hand drawer. Every value it filters on is already in the
  * page's props, so it works entirely in the browser — no reload, no server
  * round trip, and the stage tracker's totals stay unfiltered (they describe the
  * plan, not the current view of it).
@@ -8,7 +9,8 @@
  * `planFilters.ts` owns the state shape and the predicate; this component owns
  * the dropdowns and the cascade between the first three of them.
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import Drawer from '@/Components/Domain/Drawer.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
 import { useLocale } from '@/Composables/useLocale'
@@ -44,6 +46,10 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'update:modelValue', value: PlanFilterState): void }>()
 
 const f = computed(() => t.value.idp.filters)
+
+// Filters apply live as they are picked, so closing the drawer never discards
+// anything — it is only a place to keep the fields out of the way.
+const open = ref(false)
 
 const active = computed(() => hasPlanFilters(props.modelValue))
 const activeCount = computed(() => countPlanFilters(props.modelValue))
@@ -167,37 +173,60 @@ const resultOptions = computed<Option[]>(() => [
 </script>
 
 <template>
-    <div class="mb-6 rounded-xl border border-border bg-white p-4 shadow-sm">
-        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <p class="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                <i class="fa-solid fa-filter text-[10px]" />
-                {{ f.title }}
-                <span
-                    v-if="activeCount"
-                    class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold normal-case text-primary"
-                >
-                    {{ activeCount }}
-                </span>
-            </p>
+    <!-- One button opens the filters; the text beside it says what is applied.
+         Inline, so the host decides where it sits (the tracker's header). -->
+    <div class="flex items-center gap-2">
+        <template v-if="active">
+            <p class="hidden text-xs text-slate-500 xl:block">{{ showing }}</p>
+            <button
+                type="button"
+                class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                @click="clearAll"
+            >
+                <i class="fa-solid fa-xmark text-[10px]" />
+                {{ f.clear }}
+            </button>
+        </template>
 
-            <div v-if="active" class="flex items-center gap-3">
-                <p class="text-xs text-slate-500">{{ showing }}</p>
-                <button
-                    type="button"
-                    class="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
-                    @click="clearAll"
-                >
-                    <i class="fa-solid fa-xmark text-[10px]" />
-                    {{ f.clear }}
-                </button>
-            </div>
-        </div>
-
-        <div
-            class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)]"
+        <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold transition"
+            :class="active
+                ? 'border-primary/40 bg-primary/5 text-primary hover:bg-primary/10'
+                : 'border-border bg-white text-slate-600 hover:bg-slate-50'"
+            @click="open = true"
         >
+            <i class="fa-solid fa-sliders text-[10px]" />
+            {{ f.title }}
+            <span
+                v-if="activeCount"
+                class="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+            >
+                {{ activeCount }}
+            </span>
+        </button>
+    </div>
+
+    <Drawer :show="open" max-width="max-w-md" @close="open = false">
+        <template #header>
+            <div class="min-w-0">
+                <h3 class="flex items-center gap-2 font-bold text-slate-800">
+                    <i class="fa-solid fa-sliders text-sm text-primary" />
+                    {{ f.title }}
+                    <span
+                        v-if="activeCount"
+                        class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary"
+                    >
+                        {{ activeCount }}
+                    </span>
+                </h3>
+                <p class="mt-0.5 text-xs text-slate-400">{{ f.subtitle }}</p>
+            </div>
+        </template>
+
+        <div class="space-y-4">
             <div>
-                <label class="mb-1 block text-[11px] font-medium text-slate-500">
+                <label class="mb-1.5 block text-xs font-medium text-slate-600">
                     {{ t.idp.form.developmentModel }}
                 </label>
                 <SearchableSelect
@@ -209,7 +238,7 @@ const resultOptions = computed<Option[]>(() => [
             </div>
 
             <div>
-                <label class="mb-1 block text-[11px] font-medium text-slate-500">{{ t.idp.form.type }}</label>
+                <label class="mb-1.5 block text-xs font-medium text-slate-600">{{ t.idp.form.type }}</label>
                 <SearchableSelect
                     :model-value="modelValue.competencyType"
                     :options="typeOptions"
@@ -219,7 +248,7 @@ const resultOptions = computed<Option[]>(() => [
             </div>
 
             <div>
-                <label class="mb-1 block text-[11px] font-medium text-slate-500">
+                <label class="mb-1.5 block text-xs font-medium text-slate-600">
                     {{ t.idp.form.competencyName }}
                 </label>
                 <SearchableSelect
@@ -231,7 +260,7 @@ const resultOptions = computed<Option[]>(() => [
             </div>
 
             <div>
-                <label class="mb-1 block text-[11px] font-medium text-slate-500">
+                <label class="mb-1.5 block text-xs font-medium text-slate-600">
                     {{ t.idp.form.reviewTools }}
                 </label>
                 <SearchableSelect
@@ -243,7 +272,7 @@ const resultOptions = computed<Option[]>(() => [
             </div>
 
             <div>
-                <label class="mb-1 block text-[11px] font-medium text-slate-500">{{ f.timelineStatus }}</label>
+                <label class="mb-1.5 block text-xs font-medium text-slate-600">{{ f.timelineStatus }}</label>
                 <SearchableSelect
                     :model-value="modelValue.timeline"
                     :options="timelineOptions"
@@ -253,7 +282,7 @@ const resultOptions = computed<Option[]>(() => [
             </div>
 
             <div>
-                <label class="mb-1 block text-[11px] font-medium text-slate-500">{{ f.planningStatus }}</label>
+                <label class="mb-1.5 block text-xs font-medium text-slate-600">{{ f.planningStatus }}</label>
                 <SearchableSelect
                     :model-value="modelValue.planning"
                     :options="planningOptions"
@@ -263,7 +292,7 @@ const resultOptions = computed<Option[]>(() => [
             </div>
 
             <div>
-                <label class="mb-1 block text-[11px] font-medium text-slate-500">{{ f.resultStatus }}</label>
+                <label class="mb-1.5 block text-xs font-medium text-slate-600">{{ f.resultStatus }}</label>
                 <SearchableSelect
                     :model-value="modelValue.result"
                     :options="resultOptions"
@@ -276,7 +305,7 @@ const resultOptions = computed<Option[]>(() => [
                  overlap the range, so a long program is found by any month it
                  runs in. -->
             <div>
-                <label class="mb-1 block text-[11px] font-medium text-slate-500" :title="f.rangeHint">
+                <label class="mb-1.5 block text-xs font-medium text-slate-600" :title="f.rangeHint">
                     {{ t.idp.table.timeframe }}
                     <i class="fa-solid fa-circle-info ml-0.5 text-[9px] text-slate-300" />
                 </label>
@@ -303,5 +332,26 @@ const resultOptions = computed<Option[]>(() => [
                 </p>
             </div>
         </div>
-    </div>
+
+        <template #footer>
+            <p class="mr-auto self-center text-xs text-slate-500">{{ showing }}</p>
+            <button
+                type="button"
+                :disabled="!active"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                @click="clearAll"
+            >
+                <i class="fa-solid fa-xmark text-xs" />
+                {{ f.clear }}
+            </button>
+            <button
+                type="button"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
+                @click="open = false"
+            >
+                <i class="fa-solid fa-check text-xs" />
+                {{ f.done }}
+            </button>
+        </template>
+    </Drawer>
 </template>

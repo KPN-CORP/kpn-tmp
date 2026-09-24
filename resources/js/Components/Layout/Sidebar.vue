@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Link, router, usePage } from '@inertiajs/vue3'
 import { computed, reactive } from 'vue'
-import { useNavigation } from '@/Composables/useNavigation'
+import { useNavigation, type ResolvedNavChild } from '@/Composables/useNavigation'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
 
@@ -29,19 +29,32 @@ const groupedMenus = computed(() =>
     ),
 )
 
+// The current path without its query string — a list's `?page=2` or a
+// screen's `?package=3` is still the same page as far as the menu is concerned.
+function currentPath() {
+    return page.url.split('?')[0]
+}
+
 // Active when the current path matches the item exactly, or sits beneath it
 // (so `/users/5` still highlights `Users`). Inertia's `page.url` is the current
 // path, and nav hrefs come from `route()`, which is relative for this reason.
 function isActive(href: string) {
-    const url = page.url
+    const url = currentPath()
     return url === href || url.startsWith(href + '/')
 }
 
 // Child links match exactly — sibling paths can share a prefix (e.g.
 // `/idp-setting` vs `/idp-setting/development-model`), so prefix matching would
 // light up more than one.
-function isChildActive(href: string) {
-    return page.url === href
+//
+// A child flagged `matchPrefix` also lights up for the pages beneath it (the
+// team list for one member's plan at `/idp/{id}`) — unless a sibling is an
+// exact hit, which is how `/idp/my` stays with "My" rather than "Team".
+function isChildActive(child: ResolvedNavChild, siblings: ResolvedNavChild[]) {
+    const url = currentPath()
+    if (url === child.href) return true
+    if (!child.matchPrefix || !url.startsWith(child.href + '/')) return false
+    return !siblings.some((sibling) => sibling.href === url)
 }
 
 // A parent dropdown is "active" when any of its children is the current page.
@@ -138,7 +151,7 @@ function badgeLabel(count: number) {
                                 :href="child.href"
                                 class="flex items-center gap-3 border-l-4 border-transparent py-2.5 pl-14 pr-6 text-sm transition-all"
                                 :class="
-                                    isChildActive(child.href)
+                                    isChildActive(child, menu.children)
                                         ? 'border-primary bg-red-50 font-bold text-primary'
                                         : 'text-text hover:bg-red-50 hover:text-primary'
                                 "

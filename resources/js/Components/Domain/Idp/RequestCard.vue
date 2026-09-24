@@ -34,7 +34,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     toggle: []
-    decide: [kind: 'approve' | 'reject']
 }>()
 
 const isPlanning = computed(() => props.item.stage === 'planning')
@@ -251,8 +250,11 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                 </span>
             </template>
 
+            <!-- A card the viewer can act on already leads there through
+                 "Review & decide" in its footer, so only the others need it. -->
             <Link
-                :href="route('idp.show', item.owner_id)"
+                v-if="!canAct"
+                :href="route('idp.show', { employeeId: item.owner_id, package: item.package?.id ?? null })"
                 class="ml-auto shrink-0 font-medium text-primary hover:underline"
                 @click.stop
             >
@@ -418,24 +420,17 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                     {{ actionHint }}
                 </p>
 
-                <div class="flex items-center gap-2">
-                    <button
-                        type="button"
-                        class="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3.5 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50"
-                        @click="emit('decide', 'reject')"
-                    >
-                        <i class="fa-solid fa-xmark text-xs" />
-                        {{ t.approvalFlow.reject }}
-                    </button>
-                    <button
-                        type="button"
-                        class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-600"
-                        @click="emit('decide', 'approve')"
-                    >
-                        <i class="fa-solid fa-check text-xs" />
-                        {{ t.approvalFlow.approve }}
-                    </button>
-                </div>
+                <!-- Decided on the employee's plan, where the whole of it is
+                     read first — the same place the owner submits it from. -->
+                <Link
+                    :href="route('idp.show', { employeeId: item.owner_id, package: item.package?.id ?? null })"
+                    class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-hover"
+                    @click.stop
+                >
+                    <i class="fa-solid fa-magnifying-glass text-xs" />
+                    {{ t.approvalFlow.reviewAndDecide }}
+                    <i class="fa-solid fa-arrow-right text-[10px]" />
+                </Link>
             </template>
 
             <p v-else class="text-xs text-slate-500">

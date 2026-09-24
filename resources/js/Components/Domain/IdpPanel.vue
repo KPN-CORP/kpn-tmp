@@ -22,6 +22,7 @@ import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.
 import FormSection from '@/Components/UI/FormSection.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
 import StageTracker from '@/Components/Domain/Idp/StageTracker.vue'
+import PlanSignOffCard from '@/Components/Domain/Idp/PlanSignOffCard.vue'
 import PlanTable from '@/Components/Domain/Idp/PlanTable.vue'
 import ResultDrawer from '@/Components/Domain/Idp/ResultDrawer.vue'
 import DecisionDrawer from '@/Components/Domain/Idp/DecisionDrawer.vue'
@@ -74,8 +75,10 @@ const props = withDefaults(
         // Show the add / edit / delete / submit controls; the profile's inline
         // tab is view-only.
         canEdit?: boolean
+        /** Pin the tracker under the top bar so the plans scroll beneath it. */
+        stickyHeader?: boolean
     }>(),
-    { canEdit: true },
+    { canEdit: true, stickyHeader: false },
 )
 
 /**
@@ -118,16 +121,6 @@ function descLines(model: DevelopmentModelView): Array<{ text: string; bullet: b
                 : { text: line, bullet: false },
         )
 }
-
-const initials = computed(() =>
-    emp.fullname
-        .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((part) => part[0])
-        .join('')
-        .toUpperCase(),
-)
 
 const modalOpen = ref(false)
 const editingId = ref<number | null>(null)
@@ -693,6 +686,18 @@ function submitUpload() {
 
 const submittingPlanning = ref(false)
 
+// The planning sign-off lives under the plan list, not in the tracker: the
+// whole set is submitted — and approved — at once, so it is reached after
+// reading all of it. An approver whose turn it is decides; otherwise the owner
+// may submit. (The two never coincide: a set with an approver is frozen.)
+const signOffMode = computed<'decide' | 'submit' | null>(() => {
+    if (props.planning.approval?.can_act) return 'decide'
+    if (props.canEdit && props.planning.can_submit && props.planning.has_approvers && allPlans.value.length > 0) {
+        return 'submit'
+    }
+    return null
+})
+
 function submitPlanning() {
     submittingPlanning.value = true
     router.post(route('idp.approval.submit_planning', emp.employee_id), {}, {
@@ -813,34 +818,37 @@ defineExpose({ openUpload })
 
 <template>
     <div>
-        <!-- Who this plan belongs to -->
-        <div class="mb-6 flex items-center gap-4 rounded-xl border border-border bg-white p-4 shadow-sm">
-            <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
-                {{ initials }}
-            </div>
-            <div class="min-w-0">
-                <h2 class="truncate font-bold text-slate-800">{{ emp.fullname }}</h2>
-                <p class="truncate text-sm text-slate-500">{{ emp.employee_id }} · {{ emp.designation_name ?? '—' }}</p>
-            </div>
-        </div>
-
-        <!-- Where the plan stands, and the one thing to do next -->
+        <!-- Who, which cycle, where the plan stands and what to do next — one
+             card, pinned while the plans scroll beneath it -->
         <StageTracker
+            :employee="emp"
+            :sticky="stickyHeader"
             :planning="planning"
             :progress="progress"
             :ready-results="readyResults"
             :can-edit="canEdit"
-            :submitting-planning="submittingPlanning"
             :submitting-results="submittingResults"
             :packages="packages"
             :selected-package-id="selectedPackageId"
             :viewing-active="viewingActive"
             @select-package="selectPackage"
-            @submit-planning="submitPlanning"
             @submit-results="submitAllResults"
             @open-chain="openPlanningChain"
-            @act="decideOnPlanning"
-        />
+        >
+            <template #tools>
+                <!-- Narrow the table (client-side; the tracker's totals stay whole) -->
+                <PlanFilters
+                    v-if="allPlans.length"
+                    v-model="filters"
+                    :plans="allPlans"
+                    :models="developmentModels"
+                    :competency-labels="competencyLabels"
+                    :type-labels="competencyTypeLabels"
+                    :review-tool-labels="reviewToolLabels"
+                    :shown="shownPlans"
+                />
+            </template>
+        </StageTracker>
 
         <!-- 70-20-10 learning model explainer -->
         <div v-if="hasDescriptions" class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -873,17 +881,6 @@ defineExpose({ openUpload })
             </div>
         </div>
 
-        <!-- Narrow the table (client-side; the tracker's totals stay whole) -->
-        <PlanFilters
-            v-if="allPlans.length"
-            v-model="filters"
-            :plans="allPlans"
-            :models="developmentModels"
-            :competency-labels="competencyLabels"
-            :type-labels="competencyTypeLabels"
-            :review-tool-labels="reviewToolLabels"
-            :shown="shownPlans"
-        />
 
         <!-- Plans grouped by development model -->
         <div class="space-y-6">
@@ -929,6 +926,20 @@ defineExpose({ openUpload })
                     {{ t.idp.filters.clear }}
                 </button>
             </div>
+
+            <!-- Submit or decide on the whole plan — below every program, so it
+                 is read first -->
+            <PlanSignOffCard
+                v-if="signOffMode"
+                :mode="signOffMode"
+                :planning="planning"
+                :models="developmentModels"
+                :filtering="filtering"
+                :submitting="submittingPlanning"
+                @submit="submitPlanning"
+                @act="decideOnPlanning"
+                @clear-filters="filters = blankPlanFilters()"
+            />
         </div>
 
         <!-- Add / edit plan (stage 1 — planning fields only) -->

@@ -5,12 +5,13 @@
  *  - PENDING — every IDP request this person sits on the chain of, at either
  *    stage. That includes the ones still with an earlier layer: they are read
  *    now and decided when they arrive, so only a card with `can_act` offers
- *    the Approve / Reject buttons.
+ *    "Review & decide". The decision itself is NOT made here: that link opens
+ *    the employee's plan, where approve / reject sit under the whole of it.
  *  - HISTORY — the decisions they have already recorded, newest first, each
  *    with the note they left and where the request went afterwards.
  *
  * This page owns the desk: the tabs, the filters, the sorting, which cards are
- * open, and the decision drawer. What one request looks like is RequestCard's
+ * open. What one request looks like is RequestCard's
  * job — it is the same card on both views, so a state reads the same wherever
  * it appears.
  *
@@ -25,7 +26,6 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
-import DecisionDrawer from '@/Components/Domain/Idp/DecisionDrawer.vue'
 import RequestCard from '@/Components/Domain/Idp/RequestCard.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
@@ -228,33 +228,6 @@ const allOpen = computed(
 function toggleAll() {
     expanded.value = allOpen.value ? new Set() : new Set(props.items.data.map((i) => i.step_id))
 }
-
-// --- Deciding --------------------------------------------------------------
-
-const decision = ref<{
-    open: boolean
-    kind: 'approve' | 'reject'
-    approvalId: number | null
-    subject: string
-    detail: string | null
-    level: number | null
-    totalLevels: number | null
-}>({ open: false, kind: 'approve', approvalId: null, subject: '', detail: null, level: null, totalLevels: null })
-
-function decide(item: InboxRequest, kind: 'approve' | 'reject') {
-    decision.value = {
-        open: true,
-        kind,
-        approvalId: item.approval_id,
-        subject: `${item.owner_name} · ${item.owner_id}`,
-        detail:
-            item.stage === 'planning'
-                ? `${item.plans.length} ${t.value.approvalFlow.programs}`
-                : item.title,
-        level: item.level,
-        totalLevels: item.total_levels,
-    }
-}
 </script>
 
 <template>
@@ -399,7 +372,6 @@ function decide(item: InboxRequest, kind: 'approve' | 'reject') {
                     :history="isHistory"
                     :open="expanded.has(item.step_id)"
                     @toggle="toggle(item.step_id)"
-                    @decide="(kind: 'approve' | 'reject') => decide(item, kind)"
                 />
 
 
@@ -438,15 +410,5 @@ function decide(item: InboxRequest, kind: 'approve' | 'reject') {
             </p>
         </div>
 
-        <DecisionDrawer
-            :show="decision.open"
-            :decision="decision.kind"
-            :approval-id="decision.approvalId"
-            :subject="decision.subject"
-            :detail="decision.detail"
-            :level="decision.level"
-            :total-levels="decision.totalLevels"
-            @close="decision.open = false"
-        />
     </AppLayout>
 </template>

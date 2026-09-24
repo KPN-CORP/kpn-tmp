@@ -6,6 +6,7 @@ import { navigation } from '@/Config/navigation'
 export interface ResolvedNavChild {
     label: string
     href: string
+    matchPrefix?: boolean
 }
 
 export interface ResolvedNavItem {
@@ -42,6 +43,7 @@ export function useNavigation() {
                     .map((child) => ({
                         label: t.value.nav[child.label],
                         href: child.href,
+                        matchPrefix: child.matchPrefix,
                     }))
 
                 const count = item.badge ? Number(page.props[item.badge] ?? 0) : 0
