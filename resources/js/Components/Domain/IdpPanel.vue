@@ -1018,32 +1018,8 @@ defineExpose({ openUpload })
                             <span>{{ t.idp.form.noTypesForModel }}</span>
                         </p>
 
-                        <!-- Few types read best as one-click choices; a longer
-                             master list falls back to a searchable select. -->
-                        <div v-else-if="competencyTypeOptions.length <= 3" class="grid gap-2 sm:grid-cols-3">
-                            <button
-                                v-for="option in competencyTypeOptions"
-                                :key="option.value"
-                                type="button"
-                                class="rounded-lg border px-3 py-2.5 text-sm font-medium transition"
-                                :class="
-                                    form.competency_type === option.value
-                                        ? 'border-primary bg-primary/5 text-primary ring-1 ring-primary'
-                                        : 'border-border bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-                                "
-                                @click="form.competency_type = option.value"
-                            >
-                                <i
-                                    class="fa-solid mr-1.5 text-xs"
-                                    :class="
-                                        form.competency_type === option.value
-                                            ? 'fa-circle-check'
-                                            : 'fa-circle text-slate-300'
-                                    "
-                                />
-                                {{ option.label }}
-                            </button>
-                        </div>
+                        <!-- Always a searchable select: the type master keeps
+                             growing, and one-click cards stop fitting past a few. -->
                         <SearchableSelect
                             v-else
                             :model-value="form.competency_type"
