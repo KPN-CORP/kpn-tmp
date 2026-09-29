@@ -8,8 +8,10 @@ import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import ConfirmActiveStateDialog from '@/Components/Domain/ConfirmActiveStateDialog.vue'
 import IconButton from '@/Components/UI/IconButton.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
+import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import ActiveStateCell from '@/Components/Domain/ActiveStateCell.vue'
+import Drawer from '@/Components/Domain/Drawer.vue'
 import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import ProficiencyLevelCell from '@/Components/Domain/ProficiencyLevelCell.vue'
 import { useActiveStateToggle } from '@/Composables/useActiveStateToggle'
@@ -246,43 +248,37 @@ const searchedCompetencies = computed(() => {
     )
 })
 
-// One tab per competency type, plus "All" and — when there are any — the
-// untyped bucket.
-const typeTabs = computed(() => {
-    const counts = new Map<number, number>()
-
-    for (const c of searchedCompetencies.value) {
-        const key = c.competency_type_id ?? 0
-        counts.set(key, (counts.get(key) ?? 0) + 1)
-    }
-
-    const tabs: { key: number | null; label: string; count: number }[] = [
-        {
-            key: null,
-            label: t.value.idp.settings.allTypes,
-            count: searchedCompetencies.value.length,
-        },
+/**
+ * One option per competency type, plus "All" and — when there are any — the
+ * untyped bucket.
+ *
+ * SearchableSelect binds a string, so the three kinds of choice are encoded:
+ * '' is every type, '0' the untyped bucket, and any other value a type id.
+ */
+const typeOptions = computed<Option[]>(() => {
+    const options: Option[] = [
+        { value: '', label: t.value.idp.settings.allTypes },
         ...props.competencyTypes.map((ct) => ({
-            key: ct.id,
+            value: String(ct.id),
             label: masterName(ct),
-            count: counts.get(ct.id) ?? 0,
         })),
     ]
 
     if (untypedCompetencyCount.value) {
-        tabs.push({
-            key: 0,
-            label: t.value.idp.settings.untyped,
-            count: counts.get(0) ?? 0,
-        })
+        options.push({ value: '0', label: t.value.idp.settings.untyped })
     }
 
-    return tabs
+    return options
+})
+
+const typeFilterValue = computed<string>({
+    get: () => (selectedTypeFilter.value === null ? '' : String(selectedTypeFilter.value)),
+    set: (value) => selectType(value === '' ? null : Number(value)),
 })
 
 function selectType(key: number | null) {
     selectedTypeFilter.value = key
-    // Two tabs may hold the same number of competencies, so the length watcher
+    // Two types may hold the same number of competencies, so the length watcher
     // below cannot be relied on to send the reader back to page one.
     competencyPage.value = 1
 }
@@ -325,74 +321,29 @@ const competencyRows = computed(() => {
  * which is why they live here instead of coming from ClientTable.
  */
 
-// One rendered <tr> of a competency block.
-interface CompetencyLine {
-    // Level cell: rendered only on the first line of its level group.
-    levelName: string | null
-    levelCode: string | null
-    // The rung's position on the ladder, rendered as the cell's badge.
-    levelSequence: number | null
-    levelActive: boolean
-    levelRowspan: number
-    // 2 when the competency has no levels at all — the empty level cell then
-    // covers the key-behavior column too.
-    levelColspan: number
-    levelDescription: string | null
-    behaviorName: string | null
-    // The behavior's position within its rung, rendered as the cell's badge.
-    behaviorSequence: number | null
-}
+// "3 proficiency levels" / "6 key behaviors" — the same {n} convention
+// Master Implementation's row summary uses.
+const levelCountLabel = (n: number) =>
+    t.value.idp.settings.levelCount.replace('{n}', String(n))
 
-// Build one competency's lines: its rungs in sequence, each expanded to one
-// line per key behavior (a rung with no behaviors still gets a single line).
-function linesFor(row: { proficiency_levels: ProficiencyLevel[] }): CompetencyLine[] {
+const behaviorCountLabel = (n: number) =>
+    t.value.idp.settings.behaviorCount.replace('{n}', String(n))
+
+/**
+ * How many rungs a competency's ladder has, and how many key behaviors sit
+ * under them in total. Printed under the competency's name, so a row says
+ * what the detail drawer holds before it is opened.
+ */
+function ladderSize(row: { proficiency_levels: ProficiencyLevel[] }) {
     const levels = row.proficiency_levels ?? []
 
-    if (levels.length === 0) {
-        return [{
-            levelName: null,
-            levelCode: null,
-            levelSequence: null,
-            levelActive: true,
-            levelRowspan: 1,
-            levelColspan: 2,
-            levelDescription: null,
-            behaviorName: null,
-            behaviorSequence: null,
-        }]
+    return {
+        levelCount: levels.length,
+        behaviorCount: levels.reduce(
+            (n, level) => n + (level.key_behaviors ?? []).length,
+            0,
+        ),
     }
-
-    const lines: CompetencyLine[] = []
-
-    for (const [position, level] of levels.entries()) {
-        // The stored sequence is the badge's number; it is server-assigned
-        // 1..n within the rung, so a gap in it would be a bug rather than
-        // something to paper over — but fall back to the position anyway.
-        const behaviors = (level.key_behaviors ?? []).map((kb, n) => ({
-            name: rowName(kb),
-            sequence: kb.sequence || n + 1,
-        }))
-        const span = Math.max(1, behaviors.length)
-
-        for (let i = 0; i < span; i++) {
-            lines.push({
-                // Only the group's first line paints the level cell.
-                levelName: i === 0 ? rowName(level) : null,
-                levelCode: i === 0 ? level.code || null : null,
-                // Same fallback as the behaviors': the sequence is
-                // server-assigned 1..n, so a gap would be a bug.
-                levelSequence: i === 0 ? level.sequence || position + 1 : null,
-                levelActive: level.is_active,
-                levelRowspan: i === 0 ? span : 0,
-                levelColspan: 1,
-                levelDescription: i === 0 ? rowDescription(level) || null : null,
-                behaviorName: behaviors[i]?.name ?? null,
-                behaviorSequence: behaviors[i]?.sequence ?? null,
-            })
-        }
-    }
-
-    return lines
 }
 
 // --- sorting (competency / type) ---
@@ -446,7 +397,7 @@ const sortedCompetencies = computed(() => {
     })
 })
 
-// --- paging (by competency, so a block is never split across pages) ---
+// --- paging (one row per competency) ---
 
 const competencyPage = ref(1)
 const competencyPerPage = ref(10)
@@ -468,7 +419,7 @@ const competencyTo = computed(() =>
     Math.min(competencyPage.value * competencyPerPage.value, sortedCompetencies.value.length),
 )
 
-// The competencies on the current page, each expanded into its rendered lines.
+// The competencies on the current page, one rendered row each.
 const competencyBlocks = computed(() => {
     if (competencyPage.value > competencyTotalPages.value) {
         competencyPage.value = competencyTotalPages.value
@@ -478,19 +429,14 @@ const competencyBlocks = computed(() => {
 
     const blocks = sortedCompetencies.value
         .slice(start, start + competencyPerPage.value)
-        .map((row) => {
-            const lines = linesFor(row)
-
-            return {
-                ...row,
-                lines,
-                rowspan: lines.length,
-                // Filled in below: how many rendered lines this block's type
-                // cell spans. 0 on every block but the first of its group,
-                // which is what merges the column.
-                typeRowspan: 0,
-            }
-        })
+        .map((row) => ({
+            ...row,
+            ...ladderSize(row),
+            // Filled in below: how many rows this block's type cell spans. 0
+            // on every block but the first of its group, which is what merges
+            // the column.
+            typeRowspan: 0,
+        }))
 
     /**
      * Merge the type column over each run of competencies sharing a type.
@@ -503,7 +449,7 @@ const competencyBlocks = computed(() => {
         let j = i
 
         while (j < blocks.length && blocks[j].competency_type_id === type) {
-            span += blocks[j].rowspan
+            span++
             j++
         }
 
@@ -513,6 +459,38 @@ const competencyBlocks = computed(() => {
 
     return blocks
 })
+
+/**
+ * --------------------------------------------------------------------------
+ * The detail drawer
+ * --------------------------------------------------------------------------
+ * The ladder used to be two merged columns in the table, which made a row as
+ * tall as its longest rung. It is read on demand now: the row says how big
+ * the ladder is, and this drawer lays it out — each rung as the shared cell
+ * renders it everywhere else, with its key behaviors underneath.
+ *
+ * Read-only: editing is the form page's job, which the drawer links to.
+ */
+const detailCompetency = ref<Competency | null>(null)
+
+// The rungs of the open competency, each with its behaviors numbered. Both
+// sequences are server-assigned 1..n, so a gap would be a bug — but fall back
+// to the row's position anyway, as the table did.
+const detailLevels = computed(() =>
+    (detailCompetency.value?.proficiency_levels ?? []).map((level, position) => ({
+        id: level.id,
+        name: rowName(level),
+        code: level.code,
+        sequence: level.sequence || position + 1,
+        description: rowDescription(level) || null,
+        active: level.is_active,
+        behaviors: (level.key_behaviors ?? []).map((kb, n) => ({
+            id: kb.id,
+            name: rowName(kb),
+            sequence: kb.sequence || n + 1,
+        })),
+    })),
+)
 
 /**
  * --------------------------------------------------------------------------
@@ -587,6 +565,15 @@ function changeCompetencyPerPage(size: number) {
                         >
                     </div>
 
+                    <!-- Competency type filter. -->
+                    <div class="w-56">
+                        <SearchableSelect
+                            v-model="typeFilterValue"
+                            :options="typeOptions"
+                            :placeholder="t.idp.settings.allTypes"
+                        />
+                    </div>
+
                     <Link
                         :href="route('master_data.competency.create')"
                         class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
@@ -597,44 +584,8 @@ function changeCompetencyPerPage(size: number) {
                 </div>
             </div>
 
-            <!-- One tab per competency type. The type is what a reader
-                 comes to this screen with in mind, so it splits the list
-                 rather than sitting in a dropdown; the count on each tab is
-                 how many rows opening it shows, search included. -->
-            <div
-                class="flex gap-2 overflow-x-auto border-b border-border/60 bg-slate-50/40 px-5 py-2.5"
-                role="tablist"
-            >
-                <button
-                    v-for="tab in typeTabs"
-                    :key="tab.key ?? 'all'"
-                    type="button"
-                    role="tab"
-                    :aria-selected="selectedTypeFilter === tab.key"
-                    class="inline-flex shrink-0 items-center gap-2 rounded-lg border px-3.5 py-1.5 text-sm font-medium transition"
-                    :class="
-                        selectedTypeFilter === tab.key
-                            ? 'border-primary bg-primary/5 text-primary'
-                            : 'border-transparent bg-white text-slate-600 hover:bg-slate-50'
-                    "
-                    @click="selectType(tab.key)"
-                >
-                    {{ tab.label }}
-                    <span
-                        class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
-                        :class="
-                            selectedTypeFilter === tab.key
-                                ? 'bg-primary/15'
-                                : 'bg-slate-100 text-slate-500'
-                        "
-                    >
-                        {{ tab.count }}
-                    </span>
-                </button>
-            </div>
-
-            <!-- Competency table — grouped rows: one competency spans a
-                 block, split by proficiency level and then key behavior. -->
+            <!-- Competency table — one row per competency. The ladder is
+                 read in the detail drawer, not down the row. -->
             <div class="overflow-x-auto">
                 <table class="w-full text-left text-sm">
                     <thead>
@@ -679,11 +630,6 @@ function changeCompetencyPerPage(size: number) {
                             <th class="px-4 py-2.5 font-semibold">
                                 {{ t.idp.settings.description }}
                             </th>
-                            <!-- The level column carries its key behaviors,
-                                 so its header spans both sub-columns. -->
-                            <th class="w-64 px-4 py-2.5 font-semibold" colspan="2">
-                                {{ t.idp.settings.proficiencyLevel }}
-                            </th>
                             <!-- Status sits in this column too: the badge is
                                  itself the on/off control, so it belongs with
                                  edit and delete rather than in a column of
@@ -699,16 +645,11 @@ function changeCompetencyPerPage(size: number) {
                             v-for="block in competencyBlocks"
                             :key="block.id"
                         >
-                            <tr
-                                v-for="(line, i) in block.lines"
-                                :key="i"
-                                class="transition hover:bg-slate-50/70"
-                                :class="i === block.lines.length - 1 ? 'border-b border-border/60' : ''"
-                            >
+                            <tr class="border-b border-border/60 transition hover:bg-slate-50/70">
                                 <!-- Painted once per RUN of competencies
                                      sharing a type, so the column merges. -->
                                 <td
-                                    v-if="showTypeColumn && i === 0 && block.typeRowspan > 0"
+                                    v-if="showTypeColumn && block.typeRowspan > 0"
                                     :rowspan="block.typeRowspan"
                                     class="border-r border-border/40 bg-slate-50/40 px-4 py-3 align-top"
                                 >
@@ -732,14 +673,10 @@ function changeCompetencyPerPage(size: number) {
                                     </span>
                                 </td>
 
-                                <!-- Competency-wide cells: painted once,
-                                     spanning the block. The competency's own
-                                     code sits above its name. -->
-                                <td
-                                    v-if="i === 0"
-                                    :rowspan="block.rowspan"
-                                    class="border-r border-border/40 px-4 py-3 align-top"
-                                >
+                                <!-- The competency's own code sits above
+                                     its name; the ladder's size sits under
+                                     it, as a link into the detail drawer. -->
+                                <td class="border-r border-border/40 px-4 py-3 align-top">
                                     <span
                                         v-if="block.code"
                                         class="mb-1 inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
@@ -749,13 +686,24 @@ function changeCompetencyPerPage(size: number) {
                                     <div class="font-semibold text-slate-800">
                                         {{ block.name }}
                                     </div>
+
+                                    <button
+                                        v-if="block.levelCount > 0"
+                                        type="button"
+                                        class="mt-1 inline-flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-primary"
+                                        @click="detailCompetency = block as unknown as Competency"
+                                    >
+                                        <i class="fa-solid fa-layer-group text-[10px]" />
+                                        {{ levelCountLabel(block.levelCount) }}
+                                        <span class="text-slate-300">·</span>
+                                        {{ behaviorCountLabel(block.behaviorCount) }}
+                                    </button>
+                                    <p v-else class="mt-1 text-xs italic text-slate-300">
+                                        {{ t.idp.settings.noProficiencyLevel }}
+                                    </p>
                                 </td>
 
-                                <td
-                                    v-if="i === 0"
-                                    :rowspan="block.rowspan"
-                                    class="border-r border-border/40 px-4 py-3 align-top"
-                                >
+                                <td class="border-r border-border/40 px-4 py-3 align-top">
                                     <span
                                         v-if="competencyDescription(block as unknown as Competency)"
                                         class="whitespace-pre-wrap break-words text-slate-500"
@@ -767,60 +715,7 @@ function changeCompetencyPerPage(size: number) {
                                     </span>
                                 </td>
 
-                                <!-- Level cell: painted once per level group. -->
-                                <td
-                                    v-if="line.levelRowspan > 0"
-                                    :rowspan="line.levelRowspan"
-                                    :colspan="line.levelColspan"
-                                    class="border-r border-border/40 px-4 py-3 align-top"
-                                    :class="i + line.levelRowspan < block.lines.length
-                                        ? 'border-b border-border/40'
-                                        : ''"
-                                >
-                                    <ProficiencyLevelCell
-                                        v-if="line.levelName"
-                                        :name="line.levelName"
-                                        :sequence="line.levelSequence"
-                                        :code="line.levelCode"
-                                        :description="line.levelDescription"
-                                        :active="line.levelActive"
-                                    />
-                                    <span v-else class="text-xs italic text-slate-300">
-                                        {{ t.idp.settings.noProficiencyLevel }}
-                                    </span>
-                                </td>
-
-                                <!-- Key behavior: one per line, unless the
-                                     level cell already covers this column. -->
-                                <td
-                                    v-if="line.levelColspan === 1"
-                                    class="border-r border-border/40 px-4 py-3 align-top"
-                                    :class="i < block.lines.length - 1
-                                        ? 'border-b border-border/40'
-                                        : ''"
-                                >
-                                    <template v-if="line.behaviorName">
-                                        <span
-                                            class="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700"
-                                        >
-                                            {{ t.idp.settings.keyBehavior }} -
-                                            {{ line.behaviorSequence }}
-                                        </span>
-
-                                        <p class="mt-1 text-slate-600">
-                                            {{ line.behaviorName }}
-                                        </p>
-                                    </template>
-                                    <span v-else class="text-xs italic text-slate-300">
-                                        —
-                                    </span>
-                                </td>
-
-                                <td
-                                    v-if="i === 0"
-                                    :rowspan="block.rowspan"
-                                    class="px-4 py-3 align-top"
-                                >
+                                <td class="px-4 py-3 align-top">
                                     <div class="flex flex-col items-end gap-2">
                                         <ActiveStateCell
                                             :active="block.is_active"
@@ -830,6 +725,11 @@ function changeCompetencyPerPage(size: number) {
                                         />
 
                                         <div class="flex items-center gap-1">
+                                            <IconButton
+                                                icon="fa-solid fa-layer-group"
+                                                :title="t.idp.settings.viewDetail"
+                                                @click="detailCompetency = block as unknown as Competency"
+                                            />
                                             <Link :href="editUrl(block.id)">
                                                 <IconButton
                                                     icon="fa-solid fa-pen"
@@ -850,7 +750,7 @@ function changeCompetencyPerPage(size: number) {
                         </template>
 
                         <tr v-if="competencyBlocks.length === 0">
-                            <td :colspan="showTypeColumn ? 6 : 5" class="px-4 py-8 text-center text-slate-400">
+                            <td :colspan="showTypeColumn ? 4 : 3" class="px-4 py-8 text-center text-slate-400">
                                 {{
                                     competencySearch || selectedTypeFilter !== null
                                         ? t.idp.settings.noMatch
@@ -862,7 +762,7 @@ function changeCompetencyPerPage(size: number) {
                 </table>
             </div>
 
-            <!-- Pager: pages competencies, so a block is never split. -->
+            <!-- Pager: one row per competency. -->
             <div
                 v-if="competencyTotalPages > 1 || sortedCompetencies.length > 10"
                 class="border-t border-border px-4 py-2.5 [&>div]:!mt-0"
@@ -901,6 +801,183 @@ function changeCompetencyPerPage(size: number) {
             :name="historyCompetency ? masterName(historyCompetency) : ''"
             @close="historyCompetency = null"
         />
+
+        <!-- ================================================================
+             DETAIL (read-only)
+        ================================================================= -->
+        <!-- The competency's whole ladder, which a row can only ever say the
+             size of. Same shape as Master Implementation's detail drawer, and
+             read-only like it — so, like the activation history, it closes
+             without asking. -->
+        <Drawer
+            :show="detailCompetency !== null"
+            :title="t.idp.settings.competencyDetail"
+            max-width="max-w-2xl"
+            @close="detailCompetency = null"
+        >
+            <div v-if="detailCompetency" class="space-y-6">
+                <!-- What it is -->
+                <div class="rounded-lg border border-border bg-slate-50/60 p-4">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        {{ t.idp.settings.competency }}
+                    </p>
+                    <div class="mt-1.5 flex flex-wrap items-center gap-2">
+                        <span
+                            v-if="detailCompetency.code"
+                            class="inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-indigo-700"
+                        >
+                            {{ detailCompetency.code }}
+                        </span>
+                        <span class="text-base font-semibold text-slate-800">
+                            {{ masterName(detailCompetency) }}
+                        </span>
+                    </div>
+
+                    <p
+                        v-if="competencyDescription(detailCompetency)"
+                        class="mt-2 whitespace-pre-wrap break-words text-sm text-slate-500"
+                    >
+                        {{ competencyDescription(detailCompetency) }}
+                    </p>
+
+                    <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
+                        <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                            {{ t.idp.settings.competencyType }}
+                        </span>
+                        <span
+                            v-if="competencyTypeCode(detailCompetency.competency_type_id)"
+                            class="inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-indigo-700"
+                        >
+                            {{ competencyTypeCode(detailCompetency.competency_type_id) }}
+                        </span>
+                        <span
+                            v-if="competencyTypeName(detailCompetency.competency_type_id)"
+                            class="text-sm font-medium text-slate-700"
+                        >
+                            {{ competencyTypeName(detailCompetency.competency_type_id) }}
+                        </span>
+                        <span v-else class="text-xs italic text-slate-300">
+                            {{ t.idp.settings.untyped }}
+                        </span>
+
+                        <span
+                            class="ml-auto inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                            :class="
+                                detailCompetency.is_active
+                                    ? 'bg-emerald-50 text-emerald-600'
+                                    : 'bg-slate-100 text-slate-500'
+                            "
+                        >
+                            {{
+                                detailCompetency.is_active
+                                    ? t.idp.settings.activeBadge
+                                    : t.idp.settings.inactiveBadge
+                            }}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- What it breaks down into -->
+                <div v-if="detailCompetency.sub_competencies?.length">
+                    <p class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        {{ t.idp.settings.subCompetencies }}
+                    </p>
+                    <div class="space-y-2">
+                        <div
+                            v-for="sub in detailCompetency.sub_competencies"
+                            :key="sub.id"
+                            class="rounded-md border border-border/60 px-3 py-2"
+                        >
+                            <p class="text-sm font-medium text-slate-700">
+                                {{ rowName(sub) }}
+                            </p>
+                            <p
+                                v-if="rowDescription(sub)"
+                                class="mt-0.5 whitespace-pre-line text-[11px] leading-snug text-slate-400"
+                            >
+                                {{ rowDescription(sub) }}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- The ladder, in full — the part a row cannot carry -->
+                <div>
+                    <p class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        {{ t.idp.settings.proficiencyLevel }}
+                    </p>
+
+                    <div v-if="detailLevels.length" class="space-y-3">
+                        <div
+                            v-for="level in detailLevels"
+                            :key="level.id"
+                            class="rounded-md border border-border/60 px-3 py-2.5"
+                        >
+                            <ProficiencyLevelCell
+                                :name="level.name"
+                                :sequence="level.sequence"
+                                :code="level.code"
+                                :description="level.description"
+                                :active="level.active"
+                            />
+
+                            <!-- The behaviors observed at this rung -->
+                            <div class="mt-3 border-t border-border/60 pt-2.5">
+                                <p
+                                    v-if="level.behaviors.length === 0"
+                                    class="text-xs italic text-slate-300"
+                                >
+                                    {{ t.idp.settings.noKeyBehaviorsYet }}
+                                </p>
+
+                                <ul v-else class="space-y-2">
+                                    <li
+                                        v-for="behavior in level.behaviors"
+                                        :key="behavior.id"
+                                        class="flex flex-wrap items-baseline gap-x-2 gap-y-1"
+                                    >
+                                        <span
+                                            class="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700"
+                                        >
+                                            {{ t.idp.settings.keyBehavior }} -
+                                            {{ behavior.sequence }}
+                                        </span>
+                                        <span class="text-sm text-slate-600">
+                                            {{ behavior.name }}
+                                        </span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p
+                        v-else
+                        class="rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                    >
+                        {{ t.idp.settings.noProficiencyLevelsYet }}
+                    </p>
+                </div>
+            </div>
+
+            <template #footer>
+                <button
+                    type="button"
+                    class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                    @click="detailCompetency = null"
+                >
+                    {{ t.idp.form.close }}
+                </button>
+
+                <Link
+                    v-if="detailCompetency"
+                    :href="editUrl(detailCompetency.id)"
+                    class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-hover"
+                >
+                    {{ t.idp.settings.editCompetency }}
+                </Link>
+            </template>
+        </Drawer>
 
         <!-- ================================================================
              DELETE CONFIRMATION
