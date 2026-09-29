@@ -401,7 +401,7 @@ class IdpController extends Controller
         $package = $this->stage->currentPackage();
 
         if (! $package) {
-            return back()->with('error', 'There is no active development model package to import into.');
+            return back()->with('error', 'There is no active model to import into.');
         }
 
         // An import adds plans, so it is held to the same freeze the add form is:

@@ -37,7 +37,7 @@ class DevelopmentModelPackageController extends Controller
         $this->packages->create($request->validated());
 
         return redirect()->route('idp.setting.development_model')
-            ->with('success', 'Package added successfully.');
+            ->with('success', 'Model added successfully.');
     }
 
     public function update(
@@ -47,7 +47,7 @@ class DevelopmentModelPackageController extends Controller
         $this->packages->update($developmentModelPackage, $request->validated());
 
         return redirect()->route('idp.setting.development_model')
-            ->with('success', 'Package updated successfully.');
+            ->with('success', 'Model updated successfully.');
     }
 
     public function destroy(DevelopmentModelPackage $developmentModelPackage): RedirectResponse
@@ -58,7 +58,7 @@ class DevelopmentModelPackageController extends Controller
 
         $this->packages->delete($developmentModelPackage);
 
-        return back()->with('success', 'Package deleted successfully.');
+        return back()->with('success', 'Model deleted successfully.');
     }
 
     private function form(?DevelopmentModelPackage $package): Response

@@ -48,6 +48,11 @@ class CompetencyImplementationController extends Controller
                 'job_family' => $i->job_family,
                 'function_name' => $i->function_name,
                 'position' => $i->position,
+                // When the mapping was first made and last touched. The list
+                // sorts on these, so they travel as ISO strings rather than
+                // formatted text.
+                'created_at' => $i->created_at?->toIso8601String(),
+                'updated_at' => $i->updated_at?->toIso8601String(),
             ]);
 
         $hierarchy = $this->corporate->orgHierarchy();

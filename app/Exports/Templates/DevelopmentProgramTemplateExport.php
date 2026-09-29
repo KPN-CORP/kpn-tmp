@@ -50,7 +50,7 @@ class DevelopmentProgramTemplateExport implements WithMultipleSheets
 
             new ArraySheet(
                 'Ref - Development Models',
-                ['Package', 'Development model', 'Weight', 'Names from Master Training?'],
+                ['Model', 'Development model', 'Weight', 'Names from Master Training?'],
                 $this->modelReference($models),
                 ['B' => 40],
             ),
@@ -101,7 +101,7 @@ class DevelopmentProgramTemplateExport implements WithMultipleSheets
                     [
                         'Ref - Development Models',
                         GuideSheet::REFERENCE,
-                        'The models, by package — and whether each one takes its program names from Master Training. Read that column before you fill anything in.',
+                        'The development models, by model — and whether each one takes its program names from Master Training. Read that column before you fill anything in.',
                     ],
                     [
                         'Ref - Implemented Scope',
@@ -135,7 +135,7 @@ class DevelopmentProgramTemplateExport implements WithMultipleSheets
                 'heading' => 'HOW TO FILL IT IN',
                 'columns' => ['Step', 'Do this', ''],
                 'rows' => [
-                    ['Step 1', 'On "Ref - Development Models", pick the model. Copy its package and name onto your row.', ''],
+                    ['Step 1', 'On "Ref - Development Models", pick the development model. Copy its model and name onto your row.', ''],
                     ['Step 2', 'Check that model last column, and name the program the way it says (see above).', ''],
                     ['Step 3', 'On "Ref - Implemented Scope", find the competency this program builds. Copy its type, the competency, and — if you want one — a proficiency level from the same reference row.', ''],
                     ['Step 4', 'For grades, use only what that same reference row lists as covered. Leave it blank for every grade.', ''],
@@ -146,7 +146,7 @@ class DevelopmentProgramTemplateExport implements WithMultipleSheets
                 'heading' => 'THE COLUMNS',
                 'columns' => ['Column', 'Required?', 'What to put in it'],
                 'rows' => [
-                    ['model_package', 'Required', 'Which package the model belongs to. Two packages can hold a model of the same name, which is what this tells apart.'],
+                    ['model_package', 'Required', 'Which model the development model belongs to. Two models can hold a development model of the same name, which is what this tells apart.'],
                     ['development_model', 'Required', 'The model name, from "Ref - Development Models".'],
                     ['competency_type', 'Required', 'Its Code, or its Name if it has none.'],
                     ['competency', 'Required', 'The single competency this program builds.'],

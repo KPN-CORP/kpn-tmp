@@ -96,8 +96,8 @@ class StoreDevelopmentModelPackageRequest extends FormRequest
     {
         return [
             'end_date.after_or_equal' => 'The end date cannot be before the start date.',
-            'models.required' => 'Add at least one development model - a package with no models cannot reach 100%.',
-            'models.min' => 'Add at least one development model - a package with no models cannot reach 100%.',
+            'models.required' => 'Add at least one development model - a model with no development models cannot reach 100%.',
+            'models.min' => 'Add at least one development model - a model with no development models cannot reach 100%.',
             'models.*.name_en.required' => 'This development model needs an English name.',
             'models.*.percentage.required' => 'This development model needs a percentage.',
             'models.*.percentage.integer' => 'The percentage must be a whole number.',
@@ -144,7 +144,7 @@ class StoreDevelopmentModelPackageRequest extends FormRequest
             ->exists();
 
         if ($overlaps) {
-            $validator->errors()->add('start_date', 'This period overlaps an existing package.');
+            $validator->errors()->add('start_date', 'This period overlaps an existing model.');
         }
     }
 
@@ -165,12 +165,12 @@ class StoreDevelopmentModelPackageRequest extends FormRequest
         if ($start->gt($today)) {
             $validator->errors()->add(
                 'is_current',
-                'This package cannot be set as active yet - its period starts in the future.',
+                'This model cannot be set as active yet - its period starts in the future.',
             );
         } elseif ($end && $end->lt($today)) {
             $validator->errors()->add(
                 'is_current',
-                'This package cannot be set as active - its period has already ended.',
+                'This model cannot be set as active - its period has already ended.',
             );
         }
     }
@@ -195,7 +195,7 @@ class StoreDevelopmentModelPackageRequest extends FormRequest
                 if ($duplicates->contains($name)) {
                     $validator->errors()->add(
                         "models.{$index}.name_en",
-                        'Two development models in this package cannot share a name.',
+                        'Two development models cannot share a name.',
                     );
                 }
             }

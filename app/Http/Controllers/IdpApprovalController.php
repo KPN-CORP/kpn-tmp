@@ -81,7 +81,7 @@ class IdpApprovalController extends Controller
         $package = $this->stage->currentPackage();
 
         if (! $package) {
-            return back()->with('error', 'There is no active development model package to submit a plan for.');
+            return back()->with('error', 'There is no active model to submit a plan for.');
         }
 
         try {

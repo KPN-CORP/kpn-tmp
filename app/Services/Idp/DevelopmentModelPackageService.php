@@ -59,7 +59,7 @@ class DevelopmentModelPackageService
     public function deletionBlocker(DevelopmentModelPackage $package): ?string
     {
         if ($package->is_current || $package->id === DevelopmentModelPackage::active()?->id) {
-            return 'Cannot delete: this is the active package.';
+            return 'Cannot delete: this is the active model.';
         }
 
         $modelIds = $package->developmentModels()->pluck('id');
@@ -69,11 +69,11 @@ class DevelopmentModelPackageService
         }
 
         if (IndividualDevelopmentPlan::whereIn('development_model_id', $modelIds)->exists()) {
-            return 'Cannot delete: this package has models used in development plans.';
+            return 'Cannot delete: this model has development models used in development plans.';
         }
 
         if (DevelopmentProgram::whereIn('development_model_id', $modelIds)->exists()) {
-            return 'Cannot delete: this package has models assigned to development programs.';
+            return 'Cannot delete: this model has development models assigned to development programs.';
         }
 
         return null;

@@ -294,15 +294,15 @@ class DevelopmentProgramImport implements ReportsImportOutcome, ToCollection, Wi
 
         if ($matches->isEmpty()) {
             $this->errors[] = "Row {$line}: development_model '{$name}'"
-                .($package ? " in package '{$package}'" : '').' matches no development model.';
+                .($package ? " in model '{$package}'" : '').' matches no development model.';
 
             return null;
         }
 
         if ($matches->count() > 1) {
             $packages = $matches->map(fn (DevelopmentModel $m) => $m->developmentModelPackage?->name ?? '?')->implode(', ');
-            $this->errors[] = "Row {$line}: development_model '{$name}' exists in more than one package "
-                ."({$packages}) — name the package in model_package.";
+            $this->errors[] = "Row {$line}: development_model '{$name}' exists in more than one model "
+                ."({$packages}) — name the model in model_package.";
 
             return null;
         }
