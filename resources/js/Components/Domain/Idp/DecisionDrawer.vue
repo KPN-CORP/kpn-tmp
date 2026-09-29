@@ -7,10 +7,11 @@
  * inbox): the caller says what is being decided and at which layer, this only
  * records the decision.
  */
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
+import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
@@ -53,7 +54,13 @@ const isFinalLayer = computed(
     () => props.level !== null && props.totalLevels !== null && props.level >= props.totalLevels,
 )
 
+// A decision is final for this layer and moves the request on, so it asks
+// once more before it is recorded.
+const confirmingDecision = ref(false)
+
 function submit() {
+    confirmingDecision.value = false
+
     if (!props.approvalId) return
     form.post(route(`idp.approval.${props.decision}`, props.approvalId), {
         preserveScroll: true,
@@ -74,7 +81,7 @@ function submit() {
             </div>
         </template>
 
-        <form id="idp-decision-form" class="space-y-4" @submit.prevent="submit">
+        <form id="idp-decision-form" class="space-y-4" @submit.prevent="confirmingDecision = true">
             <!-- What this decision does next, so it is not a leap of faith -->
             <div
                 class="rounded-lg border px-3.5 py-3 text-sm"
@@ -135,4 +142,19 @@ function submit() {
     </Drawer>
 
     <UnsavedChangesDialog :show="confirming" @confirm="discard" @close="confirming = false" />
+
+    <ConfirmDialog
+        :show="confirmingDecision"
+        :title="approving ? t.approvalFlow.confirmApproveTitle : t.approvalFlow.confirmRejectTitle"
+        :message="approving
+            ? (isFinalLayer ? t.approvalFlow.approveFinalHint : t.approvalFlow.approveNextHint)
+            : t.approvalFlow.rejectHint"
+        :confirm-label="approving ? t.approvalFlow.confirmApprove : t.approvalFlow.confirmReject"
+        :cancel-label="t.approvalFlow.cancel"
+        :variant="approving ? 'primary' : 'danger'"
+        :icon="approving ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark'"
+        :processing="form.processing"
+        @confirm="submit"
+        @close="confirmingDecision = false"
+    />
 </template>

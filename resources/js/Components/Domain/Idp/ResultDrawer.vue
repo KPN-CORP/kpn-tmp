@@ -11,10 +11,11 @@
  * Saving without submitting is offered too, so a half-written result (evidence
  * still being gathered) is not lost.
  */
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
+import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
 import ApprovalChain from '@/Components/Domain/Idp/ApprovalChain.vue'
 import { useLocale } from '@/Composables/useLocale'
@@ -74,10 +75,57 @@ const rejectionNote = computed(() => {
     return steps.find((step) => step.status === 'rejected') ?? null
 })
 
-const complete = computed(() => !!form.realization_date && !!form.result_evidence.trim())
+/**
+ * Evidence has to be a link. Mirrors SubmitIdpResultRequest: a bare host is
+ * accepted here because the server completes it to https:// — so the button is
+ * not disabled on something the server would have taken.
+ */
+function looksLikeUrl(value: string): boolean {
+    const trimmed = value.trim()
+
+    if (trimmed === '') return false
+
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+        ? trimmed
+        : /^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(trimmed)
+            ? `https://${trimmed}`
+            : trimmed
+
+    try {
+        const url = new URL(withScheme)
+
+        return url.protocol === 'http:' || url.protocol === 'https:'
+    } catch {
+        return false
+    }
+}
+
+const evidenceIsUrl = computed(() => looksLikeUrl(form.result_evidence))
+
+/** Only complain once they have typed something. */
+const evidenceInvalid = computed(
+    () => form.result_evidence.trim() !== '' && !evidenceIsUrl.value,
+)
+
+const complete = computed(() => !!form.realization_date && evidenceIsUrl.value)
+
+/**
+ * Saving a draft is reversible and goes straight through; SUBMITTING hands the
+ * program to an approver and locks it, so that one asks first.
+ */
+const confirmingSubmit = ref(false)
+
+/** Who the result lands on first, named where it is known. */
+const goesToName = computed(() => {
+    const steps = chain.value?.steps ?? []
+    const step = steps.find((s) => s.status === 'pending') ?? steps[0]
+
+    return step?.approver_name ?? step?.approver_id ?? ''
+})
 
 function send(forApproval: boolean) {
     if (!props.plan) return
+    confirmingSubmit.value = false
     form.submit_for_approval = forApproval
     form.post(route('idp.approval.save_result', props.plan.id), {
         preserveScroll: true,
@@ -98,7 +146,7 @@ function send(forApproval: boolean) {
             </div>
         </template>
 
-        <form id="idp-result-form" class="space-y-5" @submit.prevent="send(true)">
+        <form id="idp-result-form" class="space-y-5" @submit.prevent="confirmingSubmit = true">
             <!-- What this result is for: the program as it was planned -->
             <div class="rounded-xl border border-border bg-slate-50/60 px-4 py-3">
                 <p class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -151,14 +199,19 @@ function send(forApproval: boolean) {
                     </label>
                     <input
                         v-model="form.result_evidence"
-                        type="text"
+                        type="url"
+                        inputmode="url"
                         maxlength="1000"
                         :placeholder="t.idp.form.resultEvidencePlaceholder"
                         class="w-full rounded-lg border px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        :class="form.errors.result_evidence ? 'border-red-500' : 'border-border'"
+                        :class="form.errors.result_evidence || evidenceInvalid ? 'border-red-500' : 'border-border'"
                     >
                     <p v-if="form.errors.result_evidence" class="mt-1 text-xs text-red-600">
                         {{ form.errors.result_evidence }}
+                    </p>
+                    <p v-else-if="evidenceInvalid" class="mt-1 flex items-start gap-1.5 text-xs text-red-600">
+                        <i class="fa-solid fa-circle-exclamation mt-0.5 text-[10px]" />
+                        <span>{{ r.evidenceMustBeUrl }}</span>
                     </p>
                     <p v-else class="mt-1 text-xs text-slate-400">{{ r.evidenceHint }}</p>
                 </div>
@@ -204,4 +257,17 @@ function send(forApproval: boolean) {
     </Drawer>
 
     <UnsavedChangesDialog :show="confirming" @confirm="discard" @close="confirming = false" />
+
+    <ConfirmDialog
+        :show="confirmingSubmit"
+        :title="r.confirmTitle"
+        :message="goesToName ? r.confirmMessage.replace('{name}', goesToName) : r.confirmMessageNoName"
+        :confirm-label="r.confirmAction"
+        :cancel-label="t.idp.form.cancel"
+        variant="primary"
+        icon="fa-solid fa-paper-plane"
+        :processing="form.processing"
+        @confirm="send(true)"
+        @close="confirmingSubmit = false"
+    />
 </template>

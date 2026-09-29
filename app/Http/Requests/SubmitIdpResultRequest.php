@@ -34,7 +34,9 @@ class SubmitIdpResultRequest extends FormRequest
                 'date',
                 $start ? 'after_or_equal:'.$start : null,
             ]),
-            'result_evidence' => ['required', 'string', 'max:1000'],
+            // Evidence has to be a LINK: something an approver can open and
+            // check. A sentence describing the evidence is not evidence.
+            'result_evidence' => ['required', 'string', 'max:1000', 'url:http,https'],
             // Whether to send it up the approval chain now, or only save the
             // result so it can be finished later. Not named `submit`: that is an
             // Inertia form method, and a data field by that name never arrives.
@@ -47,8 +49,32 @@ class SubmitIdpResultRequest extends FormRequest
         return [
             'realization_date.required' => 'Enter the date this program was realized.',
             'realization_date.after_or_equal' => 'The realization date cannot be before the program started.',
-            'result_evidence.required' => 'Describe or link the evidence for this result.',
+            'result_evidence.required' => 'Paste the link to the evidence for this result.',
+            'result_evidence.url' => 'The evidence must be a link an approver can open, e.g. https://drive.google.com/…',
         ];
+    }
+
+    /**
+     * Someone pasting a link routinely leaves the scheme off — `drive.google.com/…`
+     * or `www.example.com`. That is a link by any ordinary reading, so it is
+     * completed to `https://` rather than rejected; anything that does not look
+     * like a host is left alone and fails the rule with its own message.
+     */
+    protected function prepareForValidation(): void
+    {
+        $evidence = trim((string) $this->input('result_evidence'));
+
+        if ($evidence !== '' && ! preg_match('#^[a-z][a-z0-9+.-]*://#i', $evidence)) {
+            // A host is at least `something.tld`, before any slash, space or
+            // query — which is what separates a bare domain from a sentence.
+            $head = preg_split('#[/?\s]#', $evidence, 2)[0];
+
+            if (preg_match('#^[\w-]+(\.[\w-]+)+$#', $head)) {
+                $evidence = 'https://'.$evidence;
+            }
+        }
+
+        $this->merge(['result_evidence' => $evidence]);
     }
 
     /**

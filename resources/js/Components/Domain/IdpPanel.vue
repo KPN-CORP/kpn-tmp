@@ -698,6 +698,86 @@ const signOffMode = computed<'decide' | 'submit' | null>(() => {
     return null
 })
 
+/**
+ * Every action that commits the workflow forward asks first. They are all
+ * one-click and none is undoable: submitting freezes the set (or the program)
+ * until an approver decides, so the click deserves a sentence saying what it
+ * does and who it goes to.
+ */
+type SubmitKind = 'planning' | 'result' | 'allResults'
+
+const pendingSubmit = ref<{ kind: SubmitKind; plan: Plan | null } | null>(null)
+
+function askSubmitPlanning() {
+    pendingSubmit.value = { kind: 'planning', plan: null }
+}
+
+function askSubmitResult(plan: Plan) {
+    pendingSubmit.value = { kind: 'result', plan }
+}
+
+function askSubmitAllResults() {
+    pendingSubmit.value = { kind: 'allResults', plan: null }
+}
+
+/** The approver a request would land on first, named where it is known. */
+function firstApprover(chain: ApprovalInfo | null | undefined): string {
+    const step = chain?.steps?.find((s) => s.status === 'pending') ?? chain?.steps?.[0]
+
+    return step?.approver_name ?? step?.approver_id ?? ''
+}
+
+const submitPrompt = computed(() => {
+    const pending = pendingSubmit.value
+    const stage = t.value.idp.stage
+    const result = t.value.idp.result
+
+    if (pending?.kind === 'planning') {
+        const who = firstApprover(props.planning.chain_preview)
+
+        return {
+            title: stage.confirmPlanTitle,
+            message: who
+                ? stage.confirmPlanMessage.replace('{name}', who)
+                : stage.confirmPlanMessageNoName,
+            action: stage.confirmPlanAction,
+        }
+    }
+
+    if (pending?.kind === 'result') {
+        const who = firstApprover(pending.plan?.stage.result.chain_preview)
+
+        return {
+            title: result.confirmTitle,
+            message: who
+                ? result.confirmMessage.replace('{name}', who)
+                : result.confirmMessageNoName,
+            action: result.confirmAction,
+        }
+    }
+
+    return {
+        title: result.confirmAllTitle.replace('{n}', String(readyResults.value)),
+        message: result.confirmAllMessage,
+        action: result.confirmAllAction,
+    }
+})
+
+function runPendingSubmit() {
+    const pending = pendingSubmit.value
+    pendingSubmit.value = null
+
+    if (!pending) return
+
+    if (pending.kind === 'planning') {
+        submitPlanning()
+    } else if (pending.kind === 'result' && pending.plan) {
+        submitResult(pending.plan)
+    } else if (pending.kind === 'allResults') {
+        submitAllResults()
+    }
+}
+
 function submitPlanning() {
     submittingPlanning.value = true
     router.post(route('idp.approval.submit_planning', emp.employee_id), {}, {
@@ -832,7 +912,7 @@ defineExpose({ openUpload })
             :selected-package-id="selectedPackageId"
             :viewing-active="viewingActive"
             @select-package="selectPackage"
-            @submit-results="submitAllResults"
+            @submit-results="askSubmitAllResults"
             @open-chain="openPlanningChain"
         >
             <template #tools>
@@ -904,7 +984,7 @@ defineExpose({ openUpload })
                 @edit="openEdit"
                 @delete="askDelete"
                 @file-result="openResult"
-                @submit-result="submitResult"
+                @submit-result="askSubmitResult"
                 @act="decideOnResult"
                 @open-chain="openResultChain"
             />
@@ -936,7 +1016,7 @@ defineExpose({ openUpload })
                 :models="developmentModels"
                 :filtering="filtering"
                 :submitting="submittingPlanning"
-                @submit="submitPlanning"
+                @submit="askSubmitPlanning"
                 @act="decideOnPlanning"
                 @clear-filters="filters = blankPlanFilters()"
             />
@@ -1402,6 +1482,19 @@ defineExpose({ openUpload })
             @close="confirmingPlan = false"
         />
         <UnsavedChangesDialog :show="confirmingUpload" @confirm="discardUpload" @close="confirmingUpload = false" />
+
+        <!-- Every submit confirms first: one dialog, three actions -->
+        <ConfirmDialog
+            :show="pendingSubmit !== null"
+            :title="submitPrompt.title"
+            :message="submitPrompt.message"
+            :confirm-label="submitPrompt.action"
+            :cancel-label="t.idp.form.cancel"
+            variant="primary"
+            icon="fa-solid fa-paper-plane"
+            @confirm="runPendingSubmit"
+            @close="pendingSubmit = null"
+        />
 
         <!-- Delete confirmation -->
         <ConfirmDialog
