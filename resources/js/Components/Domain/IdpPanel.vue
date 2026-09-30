@@ -35,6 +35,7 @@ import {
     type PlanFilterState,
 } from '@/Components/Domain/Idp/planFilters'
 import { timelineKey, type TimelineKey } from '@/Components/Domain/Idp/planStatus'
+import { uomLabelMap, uomSelectOptions } from '@/Components/Domain/Idp/uom'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDateTime } from '@/Composables/useDate'
@@ -48,6 +49,7 @@ import type {
     PlanningState,
     ProgramOption,
     StageProgress,
+    UomOption,
 } from '@/types/idp'
 
 const { t, locale } = useLocale()
@@ -61,6 +63,8 @@ const props = withDefaults(
             competencyNames: MasterOption[]
             developmentPrograms: ProgramOption[]
             reviewTools: MasterOption[]
+            /** The unit catalogue, both languages, grouped. */
+            unitsOfMeasurement: UomOption[]
         }
         competencyMap: Record<string, ProgramOption[]>
         planning: PlanningState
@@ -142,6 +146,11 @@ function blankPlan() {
         development_program: '',
         review_tools: '',
         expected_outcome: '',
+        // Strings, not numbers: an `<input type="number">` binds to a string,
+        // and '' is what "no target" has to look like on the wire — the server
+        // blanks it back to null.
+        target: '',
+        uom: '',
         time_frame_start: '',
         time_frame_end: '',
     }
@@ -264,6 +273,17 @@ function toSelectOptions(items: MasterOption[], current: string): Option[] {
 const competencyNameOptions = computed(() => toSelectOptions(competencyOptions.value, form.competency_name))
 const programSelectOptions = computed(() => toSelectOptions(programOptions.value, form.development_program))
 const reviewToolsOptions = computed(() => toSelectOptions(props.options.reviewTools, form.review_tools))
+// The unit picker. Each option carries what it measures as its second line,
+// which SearchableSelect also searches - so "area" finds every area unit.
+const uomOptions = computed<Option[]>(
+    () => uomSelectOptions(props.options.unitsOfMeasurement, locale.value, form.uom),
+)
+
+// value => label in the active language, handed to the plan table and the
+// result drawer the same way the competency / program label maps are.
+const uomLabels = computed(
+    () => uomLabelMap(props.options.unitsOfMeasurement, locale.value),
+)
 
 // Canonical value → localized label maps, so the plans table also follows the
 // active language (plans store the canonical English value).
@@ -326,6 +346,9 @@ const typeOffList = computed(
 // value, so progress through the cascade is visible in the step badges.
 const areaComplete = computed(() => !!form.competency_type && !!form.competency_name)
 const programComplete = computed(() => !!form.development_program)
+// Both halves are required, so the step is complete only once both are in.
+const targetComplete = computed(() => form.target !== '' && !!form.uom)
+
 const timelineComplete = computed(() => !!form.time_frame_start)
 
 // A dependent field stays locked (with an explanation) rather than showing an
@@ -425,6 +448,8 @@ const errorLabels = computed<Record<string, string>>(() => ({
     review_tools: t.value.idp.form.reviewTools,
     development_program: t.value.idp.form.program,
     expected_outcome: t.value.idp.form.expectedOutcome,
+    target: t.value.idp.form.target,
+    uom: t.value.idp.form.uom,
     time_frame_start: t.value.idp.form.start,
     time_frame_end: t.value.idp.form.end,
 }))
@@ -436,6 +461,8 @@ const missingRequired = computed(() => {
     if (!form.competency_type) missing.push(t.value.idp.form.type)
     if (!form.competency_name) missing.push(t.value.idp.form.competencyName)
     if (!form.development_program) missing.push(t.value.idp.form.program)
+    if (form.target === '') missing.push(t.value.idp.form.target)
+    if (!form.uom) missing.push(t.value.idp.form.uom)
     if (!form.time_frame_start) missing.push(t.value.idp.form.start)
     return missing
 })
@@ -553,6 +580,8 @@ function openEdit(plan: Plan) {
         development_program: plan.development_program,
         review_tools: plan.review_tools ?? '',
         expected_outcome: plan.expected_outcome ?? '',
+        target: plan.target === null ? '' : String(plan.target),
+        uom: plan.uom ?? '',
         time_frame_start: plan.time_frame_start?.slice(0, 10) ?? '',
         time_frame_end: plan.time_frame_end?.slice(0, 10) ?? '',
     })
@@ -975,6 +1004,7 @@ defineExpose({ openUpload })
                 :type-labels="competencyTypeLabels"
                 :program-labels="programLabels"
                 :review-tool-labels="reviewToolLabels"
+                :uom-labels="uomLabels"
                 :can-edit="canEdit"
                 :viewing-active="viewingActive"
                 :plans-editable="planning.plans_editable"
@@ -1316,9 +1346,54 @@ defineExpose({ openUpload })
                     </div>
                 </FormSection>
 
-                <!-- Step 3 — when it runs -->
+                <!-- Step 3 — how much of it -->
                 <FormSection
                     :step="3"
+                    :title="t.idp.form.sectionTarget"
+                    icon="fa-solid fa-bullseye"
+                    :complete="targetComplete"
+                >
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.form.target }} <span class="text-red-500">*</span>
+                            </label>
+                            <input
+                                v-model="form.target"
+                                type="number"
+                                min="0"
+                                step="any"
+                                inputmode="decimal"
+                                :placeholder="t.idp.form.targetPlaceholder"
+                                class="w-full rounded-lg border px-3 py-2 text-sm tabular-nums focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                                :class="form.errors.target ? 'border-red-500' : 'border-border'"
+                            >
+                            <p v-if="form.errors.target" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.target }}
+                            </p>
+                        </div>
+
+                        <div>
+                            <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                                {{ t.idp.form.uom }} <span class="text-red-500">*</span>
+                            </label>
+                            <SearchableSelect
+                                :model-value="form.uom"
+                                :options="uomOptions"
+                                :placeholder="t.idp.form.selectPlaceholder"
+                                :invalid="!!form.errors.uom"
+                                @update:model-value="form.uom = $event"
+                            />
+                            <p v-if="form.errors.uom" class="mt-1 text-xs text-red-600">
+                                {{ form.errors.uom }}
+                            </p>
+                        </div>
+                    </div>
+                </FormSection>
+
+                <!-- Step 4 — when it runs -->
+                <FormSection
+                    :step="4"
                     :title="t.idp.form.sectionTimeline"
                     icon="fa-solid fa-calendar-days"
                     :complete="timelineComplete"
@@ -1411,6 +1486,7 @@ defineExpose({ openUpload })
             :plan="resultPlan"
             :competency-label="resultPlan ? localize(competencyLabels, resultPlan.competency_name) : ''"
             :program-label="resultPlan ? localize(programLabels, resultPlan.development_program) : ''"
+            :uom-labels="uomLabels"
             @close="resultOpen = false"
         />
 

@@ -2,6 +2,7 @@
 
 namespace App\Exports;
 
+use App\Enums\UnitOfMeasurement;
 use App\Models\IdpApproval;
 use App\Models\IndividualDevelopmentPlan;
 use App\Services\Idp\IdpStageService;
@@ -57,8 +58,8 @@ class IdpExport implements FromCollection, WithHeadings, WithMapping
     {
         return [
             'Development Model', 'Competency Type', 'Competency Name', 'Development Program',
-            'Review Tools', 'Expected Outcome', 'Start', 'End',
-            'Planning Approved', 'Realization', 'Result / Evidence', 'Result Approval',
+            'Review Tools', 'Expected Outcome', 'Target', 'UoM', 'Start', 'End',
+            'Planning Approved', 'Realization', 'Achievement', 'Result / Evidence', 'Result Approval',
         ];
     }
 
@@ -76,10 +77,17 @@ class IdpExport implements FromCollection, WithHeadings, WithMapping
             $plan->development_program,
             $plan->review_tools,
             $plan->expected_outcome,
+            $plan->target,
+            // The English label, not the stored key: a spreadsheet is read by a
+            // person, and `times` is not what the screen calls it.
+            UnitOfMeasurement::tryFrom((string) $plan->uom)?->labelEn(),
             $plan->time_frame_start?->toDateString(),
             $plan->time_frame_end?->toDateString(),
             $plan->planning_approved_at?->toDateString() ?? 'Not approved',
             $plan->realization_date?->toDateString(),
+            // In the plan's own unit, which the UoM column beside the target
+            // already names - so the number travels bare rather than repeating it.
+            $plan->achievement,
             $plan->result_evidence,
             // A row with no approval has either not been filed or not been sent;
             // the realization column beside it says which.

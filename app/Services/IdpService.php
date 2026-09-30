@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\UnitOfMeasurement;
 use App\Models\Competency;
 use App\Models\CompetencyType;
 use App\Models\DevelopmentModel;
@@ -170,6 +171,10 @@ class IdpService
                     ->unique(fn (array $p) => $p['model_id'].'|'.strtolower(trim((string) $p['value'])))
                     ->values(),
                 'reviewTools' => $reviewTools->map($option)->values(),
+                // Not master data but a fixed enum. Both languages travel
+                // with it, the way a master's name does: at 55 units a second
+                // copy in `Config/locales` would be a drift hazard.
+                'unitsOfMeasurement' => UnitOfMeasurement::options(),
             ],
             'competencyMap' => $competencyMap,
             'planning' => $workflow['planning'],

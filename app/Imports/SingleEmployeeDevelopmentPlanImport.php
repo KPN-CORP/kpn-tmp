@@ -2,6 +2,7 @@
 
 namespace App\Imports;
 
+use App\Enums\UnitOfMeasurement;
 use App\Imports\Support\SkipsForeignSheets;
 use App\Models\CompetencyType;
 use App\Models\DevelopmentModel;
@@ -116,6 +117,9 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
                 'development_program' => $data['development_program'],
                 'review_tools' => $data['review_tools'],
                 'expected_outcome' => $data['expected_outcome'],
+                'target' => $data['target'],
+                // The backed value, not the label the sheet typed.
+                'uom' => UnitOfMeasurement::tryFromLoose($data['uom'])?->value,
                 'time_frame_start' => $data['time_frame_start'],
                 'time_frame_end' => $data['time_frame_end'],
             ];
@@ -160,6 +164,12 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
             'development_program' => $get('development_program'),
             'review_tools' => $get('review_tools') ?: null,
             'expected_outcome' => $get('expected_outcome') ?: null,
+            // Kept as typed; validateShape() decides whether it names a unit,
+            // and the attributes below store the resolved backed value.
+            // NOT `?: null`: a target of 0 is falsy in PHP and would be
+            // dropped, which reads as "no target" rather than "a target of 0".
+            'target' => $get('target') !== '' ? $get('target') : null,
+            'uom' => $get('uom') ?: null,
             'time_frame_start' => $this->parseDate($row->get('time_frame_start')),
             'time_frame_end' => $this->parseDate($row->get('time_frame_end')),
         ];
@@ -216,6 +226,29 @@ class SingleEmployeeDevelopmentPlanImport implements ToCollection, WithHeadingRo
 
         if ($data['expected_outcome'] !== null && mb_strlen($data['expected_outcome']) > 500) {
             return "Row {$line}: expected_outcome must not exceed 500 characters.";
+        }
+
+        // Both required, exactly as the plan form requires them. A row that is
+        // blank throughout never reaches here - isEmpty() skips it - so this
+        // only fires on a row that means to be a plan.
+        if ($data['target'] === null) {
+            return "Row {$line}: target is required.";
+        }
+
+        if (! is_numeric($data['target'])) {
+            return "Row {$line}: target must be a number.";
+        }
+
+        if ((float) $data['target'] < 0) {
+            return "Row {$line}: target cannot be negative.";
+        }
+
+        if ($data['uom'] === null) {
+            return "Row {$line}: uom is required.";
+        }
+
+        if (! UnitOfMeasurement::tryFromLoose($data['uom'])) {
+            return "Row {$line}: uom '{$data['uom']}' is not one of the units of measurement.";
         }
 
         return null;

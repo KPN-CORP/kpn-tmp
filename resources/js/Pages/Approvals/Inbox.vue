@@ -27,11 +27,12 @@ import PageHeader from '@/Components/UI/PageHeader.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import RequestCard from '@/Components/Domain/Idp/RequestCard.vue'
+import { uomLabelMap } from '@/Components/Domain/Idp/uom'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
-import type { InboxRequest } from '@/types/idp'
+import type { InboxRequest, UomOption } from '@/types/idp'
 
-const { t } = useLocale()
+const { t, locale } = useLocale()
 
 interface Paginator {
     data: InboxRequest[]
@@ -54,6 +55,8 @@ const props = defineProps<{
     filters: { search: string; stage: string; type: string }
     sort: Sort
     filterOptions: { types: string[] }
+    /** The unit catalogue, for naming a plan's target unit. */
+    unitsOfMeasurement: UomOption[]
     /** Everything on the desk, at every layer. */
     pendingTotal: number
     /** The subset this person may decide right now — what the menu badge counts. */
@@ -63,6 +66,9 @@ const props = defineProps<{
 }>()
 
 const isHistory = computed(() => props.view === 'history')
+
+// value => unit label in the active language, handed to every card.
+const uomLabels = computed(() => uomLabelMap(props.unitsOfMeasurement, locale.value))
 
 // --- List: search + stage + sort + pagination (server-side) -----------------
 
@@ -370,6 +376,7 @@ function toggleAll() {
                     :key="item.step_id"
                     :item="item"
                     :history="isHistory"
+                    :uom-labels="uomLabels"
                     :open="expanded.has(item.step_id)"
                     @toggle="toggle(item.step_id)"
                 />

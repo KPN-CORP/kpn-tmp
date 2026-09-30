@@ -2,6 +2,7 @@
 
 namespace App\Exports\Templates;
 
+use App\Enums\UnitOfMeasurement;
 use App\Models\Competency;
 use App\Models\DevelopmentModel;
 use App\Models\DevelopmentModelPackage;
@@ -96,6 +97,8 @@ class IdpPlanTemplateExport implements WithMultipleSheets
                         ['development_program', 'Required', 'A program linked to that competency, under that model.'],
                         ['review_tools', 'Optional', 'One of the review tools on the reference tab.'],
                         ['expected_outcome', 'Optional', 'What success looks like. Up to 500 characters.'],
+                        ['target', 'Required', 'The number to reach.'],
+                        ['uom', 'Required', 'The unit the target counts, from the reference tab. Its short form works too ("kg", "km/h").'],
                         ['time_frame_start', 'Required', 'DD-MM-YYYY.'],
                         ['time_frame_end', 'Optional', 'DD-MM-YYYY, not before the start date.'],
                     ],
@@ -135,7 +138,7 @@ class IdpPlanTemplateExport implements WithMultipleSheets
                 '1. Development Plan',
                 [
                     'development_model', 'competency_type', 'competency_name', 'development_program',
-                    'review_tools', 'expected_outcome', 'time_frame_start', 'time_frame_end',
+                    'review_tools', 'expected_outcome', 'target', 'uom', 'time_frame_start', 'time_frame_end',
                 ],
                 $sample === null ? [] : [[
                     $sample['model'],
@@ -144,6 +147,8 @@ class IdpPlanTemplateExport implements WithMultipleSheets
                     $sample['program'],
                     ReviewTool::active()->value('name_en'),
                     'Applies the competency independently in day-to-day work.',
+                    3,
+                    UnitOfMeasurement::Day->labelEn(),
                     now()->startOfYear()->format('d-m-Y'),
                     now()->endOfYear()->format('d-m-Y'),
                 ]],
@@ -158,6 +163,16 @@ class IdpPlanTemplateExport implements WithMultipleSheets
                     $combinations,
                 ) ?: [['No development program is configured for this cycle yet.', '', '', '']],
                 ['D' => 60],
+            ),
+
+            new ArraySheet(
+                'Ref - Units of Measurement',
+                ['uom', 'measures'],
+                array_map(
+                    fn (UnitOfMeasurement $u) => [$u->labelEn(), $u->group()->labelEn()],
+                    UnitOfMeasurement::cases(),
+                ),
+                ['A' => 34, 'B' => 24],
             ),
 
             new ArraySheet(

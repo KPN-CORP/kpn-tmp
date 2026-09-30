@@ -34,6 +34,11 @@ class SubmitIdpResultRequest extends FormRequest
                 'date',
                 $start ? 'after_or_equal:'.$start : null,
             ]),
+            // What was actually reached, in the plan's own unit. Required for
+            // the same reason the target is: a result with no number cannot be
+            // judged against the target it was filed for. The column stays
+            // nullable because the results filed before this have none.
+            'achievement' => ['required', 'numeric', 'min:0', 'max:9999999999'],
             // Evidence has to be a LINK: something an approver can open and
             // check. A sentence describing the evidence is not evidence.
             'result_evidence' => ['required', 'string', 'max:1000', 'url:http,https'],
@@ -49,6 +54,8 @@ class SubmitIdpResultRequest extends FormRequest
         return [
             'realization_date.required' => 'Enter the date this program was realized.',
             'realization_date.after_or_equal' => 'The realization date cannot be before the program started.',
+            'achievement.required' => 'Enter what was actually achieved.',
+            'achievement.numeric' => 'The achievement must be a number.',
             'result_evidence.required' => 'Paste the link to the evidence for this result.',
             'result_evidence.url' => 'The evidence must be a link an approver can open, e.g. https://drive.google.com/…',
         ];
@@ -62,6 +69,15 @@ class SubmitIdpResultRequest extends FormRequest
      */
     protected function prepareForValidation(): void
     {
+        // An empty number input posts `''`, which would fail `numeric` with a
+        // "not a number" message for a field that is simply missing. Blanking
+        // it lets `required` report it, and catches a whitespace-only entry.
+        $this->merge([
+            'achievement' => trim((string) $this->input('achievement')) === ''
+                ? null
+                : $this->input('achievement'),
+        ]);
+
         $evidence = trim((string) $this->input('result_evidence'));
 
         if ($evidence !== '' && ! preg_match('#^[a-z][a-z0-9+.-]*://#i', $evidence)) {

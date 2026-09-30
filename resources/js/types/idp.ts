@@ -25,6 +25,20 @@ export interface ProgramOption extends MasterOption {
     model_id?: number | null
 }
 
+/**
+ * One unit of measurement from the `UnitOfMeasurement` catalogue. Both
+ * languages travel with it (a plan stores the KEY, not a label) along with the
+ * group it belongs to, which the picker shows as its second line.
+ */
+export interface UomOption {
+    value: string
+    label_en: string
+    label_id: string
+    group: string
+    group_en: string
+    group_id: string
+}
+
 export type StepStatus = 'pending' | 'approved' | 'rejected'
 
 export interface ApprovalStep {
@@ -82,9 +96,15 @@ export interface Plan {
     development_program: string
     review_tools: string | null
     expected_outcome: string | null
+    /** The quantitative target, paired with its unit: both set, or neither. */
+    target: number | null
+    /** A `UnitOfMeasurement` backed value (`times`, `percent`, …), not a label. */
+    uom: string | null
     time_frame_start: string | null
     time_frame_end: string | null
     realization_date: string | null
+    /** What was reached, counted in the plan's own `uom`. A result field. */
+    achievement: number | null
     result_evidence: string | null
     stage: PlanStage
 }
@@ -167,9 +187,12 @@ export interface InboxPlan {
     development_program: string
     review_tools: string | null
     expected_outcome: string | null
+    target: number | null
+    uom: string | null
     time_frame_start: string | null
     time_frame_end: string | null
     realization_date: string | null
+    achievement: number | null
     result_evidence: string | null
 }
 

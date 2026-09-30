@@ -13,6 +13,7 @@ import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDate } from '@/Composables/useDate'
 import { planningKey, resultKey } from '@/Components/Domain/Idp/planStatus'
+import { attainment, formatTarget } from '@/Components/Domain/Idp/uom'
 import type { Plan, Tone } from '@/types/idp'
 
 const { t } = useLocale()
@@ -24,6 +25,8 @@ const props = defineProps<{
     typeLabel: string
     programLabel: string
     reviewToolLabel: string
+    /** value => unit label, already in the active language. */
+    uomLabels: Record<string, string>
     timeline: { key: string; label: string; badge: string; dot: string }
     canEdit: boolean
     submitting: boolean
@@ -95,6 +98,17 @@ function isUrl(value: string | null): boolean {
 }
 
 const hasChain = computed(() => (result.value.approval?.steps.length ?? 0) > 0)
+
+/** "3 Hectare (ha)", or '' when this plan carries no target. */
+const targetLabel = computed(() => formatTarget(props.uomLabels, props.plan.target, props.plan.uom))
+
+/** What was reached, in the same unit — the counterpart of the target above. */
+const achievementLabel = computed(
+    () => formatTarget(props.uomLabels, props.plan.achievement, props.plan.uom),
+)
+
+/** How far that got. Null when there is nothing to divide by. */
+const achievedPercent = computed(() => attainment(props.plan.target, props.plan.achievement))
 </script>
 
 <template>
@@ -117,6 +131,13 @@ const hasChain = computed(() => (result.value.approval?.steps.length ?? 0) > 0)
             <div class="mt-1.5 max-w-sm text-xs leading-relaxed text-slate-500">{{ programLabel }}</div>
             <div v-if="plan.expected_outcome" class="mt-1 max-w-sm whitespace-pre-line text-xs text-slate-400">
                 <span class="font-medium">{{ t.idp.outcomeLabel }}:</span> {{ plan.expected_outcome }}
+            </div>
+            <div
+                v-if="targetLabel"
+                class="mt-1.5 inline-flex items-center gap-1 rounded bg-primary/5 px-1.5 py-0.5 text-[11px] font-medium text-primary"
+            >
+                <i class="fa-solid fa-bullseye text-[10px]" />
+                {{ t.idp.targetLabel }}: <span class="tabular-nums">{{ targetLabel }}</span>
             </div>
         </td>
 
@@ -155,6 +176,18 @@ const hasChain = computed(() => (result.value.approval?.steps.length ?? 0) > 0)
 
                 <!-- What was filed -->
                 <template v-if="plan.realization_date">
+                    <!-- The number first: it is what the row is really about -->
+                    <p
+                        v-if="achievementLabel"
+                        class="flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-slate-700"
+                    >
+                        <i class="fa-solid fa-flag-checkered text-[10px] text-slate-300" />
+                        <span class="tabular-nums">{{ achievementLabel }}</span>
+                        <span
+                            v-if="achievedPercent !== null"
+                            class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-slate-500"
+                        >{{ achievedPercent }}%</span>
+                    </p>
                     <p class="text-[11px] text-slate-500">
                         <i class="fa-regular fa-calendar-check mr-1 text-slate-300" />
                         {{ formatDate(plan.realization_date) }}

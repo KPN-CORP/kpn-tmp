@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\UnitOfMeasurement;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Requests\ActOnIdpApprovalRequest;
 use App\Http\Requests\SubmitIdpResultRequest;
@@ -118,6 +119,7 @@ class IdpApprovalController extends Controller
 
         $idp->update([
             'realization_date' => $request->validated('realization_date'),
+            'achievement' => $request->validated('achievement'),
             'result_evidence' => $request->validated('result_evidence'),
         ]);
 
@@ -315,6 +317,9 @@ class IdpApprovalController extends Controller
             'filters' => $filters,
             'sort' => $sort,
             'filterOptions' => ['types' => $types],
+            // The unit catalogue, so a card can name the target's unit in the
+            // reader's own language - the same payload the manage screen gets.
+            'unitsOfMeasurement' => UnitOfMeasurement::options(),
             'pendingTotal' => $history ? $this->approvals->pendingCountFor($user) : $pending->count(),
             // Of those, the ones this user may decide right now — what the menu
             // badge counts. The rest are on the desk to be read, not acted on.
@@ -536,9 +541,12 @@ class IdpApprovalController extends Controller
                 'development_program' => $plan->development_program,
                 'review_tools' => $plan->review_tools,
                 'expected_outcome' => $plan->expected_outcome,
+                'target' => $plan->target,
+                'uom' => $plan->uom,
                 'time_frame_start' => $plan->time_frame_start?->toDateString(),
                 'time_frame_end' => $plan->time_frame_end?->toDateString(),
                 'realization_date' => $plan->realization_date?->toDateString(),
+                'achievement' => $plan->achievement,
                 'result_evidence' => $plan->result_evidence,
             ])->values()->all(),
         ])->values();

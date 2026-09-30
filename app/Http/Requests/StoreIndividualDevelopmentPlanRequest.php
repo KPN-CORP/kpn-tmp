@@ -2,10 +2,12 @@
 
 namespace App\Http\Requests;
 
+use App\Enums\UnitOfMeasurement;
 use App\Models\IndividualDevelopmentPlan;
 use App\Services\Idp\Rules\PlanMasterRules;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class StoreIndividualDevelopmentPlanRequest extends FormRequest
 {
@@ -40,6 +42,13 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
             'development_program' => ['required', 'string'],
             'review_tools' => ['nullable', 'string'],
             'expected_outcome' => ['nullable', 'string', 'max:500'],
+            // The quantitative target. REQUIRED, both halves: a plan that
+            // cannot be measured cannot have its result judged against
+            // anything. The columns stay nullable in the database because
+            // every plan written before this rule has neither - such a row
+            // still displays, but acquires a target the next time it is saved.
+            'target' => ['required', 'numeric', 'min:0', 'max:9999999999'],
+            'uom' => ['required', 'string', Rule::enum(UnitOfMeasurement::class)],
             'time_frame_start' => ['required', 'date'],
             'time_frame_end' => ['nullable', 'date', 'after_or_equal:time_frame_start'],
             // The realization date and the result evidence belong to the RESULT
@@ -48,10 +57,32 @@ class StoreIndividualDevelopmentPlanRequest extends FormRequest
         ];
     }
 
+    /**
+     * The drawer posts every field on every save, so an empty target arrives
+     * as `''` rather than absent. Blanking it to null is what makes `required`
+     * report it (rather than `numeric` rejecting `''` as not-a-number) and
+     * keeps a stray space out of the column.
+     */
+    protected function prepareForValidation(): void
+    {
+        $blankToNull = fn (string $key) => trim((string) $this->input($key)) === ''
+            ? null
+            : $this->input($key);
+
+        $this->merge([
+            'target' => $blankToNull('target'),
+            'uom' => $blankToNull('uom'),
+        ]);
+    }
+
     public function messages(): array
     {
         return [
             'time_frame_end.after_or_equal' => 'The end date cannot be before the start date.',
+            'target.required' => 'Enter the target for this program.',
+            'target.numeric' => 'The target must be a number.',
+            'uom.required' => 'Choose the unit this target is measured in.',
+            'uom.enum' => 'Choose one of the listed units of measurement.',
         ];
     }
 

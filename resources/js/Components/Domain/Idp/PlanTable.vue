@@ -47,6 +47,8 @@ const props = defineProps<{
     filtering: boolean
     /** Canonical value → localized label, resolved once by the panel. */
     competencyLabels: Record<string, string>
+    /** value => unit label, already in the active language. */
+    uomLabels: Record<string, string>
     typeLabels: Record<string, string>
     programLabels: Record<string, string>
     reviewToolLabels: Record<string, string>
@@ -274,6 +276,7 @@ const countLabel = computed(() => {
                         :key="row.plan.id"
                         :plan="row.plan"
                         :competency-label="localize(competencyLabels, row.plan.competency_name)"
+                        :uom-labels="uomLabels"
                         :type-label="localize(typeLabels, row.plan.competency_type)"
                         :program-label="localize(programLabels, row.plan.development_program)"
                         :review-tool-label="localize(reviewToolLabels, row.plan.review_tools)"

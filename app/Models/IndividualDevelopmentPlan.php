@@ -25,14 +25,21 @@ class IndividualDevelopmentPlan extends Model
         'review_tools',
         'development_program',
         'expected_outcome',
+        'target',
+        'uom',
         'time_frame_start',
         'time_frame_end',
         'realization_date',
+        'achievement',
         'result_evidence',
         'planning_approved_at',
     ];
 
     protected $casts = [
+        // Float, not `decimal:2`: that cast returns a string, so a target of 3
+        // would reach the wire as "3.00" and read back as "3.00 Times".
+        'target' => 'float',
+        'achievement' => 'float',
         'time_frame_start' => 'date',
         'time_frame_end' => 'date',
         'realization_date' => 'date',
@@ -52,6 +59,8 @@ class IndividualDevelopmentPlan extends Model
         'review_tools',
         'development_program',
         'expected_outcome',
+        'target',
+        'uom',
         'time_frame_start',
         'time_frame_end',
     ];

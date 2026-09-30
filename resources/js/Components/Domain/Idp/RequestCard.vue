@@ -20,6 +20,7 @@ import ApprovalChain from './ApprovalChain.vue'
 import StatusPill from './StatusPill.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDate as fmt, formatDateTime as fmtDateTime } from '@/Composables/useDate'
+import { attainment, formatAmount, formatTarget } from './uom'
 import { route } from '@/Config/route'
 import type { InboxPlan, InboxRequest, Tone } from '@/types/idp'
 
@@ -30,7 +31,30 @@ const props = defineProps<{
     /** A decided request in the log, rather than one still waiting. */
     history?: boolean
     open: boolean
+    /** value => unit label, already in the active language. */
+    uomLabels: Record<string, string>
 }>()
+
+/** "3 Hectare (ha)" for one plan, or '' when it carries no target. */
+function target(plan: InboxPlan): string {
+    return formatTarget(props.uomLabels, plan.target, plan.uom)
+}
+
+/**
+ * What was reached. Bare when there is a target to print it against, since
+ * "10 Hectare (ha) / 12 Hectare (ha)" names the unit twice; with the unit when
+ * it stands alone.
+ */
+function achieved(plan: InboxPlan): string {
+    return plan.target === null
+        ? formatTarget(props.uomLabels, plan.achievement, plan.uom)
+        : formatAmount(plan.achievement)
+}
+
+/** How far that got against the target, or null when it cannot be worked out. */
+function achievedPercent(plan: InboxPlan): number | null {
+    return attainment(plan.target, plan.achievement)
+}
 
 const emit = defineEmits<{
     toggle: []
@@ -298,12 +322,38 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                         <span class="font-medium text-slate-600">{{ t.idp.outcomeLabel }}:</span>
                         {{ single.expected_outcome }}
                     </p>
+
+                    <!-- What the result below is measured against -->
+                    <p
+                        v-if="target(single)"
+                        class="mt-2 inline-flex items-center gap-1.5 rounded bg-primary/5 px-2 py-1 text-xs font-medium text-primary"
+                    >
+                        <i class="fa-solid fa-bullseye text-[10px]" />
+                        {{ t.idp.targetLabel }}:
+                        <span class="tabular-nums">{{ target(single) }}</span>
+                    </p>
                 </section>
 
                 <section class="rounded-lg bg-emerald-50/40 p-3 ring-1 ring-inset ring-emerald-100">
                     <p class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
                         {{ t.idp.table.result }}
                     </p>
+
+                    <div
+                        v-if="achieved(single)"
+                        class="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1"
+                    >
+                        <span class="text-lg font-bold leading-none tabular-nums text-slate-800">
+                            {{ achieved(single) }}
+                        </span>
+                        <span v-if="target(single)" class="text-xs text-slate-500">
+                            / {{ target(single) }}
+                        </span>
+                        <span
+                            v-if="achievedPercent(single) !== null"
+                            class="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 ring-1 ring-inset ring-emerald-200"
+                        >{{ achievedPercent(single) }}%</span>
+                    </div>
 
                     <p class="text-sm font-medium text-slate-800">
                         <i class="fa-regular fa-calendar-check mr-1.5 text-emerald-600" />
@@ -365,6 +415,14 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                                 <span class="font-medium">{{ t.idp.outcomeLabel }}:</span>
                                 {{ plan.expected_outcome }}
                             </p>
+                            <span
+                                v-if="target(plan)"
+                                class="mt-1.5 inline-flex items-center gap-1 rounded bg-primary/5 px-1.5 py-0.5 text-[11px] font-medium text-primary"
+                            >
+                                <i class="fa-solid fa-bullseye text-[10px]" />
+                                {{ t.idp.targetLabel }}:
+                                <span class="tabular-nums">{{ target(plan) }}</span>
+                            </span>
                         </div>
 
                         <!-- When it runs -->

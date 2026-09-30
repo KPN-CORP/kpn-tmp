@@ -17,6 +17,39 @@
         'revision' => 'Needs approval again',
     ][$planning['status'] ?? 'draft'] ?? 'Not submitted';
 
+    /**
+     * A target is stored as a number plus a unit KEY; print it as the number
+     * plus the unit's English label, and trim the decimal's trailing zeros so
+     * a target of 3 does not read "3.00".
+     */
+    $target = function (array $plan) {
+        if (($plan['target'] ?? null) === null || $plan['target'] === '') {
+            return null;
+        }
+
+        $unit = \App\Enums\UnitOfMeasurement::tryFrom((string) ($plan['uom'] ?? ''));
+        $amount = rtrim(rtrim(number_format((float) $plan['target'], 2, '.', ','), '0'), '.');
+
+        return trim($amount.' '.($unit?->labelEn() ?? ''));
+    };
+
+    /** What was reached, against the target it was filed for. */
+    $achieved = function (array $plan) use ($target) {
+        if (($plan['achievement'] ?? null) === null || $plan['achievement'] === '') {
+            return null;
+        }
+
+        $unit = \App\Enums\UnitOfMeasurement::tryFrom((string) ($plan['uom'] ?? ''));
+        $amount = rtrim(rtrim(number_format((float) $plan['achievement'], 2, '.', ','), '0'), '.');
+        $reached = trim($amount.' '.($unit?->labelEn() ?? ''));
+
+        // With a target beside it the unit is named once, on the target:
+        // "10 of 12 Hectare (ha)" rather than repeating it on both numbers.
+        return $target($plan)
+            ? $amount.' of '.$target($plan)
+            : $reached;
+    };
+
     $resultLabel = [
         'locked' => '—',
         'open' => 'Not filed',
@@ -103,7 +136,12 @@
                                 <br><span class="muted">{{ $plan['review_tools'] }}</span>
                             @endif
                         </td>
-                        <td>{!! $plan['expected_outcome'] ? nl2br(e($plan['expected_outcome'])) : '—' !!}</td>
+                        <td>
+                            {!! $plan['expected_outcome'] ? nl2br(e($plan['expected_outcome'])) : '—' !!}
+                            @if($target($plan))
+                                <br><span class="muted">Target: {{ $target($plan) }}</span>
+                            @endif
+                        </td>
                         <td>{{ $fmt($plan['time_frame_start']) }} –<br>{{ $fmt($plan['time_frame_end']) }}</td>
                         <td class="state {{ ($stage['planning_approved'] ?? false) ? 'ok' : 'wait' }}">
                             {{ ($stage['planning_approved'] ?? false) ? 'Approved' : 'Not approved' }}
@@ -114,6 +152,9 @@
                             </span>
                             @if($plan['realization_date'])
                                 <br>{{ $fmt($plan['realization_date']) }}
+                            @endif
+                            @if($achieved($plan))
+                                <br><strong>{{ $achieved($plan) }}</strong>
                             @endif
                             @if($plan['result_evidence'])
                                 <br><span class="muted">{{ $plan['result_evidence'] }}</span>
