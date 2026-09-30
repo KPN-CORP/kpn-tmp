@@ -3,6 +3,9 @@
 namespace App\Http\Middleware;
 
 use App\Models\ApprovalNotification;
+use App\Models\User;
+use App\Services\ApprovalChainService;
+use App\Services\EmployeeScopeService;
 use App\Services\IdpApprovalService;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
@@ -48,6 +51,9 @@ class HandleInertiaRequests extends Middleware
                 // guarded so a missing/unreachable kpncorp connection can never
                 // break the app shell.
                 'employee' => fn () => $this->resolveEmployee($user),
+                // Whether they have subordinates at all - what decides if the
+                // Team Development Plan menu item is worth showing.
+                'has_team' => fn () => $this->hasTeam($user),
             ],
 
             // Drives permission-gated menu items in useNavigation().
@@ -117,6 +123,45 @@ class HandleInertiaRequests extends Middleware
             return app(IdpApprovalService::class)->actionableCountFor($user);
         } catch (\Throwable) {
             return 0;
+        }
+    }
+
+    /**
+     * Whether this user has a team, for the Team Development Plan menu item.
+     *
+     * The rule the client asked for is the APPROVAL LAYER: someone is a
+     * manager here when at least one employee's effective approval chain names
+     * them. That is what `ApprovalChainService::hasSubordinates()` answers, and
+     * it is the whole rule for an ordinary employee.
+     *
+     * A role-holder gets a second chance: an HC admin or a Superadmin is
+     * usually nobody's approver, yet their scope covers hundreds of people and
+     * hiding their team list would be a plain regression. The clause is skipped
+     * for a user with no roles - where it could never be true anyway - which
+     * also keeps the extra query off the common path.
+     */
+    private function hasTeam(?User $user): bool
+    {
+        if (! $user || empty($user->employee_id)) {
+            return false;
+        }
+
+        if (app(ApprovalChainService::class)->hasSubordinates((string) $user->employee_id)) {
+            return true;
+        }
+
+        if (! method_exists($user, 'roles') || $user->roles->isEmpty()) {
+            return false;
+        }
+
+        try {
+            return app(EmployeeScopeService::class)
+                ->accessibleQuery($user, 'ic_view_idp', 'pm_view_idp')
+                ->where('employee_id', '!=', $user->employee_id)
+                ->exists();
+        } catch (\Throwable) {
+            // kpncorp unreachable - the shell must still render.
+            return false;
         }
     }
 

@@ -70,15 +70,9 @@ class IdpController extends Controller
 
         $base = $this->teamQuery($user, self::IDP_VIEW);
 
-        // Which cycle the list is reporting on. The picker has no per-employee
-        // count to show, so it asks for none.
+        // The list reports on the ACTIVE cycle, the only one a plan can still
+        // be written in. There is no picker, here or on the manage screen.
         $activePackageId = $this->stage->currentPackage()?->id;
-        $packages = $this->stage->packageOptions($activePackageId);
-        $selectedPackageId = $this->stage->selectedPackageId(
-            $packages,
-            $request->integer('package') ?: null,
-            $activePackageId,
-        );
 
         $employees = $this->filteredQuery(clone $base, $filters)
             ->orderBy($sort['key'], $sort['dir'])
@@ -89,16 +83,13 @@ class IdpController extends Controller
         // Where each employee on THIS page stands in the chosen cycle, resolved
         // in two queries for the whole page rather than one pair per row.
         $employees->setCollection(
-            $this->withCycleStatus($employees->getCollection(), $selectedPackageId),
+            $this->withCycleStatus($employees->getCollection(), $activePackageId),
         );
 
         return Inertia::render('Idp/Index', [
             'employees' => $employees,
             'filters' => $filters,
             'sort' => $sort,
-            'packages' => $packages->all(),
-            'selectedPackageId' => $selectedPackageId,
-            'viewingActive' => $selectedPackageId !== null && $selectedPackageId === $activePackageId,
             'filterOptions' => $this->filterOptions(clone $base),
         ]);
     }
@@ -126,12 +117,7 @@ class IdpController extends Controller
 
         return Inertia::render('Idp/Mine', array_merge(
             ['employee' => new EmployeeResource($employee)],
-            $this->idp->manageData(
-                $employeeId,
-                $user,
-                canManage: true,
-                packageId: $request->integer('package') ?: null,
-            ),
+            $this->idp->manageData($employeeId, $user, canManage: true),
         ));
     }
 
@@ -269,15 +255,9 @@ class IdpController extends Controller
                 'employee' => new EmployeeResource($employee),
                 'canManage' => $inScope,
             ],
-            // The manage screen may edit + submit the IDP for approval — but
-            // only while it is showing the ACTIVE cycle; the service decides
-            // that from the package asked for.
-            $this->idp->manageData(
-                $employeeId,
-                $user,
-                canManage: $inScope,
-                packageId: $request->integer('package') ?: null,
-            ),
+            // The manage screen may edit + submit the IDP for approval. It
+            // always shows the active cycle, so there is no closed-cycle case.
+            $this->idp->manageData($employeeId, $user, canManage: $inScope),
         ));
     }
 
@@ -303,9 +283,9 @@ class IdpController extends Controller
 
         $employee = $this->scope->accessibleQuery($user, ...self::IDP_DOWNLOAD)
             ->where('employee_id', $employeeId)->firstOrFail();
-        // The PDF covers the cycle the screen is showing, not always the active
-        // one — the download button carries the package it was pressed on.
-        $data = $this->idp->manageData($employeeId, packageId: $request->integer('package') ?: null);
+        // The PDF covers the active cycle, which is the only one the screen
+        // shows.
+        $data = $this->idp->manageData($employeeId);
 
         $pdf = Pdf::loadView('pdf.idp', [
             'employee' => $employee,
@@ -324,9 +304,9 @@ class IdpController extends Controller
     {
         abort_unless($this->scope->canAccess($request->user(), $employeeId, ...self::IDP_DOWNLOAD), 403);
 
-        // Same rule as the PDF: the file covers the cycle the screen was on.
+        // Same rule as the PDF: the active cycle, matching the screen.
         return Excel::download(
-            new IdpExport($employeeId, $request->integer('package') ?: null),
+            new IdpExport($employeeId),
             'idp_'.$employeeId.'.xlsx',
         );
     }
@@ -488,7 +468,7 @@ class IdpController extends Controller
 
         // The zip covers the cycle the list was showing, not always the active
         // one — same rule as the per-employee PDF button.
-        GenerateIdpZip::dispatch($employeeIds, $status->id, $request->integer('package') ?: null);
+        GenerateIdpZip::dispatch($employeeIds, $status->id);
 
         return response()->json(['job_id' => $status->id]);
     }

@@ -14,7 +14,7 @@ import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDate as fmtDate, formatDateTime } from '@/Composables/useDate'
 import { route } from '@/Config/route'
-import type { PackageOption, PlanningState, StageProgress } from '@/types/idp'
+import type { PlanningState, StageProgress } from '@/types/idp'
 
 const { t } = useLocale()
 
@@ -102,9 +102,6 @@ const props = defineProps<{
     competencyMap: Record<string, Array<MasterOption & { model_id: number | null }>>
     planning: PlanningState
     progress: StageProgress
-    packages: PackageOption[]
-    selectedPackageId: number | null
-    viewingActive: boolean
 }>()
 
 const emp = props.employee.data
@@ -577,9 +574,6 @@ function deletePhoto() {
                 :competency-map="competencyMap"
                 :planning="planning"
                 :progress="progress"
-                :packages="packages"
-                :selected-package-id="selectedPackageId"
-                :viewing-active="viewingActive"
                 :reload-url="route('employee.profile', emp.employee_id)"
                 :can-edit="false"
             />

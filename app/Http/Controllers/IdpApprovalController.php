@@ -13,6 +13,7 @@ use App\Models\IndividualDevelopmentPlan;
 use App\Models\User;
 use App\Services\EmployeeScopeService;
 use App\Services\Idp\ApprovalPresenter;
+use App\Services\Idp\ApprovalSnapshot;
 use App\Services\Idp\IdpStageService;
 use App\Services\IdpApprovalService;
 use Illuminate\Http\RedirectResponse;
@@ -169,6 +170,8 @@ class IdpApprovalController extends Controller
 
         $existing = IdpApproval::result()
             ->whereIn('individual_development_plan_id', $plans->pluck('id'))
+            // Ascending, so keyBy keeps the latest round of each result.
+            ->orderBy('id')
             ->get()
             ->keyBy('individual_development_plan_id');
 
@@ -486,6 +489,12 @@ class IdpApprovalController extends Controller
                 return null;
             }
 
+            // A request reads what it was submitted with. Only rows from before
+            // snapshots were taken fall back to the plans as they are now.
+            if ($approval->snapshot !== null) {
+                return ['step' => $step, 'approval' => $approval, 'plans' => collect($approval->snapshot), 'frozen' => true];
+            }
+
             if ($approval->isPlanning()) {
                 $modelIds = ($packageModels[$approval->development_model_package_id] ?? collect())->pluck('id');
 
@@ -496,23 +505,34 @@ class IdpApprovalController extends Controller
                 $plans = collect(array_filter([$approval->plan]));
             }
 
-            return ['step' => $step, 'approval' => $approval, 'plans' => $plans];
+            return ['step' => $step, 'approval' => $approval, 'plans' => $plans, 'frozen' => false];
         })->filter()->values();
 
         if ($requirePlans) {
             $pairs = $pairs->filter(fn (array $pair) => $pair['plans']->isNotEmpty())->values();
         }
 
-        // Model names for every plan on the desk, in one query — a planning
-        // request's are already known from its package.
+        // Model names for every live plan on the desk, in one query — a planning
+        // request's are already known from its package, and a snapshot carries
+        // its own.
         $known = $packageModels->flatten()->pluck('name', 'id');
 
-        $missing = $pairs->flatMap(fn (array $pair) => $pair['plans']->pluck('development_model_id'))
+        $missing = $pairs->reject(fn (array $pair) => $pair['frozen'])
+            ->flatMap(fn (array $pair) => $pair['plans']->pluck('development_model_id'))
             ->filter()->unique()->reject(fn ($id) => $known->has($id))->values();
 
         $modelNames = $missing->isEmpty()
             ? $known
             : $known->union(DevelopmentModel::withTrashed()->whereIn('id', $missing)->pluck('name', 'id'));
+
+        $pairs = $pairs->map(fn (array $pair) => [
+            ...$pair,
+            'plans' => $pair['frozen']
+                ? $pair['plans']->values()->all()
+                : ApprovalSnapshot::of($pair['plans'], $modelNames),
+        ]);
+
+        $previous = $this->previousRounds($pairs->pluck('approval'), $presenter);
 
         return $pairs->map(fn (array $pair) => [
             // Identifies the ROW, not the request: one request appears twice in
@@ -529,27 +549,112 @@ class IdpApprovalController extends Controller
                 ? ['id' => $pair['approval']->package->id, 'name' => $pair['approval']->package->name]
                 : null,
             // What the row is called in the list: the plan set for a planning
-            // request, the one program for a result.
+            // request, the one program for a result — as it was submitted.
             'title' => $pair['approval']->isPlanning()
                 ? $pair['approval']->package?->name
-                : $pair['approval']->plan?->development_program,
-            'plans' => $pair['plans']->map(fn (IndividualDevelopmentPlan $plan) => [
-                'id' => $plan->id,
-                'development_model' => $modelNames[$plan->development_model_id] ?? null,
-                'competency_type' => $plan->competency_type,
-                'competency_name' => $plan->competency_name,
-                'development_program' => $plan->development_program,
-                'review_tools' => $plan->review_tools,
-                'expected_outcome' => $plan->expected_outcome,
-                'target' => $plan->target,
-                'uom' => $plan->uom,
-                'time_frame_start' => $plan->time_frame_start?->toDateString(),
-                'time_frame_end' => $plan->time_frame_end?->toDateString(),
-                'realization_date' => $plan->realization_date?->toDateString(),
-                'achievement' => $plan->achievement,
-                'result_evidence' => $plan->result_evidence,
-            ])->values()->all(),
+                : ($pair['plans'][0]['development_program'] ?? $pair['approval']->plan?->development_program),
+            'plans' => $pair['plans'],
+            // False when the request predates snapshots, so its plans are the
+            // live rows and may have moved on since it was decided.
+            'frozen' => $pair['frozen'],
+            'previous' => $this->comparison(
+                $previous->get($pair['approval']->id),
+                $pair['plans'],
+                $pair['frozen'],
+                $presenter,
+            ),
         ])->values();
+    }
+
+    /**
+     * The round before each of these requests — same employee + package for a
+     * plan, same program for a result — keyed by the later request's id. Every
+     * round of every subject on the desk is read in one query.
+     *
+     * @param  Collection<int, IdpApproval>  $approvals
+     * @return Collection<int, IdpApproval>
+     */
+    private function previousRounds(Collection $approvals, ApprovalPresenter $presenter): Collection
+    {
+        $approvals = $approvals->unique('id');
+
+        if ($approvals->isEmpty()) {
+            return collect();
+        }
+
+        $planning = $approvals->filter->isPlanning();
+        $results = $approvals->reject->isPlanning();
+
+        $rounds = IdpApproval::query()
+            ->with('steps')
+            ->where(function ($query) use ($planning, $results) {
+                if ($planning->isNotEmpty()) {
+                    $query->orWhere(fn ($q) => $q->planning()
+                        ->whereIn('employee_id', $planning->pluck('employee_id')->unique()->values())
+                        ->whereIn('development_model_package_id', $planning->pluck('development_model_package_id')->unique()->values()));
+                }
+
+                if ($results->isNotEmpty()) {
+                    $query->orWhere(fn ($q) => $q->result()
+                        ->whereIn('individual_development_plan_id', $results->pluck('individual_development_plan_id')->unique()->values()));
+                }
+            })
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy(fn (IdpApproval $round) => $this->subjectKey($round));
+
+        $found = $approvals->mapWithKeys(fn (IdpApproval $approval) => [
+            $approval->id => ($rounds[$this->subjectKey($approval)] ?? collect())
+                ->first(fn (IdpApproval $round) => $round->id < $approval->id),
+        ])->filter();
+
+        // Whoever declined the earlier round is named on the card.
+        $presenter->prime($found->flatMap(fn (IdpApproval $round) => $round->steps->pluck('approver_employee_id')));
+
+        return $found;
+    }
+
+    private function subjectKey(IdpApproval $approval): string
+    {
+        return $approval->isPlanning()
+            ? "planning|{$approval->employee_id}|{$approval->development_model_package_id}"
+            : "result|{$approval->individual_development_plan_id}";
+    }
+
+    /**
+     * How this request differs from the round before it, and how that round
+     * ended. Null on a first round. `diff` is null when either side has no
+     * snapshot: two live reads of the same rows would always say "nothing
+     * changed", which is exactly the misreading this exists to stop.
+     *
+     * @param  list<array<string, mixed>>  $plans
+     * @return array<string, mixed>|null
+     */
+    private function comparison(?IdpApproval $round, array $plans, bool $frozen, ApprovalPresenter $presenter): ?array
+    {
+        if (! $round) {
+            return null;
+        }
+
+        $decisive = $round->steps->firstWhere('status', 'rejected');
+
+        return [
+            'approval_id' => $round->id,
+            'submitted_at' => $round->submitted_at?->toDateTimeString(),
+            'status' => $round->status,
+            // Who stopped it and why — usually the reason the new round exists.
+            'rejected' => $decisive ? [
+                'level' => $decisive->level,
+                'name' => $decisive->acted_by_name
+                    ?: $presenter->name($decisive->approver_employee_id)
+                    ?: $decisive->approver_employee_id,
+                'note' => $decisive->note,
+                'at' => $decisive->acted_at?->toDateTimeString(),
+            ] : null,
+            'diff' => $frozen && $round->snapshot !== null
+                ? ApprovalSnapshot::diff($round->snapshot, $plans)
+                : null,
+        ];
     }
 
     /**

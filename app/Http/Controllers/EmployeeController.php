@@ -153,7 +153,7 @@ class EmployeeController extends Controller
 
         // The profile's IDP tab is read-only, but it reads the same cycle
         // picker — so a past package's plans can be looked at from here too.
-        $idp = $this->idp->manageData($employeeId, $user, packageId: $request->integer('package') ?: null);
+        $idp = $this->idp->manageData($employeeId, $user);
 
         return Inertia::render('Facecard/Profile', array_merge($idp, [
             'employee' => new EmployeeResource($employee),

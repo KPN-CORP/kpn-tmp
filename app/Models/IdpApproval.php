@@ -20,9 +20,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * chain: approved only once the final layer signs off, rejected the moment any
  * layer declines. App-owned (mysql).
  *
- * Planning rows are VERSIONED rather than unique per (employee, package): a set
- * that is revised and resubmitted opens a new row, so each revision keeps its
- * own chain and decisions. The current one is the latest row for the pair.
+ * Both stages are VERSIONED: a planning set (per employee + package) or a
+ * result (per plan) that is resubmitted opens a new row, so each round keeps its
+ * own chain and decisions. The current one is the latest row for its subject.
+ *
+ * `snapshot` freezes the plans the request covered at submission, so the log
+ * shows each round as it was decided rather than as the plan reads today. Null
+ * on rows submitted before snapshots were taken.
  */
 class IdpApproval extends Model
 {
@@ -42,12 +46,14 @@ class IdpApproval extends Model
         'status',
         'current_level',
         'layers',
+        'snapshot',
         'submitted_by',
         'submitted_at',
     ];
 
     protected $casts = [
         'layers' => 'array',
+        'snapshot' => 'array',
         'current_level' => 'integer',
         'submitted_at' => 'datetime',
     ];

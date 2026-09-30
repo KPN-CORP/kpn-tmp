@@ -76,12 +76,14 @@ class IndividualDevelopmentPlan extends Model
     }
 
     /**
-     * This row's result-stage approval (one per plan; null until submitted).
+     * This row's current result-stage approval — the latest round, since a
+     * resubmitted result opens a new one (null until submitted).
      */
     public function resultApproval(): HasOne
     {
         return $this->hasOne(IdpApproval::class, 'individual_development_plan_id')
-            ->where('stage', IdpApproval::STAGE_RESULT);
+            ->where('stage', IdpApproval::STAGE_RESULT)
+            ->latestOfMany('id');
     }
 
     /**

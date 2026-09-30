@@ -132,23 +132,6 @@ export interface DevelopmentModelView {
  */
 export type PlanningStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'revision'
 
-/**
- * One development-model cycle in the picker. The whole IDP screen shows exactly
- * one of these at a time; only the ACTIVE one can still be written in.
- */
-export interface PackageOption {
-    id: number
-    name: string
-    start_date: string | null
-    end_date: string | null
-    is_active: boolean
-    /**
-     * How many of this employee's plans sit in this cycle — null on a screen
-     * that reports on many employees at once and so has no count to show.
-     */
-    plans: number | null
-}
-
 export interface PlanningState {
     package: { id: number; name: string; start_date: string | null; end_date: string | null } | null
     status: PlanningStatus
@@ -196,6 +179,24 @@ export interface InboxPlan {
     result_evidence: string | null
 }
 
+/** Plan fields compared between two rounds of the same request. */
+export type InboxPlanField = Exclude<keyof InboxPlan, 'id'>
+
+/** How a request differs from the round before it, and how that round ended. */
+export interface InboxPrevious {
+    approval_id: number
+    submitted_at: string | null
+    status: 'pending' | 'approved' | 'rejected'
+    rejected: { level: number; name: string | null; note: string | null; at: string | null } | null
+    /** Null when either round has no snapshot to compare. */
+    diff: {
+        added: number[]
+        removed: InboxPlan[]
+        /** plan id => field => [before, after] */
+        changed: Record<number, Partial<Record<InboxPlanField, [unknown, unknown]>>>
+    } | null
+}
+
 /**
  * One request on the approver's desk, in the one shape both of its surfaces
  * read — the pending list and the decision log.
@@ -216,7 +217,12 @@ export interface InboxRequest {
     submitted_at: string | null
     package: { id: number; name: string } | null
     title: string | null
+    /** As submitted — frozen at submission. */
     plans: InboxPlan[]
+    /** False for a request that predates snapshots: `plans` are then the live rows. */
+    frozen: boolean
+    /** The round before this one for the same subject, or null on a first round. */
+    previous: InboxPrevious | null
 
     // Pending rows — whether this layer's turn has come, and who holds it while
     // it has not.

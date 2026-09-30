@@ -30,8 +30,6 @@ class GenerateIdpZip implements ShouldQueue
     public function __construct(
         public array $employeeIds,
         public string $jobStatusId,
-        /** The development-model cycle to render; the active one when null. */
-        public ?int $packageId = null,
     ) {}
 
     public function handle(IdpService $idp): void
@@ -61,7 +59,8 @@ class GenerateIdpZip implements ShouldQueue
             $employee = Employee::where('employee_id', $employeeId)->first();
 
             if ($employee) {
-                $data = $idp->manageData($employeeId, packageId: $this->packageId);
+                // Always the active cycle - the only one the screens show.
+                $data = $idp->manageData($employeeId);
                 $pdf = Pdf::loadView('pdf.idp', [
                     'employee' => $employee,
                     'developmentModels' => $data['developmentModels'],

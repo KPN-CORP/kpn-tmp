@@ -9,7 +9,6 @@ import { route } from '@/Config/route'
 import type {
     DevelopmentModelView,
     MasterOption,
-    PackageOption,
     PlanningState,
     ProgramOption,
     StageProgress,
@@ -31,9 +30,6 @@ const props = defineProps<{
     competencyMap: Record<string, ProgramOption[]>
     planning: PlanningState
     progress: StageProgress
-    packages: PackageOption[]
-    selectedPackageId: number | null
-    viewingActive: boolean
     /**
      * False when the viewer is here only as an approver on this employee's
      * chain: they may decide, not edit, upload or submit.
@@ -60,14 +56,14 @@ const emp = props.employee.data
                     {{ t.idp.upload.button }}
                 </button>
                 <a
-                    :href="route('idp.download_pdf', { employeeId: emp.employee_id, package: selectedPackageId })"
+                    :href="route('idp.download_pdf', { employeeId: emp.employee_id })"
                     class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
                 >
                     <i class="fa-solid fa-file-pdf text-xs" />
                     {{ t.idp.downloadPdf }}
                 </a>
                 <a
-                    :href="route('idp.export', { employeeId: emp.employee_id, package: selectedPackageId })"
+                    :href="route('idp.export', { employeeId: emp.employee_id })"
                     class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
                 >
                     <i class="fa-solid fa-file-excel text-xs" />
@@ -93,9 +89,6 @@ const emp = props.employee.data
             :competency-map="competencyMap"
             :planning="planning"
             :progress="progress"
-            :packages="packages"
-            :selected-package-id="selectedPackageId"
-            :viewing-active="viewingActive"
             :reload-url="route('idp.show', emp.employee_id)"
         />
     </AppLayout>

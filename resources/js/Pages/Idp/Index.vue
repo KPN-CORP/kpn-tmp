@@ -9,7 +9,7 @@ import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.
 import { useLocale } from '@/Composables/useLocale'
 import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
 import { route } from '@/Config/route'
-import type { PackageOption, PlanningStatus, Tone } from '@/types/idp'
+import type { PlanningStatus, Tone } from '@/types/idp'
 
 const { t } = useLocale()
 
@@ -54,9 +54,6 @@ const props = defineProps<{
         designations: string[]
     }
     /** Every cycle, so one can be picked; the list reports on one at a time. */
-    packages: PackageOption[]
-    selectedPackageId: number | null
-    viewingActive: boolean
 }>()
 
 const state = reactive({
@@ -77,18 +74,6 @@ const columns: Column[] = [
     { key: 'cycle', label: t.value.idp.table.planning, sortable: false },
     { key: 'action', label: '', thClass: 'text-right', tdClass: 'text-right' },
 ]
-
-// --- The cycle the list reports on ----------------------------------------
-
-// One cycle is no choice at all, so the picker only appears once there are two.
-const canPickPackage = computed(() => props.packages.length > 1)
-
-const packageOptions = computed<Option[]>(() =>
-    props.packages.map((pkg) => ({
-        value: String(pkg.id),
-        label: pkg.name + (pkg.is_active ? ` · ${t.value.idp.stage.activeCycle}` : ''),
-    })),
-)
 
 /**
  * A row's planning standing, as the same chip the manage screen uses. The
@@ -151,7 +136,6 @@ function reload() {
             business_unit: state.business_unit || undefined,
             job_level: state.job_level || undefined,
             designation: state.designation || undefined,
-            package: props.selectedPackageId ?? undefined,
             sort: props.sort.key,
             direction: props.sort.dir,
             per_page: state.per_page,
@@ -168,7 +152,6 @@ function changeSort(sort: Sort) {
             business_unit: state.business_unit || undefined,
             job_level: state.job_level || undefined,
             designation: state.designation || undefined,
-            package: props.selectedPackageId ?? undefined,
             sort: sort.key,
             direction: sort.dir,
             per_page: state.per_page,
@@ -237,7 +220,7 @@ async function startBulkDownload() {
                 'X-XSRF-TOKEN': xsrf,
             },
             // The zip covers the cycle the list is showing, like the row links.
-            body: JSON.stringify({ employee_ids: selected.value, package: props.selectedPackageId }),
+            body: JSON.stringify({ employee_ids: selected.value }),
         })
         const { job_id } = await res.json()
         pollStatus(job_id)
@@ -273,25 +256,6 @@ function stopBulk() {
     bulk.running = false
 }
 
-/** Switching cycles re-reports the same employees against another package. */
-function selectPackage(id: number) {
-    if (id === props.selectedPackageId) return
-
-    router.get(
-        route('idp.list'),
-        {
-            search: state.search || undefined,
-            business_unit: state.business_unit || undefined,
-            job_level: state.job_level || undefined,
-            designation: state.designation || undefined,
-            package: id,
-            sort: props.sort.key,
-            direction: props.sort.dir,
-            per_page: state.per_page,
-        },
-        { preserveState: true, preserveScroll: true, replace: true },
-    )
-}
 </script>
 
 <template>
@@ -320,38 +284,6 @@ function selectPackage(id: number) {
         <p v-if="bulk.error" class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {{ bulk.error }}
         </p>
-
-        <!-- Which cycle the list reports on. One cycle is no choice, so the
-             picker only appears once there are two. -->
-        <div
-            v-if="canPickPackage"
-            class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-white px-4 py-3"
-        >
-            <span class="flex items-center gap-2 text-sm font-medium text-slate-600">
-                <i class="fa-solid fa-diagram-project text-xs text-primary" />
-                {{ t.idp.stage.selectCycle }}
-            </span>
-
-            <SearchableSelect
-                class="min-w-[16rem]"
-                :model-value="selectedPackageId === null ? '' : String(selectedPackageId)"
-                :options="packageOptions"
-                :placeholder="t.idp.stage.selectCycle"
-                @update:model-value="(id: string) => selectPackage(Number(id))"
-            />
-
-            <StatusPill
-                :tone="viewingActive ? 'emerald' : 'slate'"
-                :icon="viewingActive ? 'fa-solid fa-circle-play' : 'fa-solid fa-box-archive'"
-                :label="viewingActive ? t.idp.stage.activeCycle : t.idp.stage.closedCycle"
-                :dot="false"
-                size="sm"
-            />
-
-            <p v-if="!viewingActive" class="text-xs text-slate-500">
-                {{ t.idp.listClosedCycle }}
-            </p>
-        </div>
 
         <!-- Filters -->
         <div class="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -440,7 +372,7 @@ function selectPackage(id: number) {
             </template>
             <template #cell-action="{ row }">
                 <Link
-                    :href="route('idp.show', { employeeId: row.employee_id, package: selectedPackageId })"
+                    :href="route('idp.show', { employeeId: row.employee_id })"
                     class="inline-flex items-center gap-1.5 rounded-md border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white"
                 >
                     <i class="fa-solid fa-seedling" />

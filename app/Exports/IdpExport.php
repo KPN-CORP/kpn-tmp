@@ -48,6 +48,8 @@ class IdpExport implements FromCollection, WithHeadings, WithMapping
 
         $this->resultStatus = IdpApproval::result()
             ->whereIn('individual_development_plan_id', $plans->pluck('id'))
+            // Ascending, so the latest round of each result is the one kept.
+            ->orderBy('id')
             ->pluck('status', 'individual_development_plan_id')
             ->all();
 

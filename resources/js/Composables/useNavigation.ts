@@ -1,7 +1,7 @@
 import { computed } from 'vue'
 import { usePage } from '@inertiajs/vue3'
 import { useLocale } from '@/Composables/useLocale'
-import { navigation } from '@/Config/navigation'
+import { navigation, type NavFlag } from '@/Config/navigation'
 
 export interface ResolvedNavChild {
     label: string
@@ -35,11 +35,18 @@ export function useNavigation() {
         const permissions = (page.props.permissions as string[]) ?? []
         const can = (permission?: string) => !permission || permissions.includes(permission)
 
+        // Gates that are a fact about the user rather than a permission.
+        const auth = page.props.auth as { has_team?: boolean } | undefined
+        const flags: Record<NavFlag, boolean> = { hasTeam: auth?.has_team === true }
+        const has = (flag?: NavFlag) => !flag || flags[flag]
+
+        const shown = (item: { permission?: string; requires?: NavFlag }) =>
+            can(item.permission) && has(item.requires)
+
         return navigation
-            .filter((item) => can(item.permission))
+            .filter(shown)
             .map((item) => {
-                const children = item.children
-                    ?.filter((child) => can(child.permission))
+                const children = item.children?.filter(shown)
                     .map((child) => ({
                         label: t.value.nav[child.label],
                         href: child.href,

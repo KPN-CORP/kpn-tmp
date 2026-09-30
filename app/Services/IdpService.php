@@ -36,14 +36,11 @@ class IdpService
     /**
      * @param  User|null  $viewer  the signed-in user (drives can_act)
      * @param  bool  $canManage  whether the viewer may edit / submit this IDP
-     * @param  int|null  $packageId  the development-model package to show; the
-     *                               active one when omitted or unknown
      */
     public function manageData(
         string $employeeId,
         ?User $viewer = null,
         bool $canManage = false,
-        ?int $packageId = null,
     ): array {
         $allPlans = IndividualDevelopmentPlan::where('employee_id', $employeeId)
             ->orderByDesc('id')
@@ -51,40 +48,29 @@ class IdpService
 
         $plans = $allPlans->groupBy('development_model_id');
 
-        // The screen shows ONE cycle at a time. Which one is the viewer's
-        // choice; the active package is the default, since that is the only one
-        // a plan can still be written in.
+        // The screen shows the ACTIVE cycle and only the active cycle. There
+        // is no picker: a plan can only be written in the current package, so
+        // offering the closed ones put read-only history in the way of the work.
+        // With no active package there is nothing to show, which the empty
+        // state covers.
         $activePackage = DevelopmentModelPackage::active();
         $activePackageId = $activePackage?->id;
 
-        $packages = $this->stage->packageOptions($activePackageId, $this->planCounts($allPlans));
-
-        $selectedPackageId = $this->stage->selectedPackageId($packages, $packageId, $activePackageId);
-
-        $selectedPackage = $selectedPackageId === $activePackageId
-            ? $activePackage
-            : DevelopmentModelPackage::find($selectedPackageId);
-
-        // A closed cycle is read-only: its plans stay visible, but nothing about
-        // them can be added, changed, submitted or reported on any more.
-        $viewingActive = $selectedPackageId !== null && $selectedPackageId === $activePackageId;
-        $canManage = $canManage && $viewingActive;
-
         $models = DevelopmentModel::when(
-            $selectedPackageId,
-            fn ($q) => $q->where('development_model_package_id', $selectedPackageId),
+            $activePackageId,
+            fn ($q) => $q->where('development_model_package_id', $activePackageId),
             fn ($q) => $q->whereRaw('1 = 0'),
         )->orderByDesc('percentage')->orderBy('name')->get();
 
-        $activeIds = $viewingActive ? $models->pluck('id')->all() : [];
+        $activeIds = $models->pluck('id')->all();
 
-        // Only the selected cycle's plans are rendered, so a row from another
+        // Only the active cycle's plans are rendered, so a row from an earlier
         // package never leaks onto the screen.
         $allPlans = $allPlans->filter(
             fn ($p) => $models->contains('id', $p->development_model_id),
         )->values();
 
-        $workflow = $this->workflow($employeeId, $selectedPackage, $models, $allPlans, $viewer, $canManage);
+        $workflow = $this->workflow($employeeId, $activePackage, $models, $allPlans, $viewer, $canManage);
 
         $programs = DevelopmentProgram::with('competencyType:id,name_en')
             ->orderBy('name_en')
@@ -179,34 +165,7 @@ class IdpService
             'competencyMap' => $competencyMap,
             'planning' => $workflow['planning'],
             'progress' => $workflow['progress'],
-            // The cycle picker: every package, newest first, with this
-            // employee's plan count so an empty one is obvious before it is
-            // opened. The screen shows one at a time.
-            'packages' => $packages->all(),
-            'selectedPackageId' => $selectedPackageId,
-            // False for a closed cycle — the whole screen is then read-only.
-            'viewingActive' => $viewingActive,
         ];
-    }
-
-    /**
-     * How many of this employee's plans sit in each package, for the cycle
-     * picker: an empty cycle is obvious before it is opened.
-     *
-     * Soft-deleted models are not rendered, so their plans are not counted
-     * either — the number has to match what opening the package shows.
-     *
-     * @param  Collection<int, IndividualDevelopmentPlan>  $allPlans
-     * @return array<int, int>
-     */
-    private function planCounts(Collection $allPlans): array
-    {
-        $packageOfModel = DevelopmentModel::pluck('development_model_package_id', 'id');
-
-        return $allPlans
-            ->groupBy(fn ($plan) => $packageOfModel[$plan->development_model_id] ?? 0)
-            ->map->count()
-            ->all();
     }
 
     /**
@@ -254,6 +213,8 @@ class IdpService
         $resultApprovals = IdpApproval::result()
             ->where('employee_id', $employeeId)
             ->with('steps')
+            // Ascending, so keyBy keeps the latest round of each result.
+            ->orderBy('id')
             ->get()
             ->keyBy('individual_development_plan_id');
 

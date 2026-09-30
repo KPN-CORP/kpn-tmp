@@ -15,9 +15,10 @@
  * job — it is the same card on both views, so a state reads the same wherever
  * it appears.
  *
- * A waiting request opens EXPANDED. Signing something off means reading it, so
- * the detail is the default rather than something to go and find; the log opens
- * collapsed, because a log is for scanning.
+ * Every card opens COLLAPSED, on both views: the desk is scanned first, and the
+ * header already says who, what and whose turn it is. The detail is a click away
+ * — and the decision itself is made on the employee's plan, where it is read in
+ * full anyway.
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { Head, router } from '@inertiajs/vue3'
@@ -204,21 +205,12 @@ const hasAnything = computed(() => (isHistory.value ? props.historyTotal > 0 : p
 
 // --- Which cards are open ---------------------------------------------------
 
-/**
- * A waiting request opens EXPANDED — both stages. Deciding means reading, so
- * the substance is on screen from the start rather than behind a control the
- * reader has to notice. The log opens collapsed: it is read by scanning, and
- * the decision is already recorded on the card face.
- */
-function initialExpanded(): Set<number> {
-    return isHistory.value ? new Set() : new Set(props.items.data.map((i) => i.step_id))
-}
-
-const expanded = ref<Set<number>>(initialExpanded())
+/** Every card starts collapsed — the desk is scanned first, then opened. */
+const expanded = ref<Set<number>>(new Set())
 
 // The component survives a partial reload, so a new page of rows — or the other
-// desk — has to re-seed it, or rows arrive closed on a desk that opens them.
-watch(() => [props.view, props.items.data], () => (expanded.value = initialExpanded()), { deep: false })
+// desk — starts closed again rather than inheriting the last page's open cards.
+watch(() => [props.view, props.items.data], () => (expanded.value = new Set()), { deep: false })
 
 function toggle(id: number) {
     const next = new Set(expanded.value)
@@ -356,7 +348,7 @@ function toggleAll() {
             <!--
                 The list itself. One card per request, with a single control for
                 opening or closing them all — useful once a desk runs long,
-                where the default (everything open) is a lot of scrolling.
+                where opening cards one at a time is a lot of clicking.
             -->
             <div class="mb-2 flex items-center justify-end">
                 <button

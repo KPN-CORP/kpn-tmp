@@ -263,49 +263,4 @@ class IdpStageService
     {
         return DevelopmentModelPackage::active();
     }
-
-    /**
-     * Every cycle, newest first, shaped for a picker. Shared by the IDP list and
-     * the manage screen so the two offer the same cycles in the same order.
-     *
-     * `$counts` maps a package id to a plan count. Passing it means every cycle
-     * gets a number — one that is absent from the map genuinely holds zero —
-     * while passing null means the screen has no count to show at all, and the
-     * picker renders none rather than a misleading zero.
-     *
-     * @param  array<int, int>|null  $counts
-     * @return Collection<int, array<string, mixed>>
-     */
-    public function packageOptions(?int $activePackageId, ?array $counts = null): Collection
-    {
-        return DevelopmentModelPackage::orderByDesc('start_date')->orderByDesc('id')->get()
-            ->map(fn (DevelopmentModelPackage $package) => [
-                'id' => $package->id,
-                'name' => $package->name,
-                'start_date' => $package->start_date?->toDateString(),
-                'end_date' => $package->end_date?->toDateString(),
-                'is_active' => $package->id === $activePackageId,
-                'plans' => $counts === null ? null : ($counts[$package->id] ?? 0),
-            ])
-            ->values();
-    }
-
-    /**
-     * Resolve the cycle a screen should show: the one asked for when it exists,
-     * else the active one, else the newest there is.
-     *
-     * @param  Collection<int, array<string, mixed>>  $packages  from packageOptions()
-     */
-    public function selectedPackageId(Collection $packages, ?int $requested, ?int $activePackageId): ?int
-    {
-        if ($requested !== null && $packages->contains('id', $requested)) {
-            return $requested;
-        }
-
-        if ($activePackageId !== null && $packages->contains('id', $activePackageId)) {
-            return $activePackageId;
-        }
-
-        return $packages->first()['id'] ?? null;
-    }
 }

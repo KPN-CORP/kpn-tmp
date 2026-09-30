@@ -54,7 +54,6 @@ const props = defineProps<{
     reviewToolLabels: Record<string, string>
     /** Show the add button (and, when frozen, why it is gone). */
     canEdit: boolean
-    viewingActive: boolean
     plansEditable: boolean
     /** Show the per-row edit / delete column. */
     rowsEditable: boolean
@@ -227,7 +226,7 @@ const countLabel = computed(() => {
                      closed cycle says so once, in the tracker, not on every
                      model.) -->
                 <span
-                    v-if="canEdit && viewingActive && !plansEditable"
+                    v-if="canEdit && !plansEditable"
                     class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200"
                     :title="t.idp.stage.lockedInReview"
                 >

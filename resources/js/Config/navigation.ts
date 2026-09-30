@@ -13,7 +13,13 @@ import { route } from '@/Config/route'
  *
  * `badge` names a shared Inertia prop holding a count; the sidebar shows it as
  * a pill, and hides it when the count is zero.
+ *
+ * `requires` gates an item on something that is not a permission — a fact about
+ * the signed-in user that the server shares as a flag.
  */
+
+/** Shared boolean flags a nav item may be gated on. */
+export type NavFlag = 'hasTeam'
 
 /** Shared Inertia props a nav item may draw its badge count from. */
 export type NavBadge = 'pendingApprovals'
@@ -22,6 +28,8 @@ export interface NavChild {
     label: keyof LocaleMessages['nav']
     href: string
     permission?: string
+    /** Hidden unless this shared flag is true. */
+    requires?: NavFlag
     /** Also active on the pages beneath `href` (see the sidebar's isChildActive). */
     matchPrefix?: boolean
 }
@@ -32,6 +40,7 @@ export interface NavItem {
     icon: string
     href?: string
     permission?: string
+    requires?: NavFlag
     badge?: NavBadge
     children?: NavChild[]
 }
@@ -62,7 +71,9 @@ export const navigation: NavItem[] = [
         children: [
             { label: 'idpMine', href: route('idp.mine') },
             // One team member's plan (`/idp/{id}`) belongs to this item too.
-            { label: 'idpTeam', href: route('idp.list'), matchPrefix: true },
+            // Only for someone who actually has subordinates — an employee with
+            // no team would reach an empty list.
+            { label: 'idpTeam', href: route('idp.list'), matchPrefix: true, requires: 'hasTeam' },
         ],
     },
     {

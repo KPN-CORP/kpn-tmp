@@ -44,7 +44,6 @@ import type {
     ApprovalInfo,
     DevelopmentModelView,
     MasterOption,
-    PackageOption,
     Plan,
     PlanningState,
     ProgramOption,
@@ -69,13 +68,6 @@ const props = withDefaults(
         competencyMap: Record<string, ProgramOption[]>
         planning: PlanningState
         progress: StageProgress
-        /** Every development-model cycle, for the picker. */
-        packages: PackageOption[]
-        selectedPackageId: number | null
-        /** False for a closed cycle: its plans are readable, nothing more. */
-        viewingActive: boolean
-        /** Where to reload when another cycle is picked (the host page's route). */
-        reloadUrl: string
         // Show the add / edit / delete / submit controls; the profile's inline
         // tab is view-only.
         canEdit?: boolean
@@ -84,23 +76,6 @@ const props = withDefaults(
     }>(),
     { canEdit: true, stickyHeader: false },
 )
-
-/**
- * A closed cycle is read-only whatever the viewer may normally do, so the row
- * actions are not merely disabled — the whole column goes.
- */
-const rowsEditable = computed(() => props.canEdit && props.viewingActive)
-
-/** Switching cycles is a filter: same page, different package. */
-function selectPackage(id: number) {
-    if (id === props.selectedPackageId) return
-
-    router.get(props.reloadUrl, { package: id }, {
-        preserveState: true,
-        preserveScroll: true,
-        replace: true,
-    })
-}
 
 const emp = props.employee
 
@@ -505,17 +480,6 @@ const accents = [
 const filters = ref<PlanFilterState>(blankPlanFilters())
 const filtering = computed(() => hasPlanFilters(filters.value))
 
-// A cycle switch reloads with `preserveState`, so this component — and its
-// filters — survive it. Carried over to another cycle's plans they would match
-// nothing while every select read its "All …" placeholder, since a value the new
-// cycle does not offer resolves to no label; on a cycle with no plans at all they
-// would also replace the per-model "Add plan" panels with "no plan matches".
-watch(
-    () => props.selectedPackageId,
-    () => {
-        filters.value = blankPlanFilters()
-    },
-)
 const allPlans = computed(() => props.developmentModels.flatMap((m) => m.plans))
 
 const modelsView = computed(() =>
@@ -956,10 +920,6 @@ defineExpose({ openUpload })
             :ready-results="readyResults"
             :can-edit="canEdit"
             :submitting-results="submittingResults"
-            :packages="packages"
-            :selected-package-id="selectedPackageId"
-            :viewing-active="viewingActive"
-            @select-package="selectPackage"
             @submit-results="askSubmitAllResults"
             @open-chain="openPlanningChain"
         >
@@ -1025,9 +985,8 @@ defineExpose({ openUpload })
                 :review-tool-labels="reviewToolLabels"
                 :uom-labels="uomLabels"
                 :can-edit="canEdit"
-                :viewing-active="viewingActive"
                 :plans-editable="planning.plans_editable"
-                :rows-editable="rowsEditable"
+                :rows-editable="canEdit"
                 :submitting-result-id="submittingResultId"
                 @add="openCreate(model.id)"
                 @edit="openEdit"

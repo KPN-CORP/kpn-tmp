@@ -9,6 +9,7 @@ use App\Models\IdpApproval;
 use App\Models\IdpApprovalStep;
 use App\Models\IndividualDevelopmentPlan;
 use App\Models\User;
+use App\Services\Idp\ApprovalSnapshot;
 use App\Services\Idp\IdpStageService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -76,7 +77,7 @@ class IdpApprovalService
 
         $layers = $this->requireLayers($employeeId);
 
-        return DB::transaction(function () use ($employeeId, $packageId, $user, $layers) {
+        return DB::transaction(function () use ($employeeId, $packageId, $user, $layers, $plans) {
             $approval = IdpApproval::create([
                 'stage' => IdpApproval::STAGE_PLANNING,
                 'individual_development_plan_id' => null,
@@ -85,6 +86,7 @@ class IdpApprovalService
                 'status' => 'pending',
                 'current_level' => 1,
                 'layers' => $layers,
+                'snapshot' => ApprovalSnapshot::of($plans),
                 'submitted_by' => $user->id,
                 'submitted_at' => now(),
             ]);
@@ -103,8 +105,10 @@ class IdpApprovalService
      */
     public function submitResult(IndividualDevelopmentPlan $plan, User $user): IdpApproval
     {
+        // The current round — a resubmitted result opens a new one.
         $existing = IdpApproval::result()
             ->where('individual_development_plan_id', $plan->id)
+            ->latest('id')
             ->first();
 
         if ($existing && $existing->status === 'pending') {
@@ -134,24 +138,21 @@ class IdpApprovalService
         $layers = $this->requireLayers($plan->employee_id);
 
         return DB::transaction(function () use ($plan, $user, $layers) {
-            $approval = IdpApproval::updateOrCreate(
-                [
-                    'individual_development_plan_id' => $plan->id,
-                ],
-                [
-                    'stage' => IdpApproval::STAGE_RESULT,
-                    'development_model_package_id' => null,
-                    'employee_id' => $plan->employee_id,
-                    'status' => 'pending',
-                    'current_level' => 1,
-                    'layers' => $layers,
-                    'submitted_by' => $user->id,
-                    'submitted_at' => now(),
-                ],
-            );
-
-            // Start each chain fresh, so a rejected result resubmits from L1.
-            $approval->steps()->delete();
+            // A NEW row per round, never an overwrite: a rejected result that is
+            // filed again keeps the earlier round, its decisions and what it
+            // said, so the log can show both and what changed between them.
+            $approval = IdpApproval::create([
+                'stage' => IdpApproval::STAGE_RESULT,
+                'individual_development_plan_id' => $plan->id,
+                'development_model_package_id' => null,
+                'employee_id' => $plan->employee_id,
+                'status' => 'pending',
+                'current_level' => 1,
+                'layers' => $layers,
+                'snapshot' => ApprovalSnapshot::of(collect([$plan])),
+                'submitted_by' => $user->id,
+                'submitted_at' => now(),
+            ]);
 
             return $this->startChain($approval, $user, $layers);
         });

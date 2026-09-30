@@ -43,6 +43,58 @@ class ApprovalChainService
     }
 
     /**
+     * Whether anyone's effective chain names this employee as an approver —
+     * i.e. whether they have subordinates at all.
+     *
+     * The mirror image of layersFor(), and it has to honour the same defaulting
+     * rule: an explicit override wins, and only an employee WITHOUT one falls
+     * back to the corporate manager fields. So being someone's manager_l1 does
+     * not make them a subordinate if their chain has since been overridden to
+     * someone else.
+     *
+     * The two sides live on different connections (approval_superiors on mysql,
+     * employees on kpncorp), so this cannot be one joined query.
+     */
+    public function hasSubordinates(string $employeeId): bool
+    {
+        $employeeId = trim($employeeId);
+
+        if ($employeeId === '') {
+            return false;
+        }
+
+        // Named outright on someone's saved chain - no need to look further.
+        if (ApprovalSuperior::whereJsonContains('layers', $employeeId)->exists()) {
+            return true;
+        }
+
+        try {
+            $reports = Employee::where(fn ($q) => $q
+                ->where('manager_l1_id', $employeeId)
+                ->orWhere('manager_l2_id', $employeeId))
+                ->pluck('employee_id');
+        } catch (\Throwable) {
+            // kpncorp unreachable: fall back to what the app's own tables said,
+            // which the check above already answered.
+            return false;
+        }
+
+        if ($reports->isEmpty()) {
+            return false;
+        }
+
+        // A corporate report only counts while it has no override of its own;
+        // one that does is governed by that chain, which the check above showed
+        // does not name this employee.
+        $overridden = ApprovalSuperior::whereIn('employee_id', $reports)
+            ->get(['employee_id', 'layers'])
+            ->filter(fn (ApprovalSuperior $row) => $row->approverIds() !== [])
+            ->pluck('employee_id');
+
+        return $reports->diff($overridden)->isNotEmpty();
+    }
+
+    /**
      * @param  array<int, string|null>  $ids
      * @return list<string>
      */

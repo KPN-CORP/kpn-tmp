@@ -22,9 +22,8 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
-import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
-import type { PackageOption, PlanningState, StageProgress, Tone } from '@/types/idp'
+import type { PlanningState, StageProgress, Tone } from '@/types/idp'
 
 const { t } = useLocale()
 
@@ -38,11 +37,6 @@ const props = defineProps<{
     readyResults: number
     canEdit: boolean
     submittingResults: boolean
-    /** Every cycle, so one can be picked; the screen shows one at a time. */
-    packages: PackageOption[]
-    selectedPackageId: number | null
-    /** False for a closed cycle — everything on screen is then read-only. */
-    viewingActive: boolean
 }>()
 
 const emit = defineEmits<{
@@ -233,8 +227,6 @@ const hint = computed(() => {
     const { status, has_approvers, total_plans } = props.planning
 
     if (!props.planning.package) return s.value.hintNoPackage
-    // A closed cycle answers every other question: nothing about it can move.
-    if (!props.viewingActive) return s.value.hintClosedCycle
     if (total_plans === 0) return s.value.hintNoPlans
     if (!has_approvers) return s.value.hintNoApprovers
 
@@ -261,24 +253,6 @@ const hint = computed(() => {
 
 const showSubmitResults = computed(
     () => props.canEdit && props.planning.status !== 'pending' && props.readyResults > 0,
-)
-
-// One cycle is no choice at all, so the picker only appears once there are two.
-const canPickPackage = computed(() => props.packages.length > 1)
-
-const packageOptions = computed<Option[]>(() =>
-    props.packages.map((pkg) => {
-        // The count is what separates the cycle they are looking for from an
-        // empty one they have never filed anything in — when there is one.
-        const count = pkg.plans === null
-            ? ''
-            : ` · ${pkg.plans} ${pkg.plans === 1 ? t.value.idp.planSingular : t.value.idp.planPlural}`
-
-        return {
-            value: String(pkg.id),
-            label: pkg.name + count + (pkg.is_active ? ` · ${s.value.activeCycle}` : ''),
-        }
-    }),
 )
 </script>
 
@@ -313,29 +287,12 @@ const packageOptions = computed<Option[]>(() =>
 
                 <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
-                        <!-- With several cycles the name becomes the picker; with
-                             one there is nothing to choose. -->
-                        <SearchableSelect
-                            v-if="canPickPackage"
-                            class="min-w-[15rem]"
-                            :model-value="selectedPackageId === null ? '' : String(selectedPackageId)"
-                            :options="packageOptions"
-                            :placeholder="s.selectCycle"
-                            @update:model-value="(id: string) => emit('select-package', Number(id))"
-                        />
-                        <h3 v-else class="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+                        <!-- The active cycle, named. There is nothing to pick:
+                             the screens only ever show this one. -->
+                        <h3 class="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
                             <i class="fa-solid fa-diagram-project text-xs text-primary" />
                             {{ planning.package?.name ?? s.noPackage }}
                         </h3>
-
-                        <StatusPill
-                            v-if="planning.package"
-                            :tone="viewingActive ? 'emerald' : 'slate'"
-                            :icon="viewingActive ? 'fa-solid fa-circle-play' : 'fa-solid fa-box-archive'"
-                            :label="viewingActive ? s.activeCycle : s.closedCycle"
-                            :dot="false"
-                            size="sm"
-                        />
                     </div>
                 </div>
 

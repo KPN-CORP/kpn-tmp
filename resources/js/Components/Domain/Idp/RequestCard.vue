@@ -8,8 +8,8 @@
  *
  *   who and what  →  the facts in one line  →  the full detail  →  the decision
  *
- * with only the third part collapsible, open by default while the request is
- * still waiting, and toggled by clicking anywhere on the header rather than by
+ * with only the third part collapsible, closed by default, and toggled by
+ * clicking anywhere on the header rather than by
  * finding a small button beside it. The decision never collapses: it sits in
  * the footer with the reason it is — or is not — on offer.
  */
@@ -22,7 +22,7 @@ import { useLocale } from '@/Composables/useLocale'
 import { formatDate as fmt, formatDateTime as fmtDateTime } from '@/Composables/useDate'
 import { attainment, formatAmount, formatTarget } from './uom'
 import { route } from '@/Config/route'
-import type { InboxPlan, InboxRequest, Tone } from '@/types/idp'
+import type { InboxPlan, InboxPlanField, InboxRequest, Tone } from '@/types/idp'
 
 const { t } = useLocale()
 
@@ -54,6 +54,112 @@ function achieved(plan: InboxPlan): string {
 /** How far that got against the target, or null when it cannot be worked out. */
 function achievedPercent(plan: InboxPlan): number | null {
     return attainment(plan.target, plan.achievement)
+}
+
+/*
+ * The round before this one. Each request carries the plans exactly as they
+ * were submitted, so two rounds of the same plan can be told apart — and what
+ * changed between them is what a resubmission is usually judged on.
+ */
+const previous = computed(() => props.item.previous)
+const diff = computed(() => previous.value?.diff ?? null)
+const addedIds = computed(() => new Set(diff.value?.added ?? []))
+
+const changeCount = computed(() =>
+    diff.value
+        ? diff.value.added.length + diff.value.removed.length + Object.keys(diff.value.changed).length
+        : 0,
+)
+
+const previousTone = computed<Tone>(() =>
+    previous.value?.status === 'rejected' ? 'red' : previous.value?.status === 'approved' ? 'emerald' : 'amber',
+)
+
+const previousStatusLabel = computed(() => {
+    const status = previous.value?.status
+
+    if (status === 'rejected') return t.value.approvalFlow.outcomeRejected
+    if (status === 'approved') return t.value.approvalFlow.outcomeApproved
+
+    return t.value.approvalFlow.outcomeMoving
+})
+
+const rejectedBy = computed(() => {
+    const rejected = previous.value?.rejected
+
+    return rejected
+        ? t.value.approvalFlow.previousRejectedBy
+              .replace('{level}', String(rejected.level))
+              .replace('{name}', rejected.name ?? '—')
+        : ''
+})
+
+function fieldLabel(field: InboxPlanField): string {
+    const form = t.value.idp.form
+
+    return {
+        development_model: form.developmentModel,
+        competency_type: form.type,
+        competency_name: form.competencyName,
+        development_program: form.program,
+        review_tools: form.reviewTools,
+        expected_outcome: form.expectedOutcome,
+        target: form.target,
+        uom: form.uom,
+        time_frame_start: form.start,
+        time_frame_end: form.end,
+        realization_date: form.realization,
+        achievement: form.achievement,
+        result_evidence: form.resultEvidence,
+    }[field]
+}
+
+function fieldValue(field: InboxPlanField, value: unknown): string {
+    if (value === null || value === undefined || String(value).trim() === '') {
+        return '—'
+    }
+
+    if (field === 'time_frame_start' || field === 'time_frame_end' || field === 'realization_date') {
+        return fmt(String(value))
+    }
+
+    if (field === 'target' || field === 'achievement') {
+        return formatAmount(Number(value))
+    }
+
+    if (field === 'uom') {
+        return props.uomLabels[String(value)] ?? String(value)
+    }
+
+    return String(value)
+}
+
+/** What changed on one program since the previous round, ready to print. */
+function changesOf(plan: InboxPlan): Array<{ field: string; label: string; before: string; after: string }> {
+    const fields = diff.value?.changed[plan.id]
+
+    if (!fields) {
+        return []
+    }
+
+    return (Object.entries(fields) as Array<[InboxPlanField, [unknown, unknown]]>).map(([field, [before, after]]) => ({
+        field,
+        label: fieldLabel(field),
+        before: fieldValue(field, before),
+        after: fieldValue(field, after),
+    }))
+}
+
+function planMark(plan: InboxPlan): { label: string; cls: string } | null {
+    if (addedIds.value.has(plan.id)) {
+        return { label: t.value.approvalFlow.newBadge, cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' }
+    }
+
+    if (diff.value?.changed[plan.id]) {
+        return { label: t.value.approvalFlow.changedBadge, cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
+    }
+
+    return null
 }
 
 const emit = defineEmits<{
@@ -207,6 +313,11 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                             <i class="fa-solid fa-paper-plane mr-1" />
                             {{ fmtDateTime(item.submitted_at) }}
                         </span>
+                        <span v-if="previous" class="font-medium text-amber-600">
+                            <i class="fa-solid fa-rotate mr-1" />
+                            {{ t.approvalFlow.resubmitted }}<template v-if="changeCount">
+                                · {{ t.approvalFlow.changesCount.replace('{n}', String(changeCount)) }}</template>
+                        </span>
                     </p>
                 </div>
             </div>
@@ -289,6 +400,94 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
 
         <!-- Everything being approved, in full -->
         <div v-show="open" class="divide-y divide-border border-t border-border">
+            <!-- A log entry that predates snapshots can only show today's plan -->
+            <p v-if="history && !item.frozen" class="flex items-start gap-2 bg-slate-50 px-5 py-2.5 text-xs text-slate-500">
+                <i class="fa-solid fa-circle-info mt-0.5 text-slate-400" />
+                {{ t.approvalFlow.liveCopy }}
+            </p>
+
+            <!--
+                What this round is measured against: the one before it — how it
+                ended, why, and what the owner changed since.
+            -->
+            <section v-if="previous" class="bg-amber-50/40 px-5 py-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p class="text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                        <i class="fa-solid fa-code-compare mr-1" />
+                        {{ t.approvalFlow.comparePrevious }}
+                    </p>
+                    <p class="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span v-if="previous.submitted_at">
+                            {{ t.approvalFlow.previousSubmitted }}: {{ fmtDateTime(previous.submitted_at) }}
+                        </span>
+                        <StatusPill :tone="previousTone" :label="previousStatusLabel" size="sm" />
+                    </p>
+                </div>
+
+                <div
+                    v-if="previous.rejected"
+                    class="mt-3 rounded-lg bg-white px-3 py-2 text-xs leading-relaxed text-slate-600 ring-1 ring-inset ring-red-100"
+                >
+                    <p class="font-medium text-red-700">
+                        <i class="fa-solid fa-circle-xmark mr-1" />
+                        {{ rejectedBy }}
+                        <span v-if="previous.rejected.at" class="font-normal text-slate-400">
+                            · {{ fmtDateTime(previous.rejected.at) }}
+                        </span>
+                    </p>
+                    <p v-if="previous.rejected.note" class="mt-1 whitespace-pre-line">
+                        <i class="fa-solid fa-quote-left mr-1 text-[10px] text-slate-300" />
+                        {{ previous.rejected.note }}
+                    </p>
+                </div>
+
+                <p v-if="!diff" class="mt-3 text-xs text-slate-500">{{ t.approvalFlow.compareUnavailable }}</p>
+                <p v-else-if="!changeCount" class="mt-3 text-xs text-slate-500">
+                    <i class="fa-solid fa-equals mr-1 text-slate-400" />
+                    {{ t.approvalFlow.noChanges }}
+                </p>
+
+                <template v-else>
+                    <div class="mt-3 flex flex-wrap gap-2 text-[11px] font-semibold">
+                        <span v-if="diff.added.length" class="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                            + {{ diff.added.length }} {{ t.approvalFlow.added }}
+                        </span>
+                        <span v-if="diff.removed.length" class="rounded-full bg-red-50 px-2 py-0.5 text-red-700 ring-1 ring-inset ring-red-200">
+                            − {{ diff.removed.length }} {{ t.approvalFlow.removed }}
+                        </span>
+                        <span
+                            v-if="Object.keys(diff.changed).length"
+                            class="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-inset ring-amber-200"
+                        >
+                            ~ {{ Object.keys(diff.changed).length }} {{ t.approvalFlow.changed }}
+                        </span>
+                    </div>
+
+                    <!-- A result is one program, so its changes are read here -->
+                    <ul v-if="single && changesOf(single).length" class="mt-3 space-y-1.5 text-xs">
+                        <li v-for="change in changesOf(single)" :key="change.field" class="flex flex-wrap items-baseline gap-x-1.5 break-words">
+                            <span class="font-medium text-slate-500">{{ change.label }}:</span>
+                            <span class="text-red-600/80 line-through">{{ change.before }}</span>
+                            <i class="fa-solid fa-arrow-right-long text-[10px] text-slate-300" />
+                            <span class="font-medium text-emerald-700">{{ change.after }}</span>
+                        </li>
+                    </ul>
+
+                    <!-- Programs the earlier round had and this one does not -->
+                    <div v-if="diff.removed.length" class="mt-3">
+                        <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                            {{ t.approvalFlow.removedPrograms }}
+                        </p>
+                        <ul class="space-y-1 text-xs text-slate-500">
+                            <li v-for="plan in diff.removed" :key="plan.id" class="line-through decoration-red-300">
+                                <span class="font-medium text-slate-600">{{ plan.competency_name }}</span>
+                                · {{ plan.development_program }}
+                                <span v-if="plan.development_model" class="text-slate-400">({{ plan.development_model }})</span>
+                            </li>
+                        </ul>
+                    </div>
+                </template>
+            </section>
             <!--
                 A RESULT is read as a pair: what was planned against what was
                 delivered. Anything the strip above already shows is a headline
@@ -393,7 +592,14 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                     >
                         <!-- What it develops -->
                         <div class="min-w-0">
-                            <p class="text-sm font-medium text-slate-800">{{ plan.competency_name }}</p>
+                            <p class="text-sm font-medium text-slate-800">
+                                {{ plan.competency_name }}
+                                <span
+                                    v-if="planMark(plan)"
+                                    class="ml-1 rounded px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase ring-1 ring-inset"
+                                    :class="planMark(plan)!.cls"
+                                >{{ planMark(plan)!.label }}</span>
+                            </p>
                             <div class="mt-1 flex flex-wrap items-center gap-1.5">
                                 <span class="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700">
                                     {{ plan.competency_type }}
@@ -423,6 +629,19 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                                 {{ t.idp.targetLabel }}:
                                 <span class="tabular-nums">{{ target(plan) }}</span>
                             </span>
+
+                            <!-- Before → after, for each field changed since the previous round -->
+                            <ul
+                                v-if="changesOf(plan).length"
+                                class="mt-2 space-y-1 rounded-md bg-amber-50/60 px-2.5 py-2 text-xs ring-1 ring-inset ring-amber-100"
+                            >
+                                <li v-for="change in changesOf(plan)" :key="change.field" class="flex flex-wrap items-baseline gap-x-1.5 break-words">
+                                    <span class="font-medium text-slate-500">{{ change.label }}:</span>
+                                    <span class="text-red-600/80 line-through">{{ change.before }}</span>
+                                    <i class="fa-solid fa-arrow-right-long text-[10px] text-slate-300" />
+                                    <span class="font-medium text-emerald-700">{{ change.after }}</span>
+                                </li>
+                            </ul>
                         </div>
 
                         <!-- When it runs -->
