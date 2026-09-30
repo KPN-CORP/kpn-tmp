@@ -34,7 +34,7 @@ import {
     matchesPlanFilters,
     type PlanFilterState,
 } from '@/Components/Domain/Idp/planFilters'
-import { timelineKey, type TimelineKey } from '@/Components/Domain/Idp/planStatus'
+import { daysLate, timelineKey, type TimelineKey } from '@/Components/Domain/Idp/planStatus'
 import { uomLabelMap, uomSelectOptions } from '@/Components/Domain/Idp/uom'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
@@ -481,6 +481,9 @@ const errorList = computed(() =>
 
 const statusStyle: Record<TimelineKey, { badge: string; dot: string }> = {
     completed: { badge: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20', dot: 'bg-emerald-500' },
+    // Done, but past the date — amber rather than the red of something still
+    // outstanding, and never the green of one delivered on time.
+    completedLate: { badge: 'bg-orange-50 text-orange-700 ring-orange-600/20', dot: 'bg-orange-500' },
     inProgress: { badge: 'bg-amber-50 text-amber-700 ring-amber-600/20', dot: 'bg-amber-500' },
     upcoming: { badge: 'bg-sky-50 text-sky-700 ring-sky-600/20', dot: 'bg-sky-500' },
     overdue: { badge: 'bg-red-50 text-red-700 ring-red-600/20', dot: 'bg-red-500' },
@@ -523,7 +526,23 @@ const modelsView = computed(() =>
             .filter((plan) => matchesPlanFilters(plan, filters.value))
             .map((plan) => {
                 const key = timelineKey(plan)
-                return { plan, timeline: { key, label: t.value.idp.status[key], ...statusStyle[key] } }
+                const late = key === 'overdue' || key === 'completedLate' ? daysLate(plan) : null
+
+                return {
+                    plan,
+                    timeline: {
+                        key,
+                        label: t.value.idp.status[key],
+                        // "Overdue" alone does not say whether it slipped a day
+                        // or a quarter, which is the part worth acting on.
+                        late: late === null
+                            ? ''
+                            : late === 1
+                                ? t.value.idp.status.byOneDay
+                                : t.value.idp.status.byDays.replace('{n}', String(late)),
+                        ...statusStyle[key],
+                    },
+                }
             }),
     })),
 )

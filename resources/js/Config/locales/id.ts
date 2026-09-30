@@ -304,7 +304,10 @@ const id: LocaleMessages = {
             inProgress: 'Berjalan',
             upcoming: 'Akan datang',
             overdue: 'Terlambat',
+            completedLate: 'Selesai terlambat',
             planned: 'Direncanakan',
+            byOneDay: '1 hari',
+            byDays: '{n} hari',
         },
         filters: {
             title: 'Filter',

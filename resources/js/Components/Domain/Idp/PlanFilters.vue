@@ -148,7 +148,7 @@ const reviewToolOptions = computed(() =>
 // the overdue ones" is a fair question even when the answer is none.
 const timelineOptions = computed<Option[]>(() => [
     { value: '', label: f.value.allTimelineStatuses },
-    ...(['completed', 'inProgress', 'upcoming', 'overdue', 'planned'] as const).map((key) => ({
+    ...(['completed', 'completedLate', 'inProgress', 'upcoming', 'overdue', 'planned'] as const).map((key) => ({
         value: key,
         label: t.value.idp.status[key],
     })),

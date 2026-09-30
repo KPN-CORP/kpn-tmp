@@ -26,7 +26,7 @@ const { t } = useLocale()
 /** A plan plus the timeline chip the panel resolved for it. */
 export interface PlanTableRow {
     plan: Plan
-    timeline: { key: string; label: string; badge: string; dot: string }
+    timeline: { key: string; label: string; late: string; badge: string; dot: string }
 }
 
 type SortKey = 'competency' | 'timeframe' | 'planning' | 'result'

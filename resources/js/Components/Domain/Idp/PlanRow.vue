@@ -27,7 +27,7 @@ const props = defineProps<{
     reviewToolLabel: string
     /** value => unit label, already in the active language. */
     uomLabels: Record<string, string>
-    timeline: { key: string; label: string; badge: string; dot: string }
+    timeline: { key: string; label: string; late: string; badge: string; dot: string }
     canEdit: boolean
     submitting: boolean
 }>()
@@ -155,6 +155,7 @@ const achievedPercent = computed(() => attainment(props.plan.target, props.plan.
             >
                 <span class="h-1.5 w-1.5 rounded-full" :class="timeline.dot" />
                 {{ timeline.label }}
+                <span v-if="timeline.late" class="font-normal opacity-75">{{ timeline.late }}</span>
             </span>
         </td>
 

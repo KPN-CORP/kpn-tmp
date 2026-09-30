@@ -302,7 +302,11 @@ export default {
             inProgress: 'In progress',
             upcoming: 'Upcoming',
             overdue: 'Overdue',
+            completedLate: 'Completed late',
             planned: 'Planned',
+            // Appended to the chip, so a missed deadline says by how much.
+            byOneDay: 'by 1 day',
+            byDays: 'by {n} days',
         },
         filters: {
             title: 'Filters',

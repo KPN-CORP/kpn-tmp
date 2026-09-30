@@ -9,8 +9,21 @@
 import { calendarDay, today } from '@/Composables/useDate'
 import type { Plan } from '@/types/idp'
 
-/** Where the program sits against its own dates (not its approval state). */
-export type TimelineKey = 'completed' | 'inProgress' | 'upcoming' | 'overdue' | 'planned'
+/**
+ * Where the program sits against its own dates (not its approval state).
+ *
+ * `overdue` and `completedLate` both mean the deadline was missed; they differ
+ * on whether anything has been filed. Keeping them apart matters because they
+ * call for different things — one is still outstanding, the other is only a
+ * record of how it went.
+ */
+export type TimelineKey =
+    | 'completed'
+    | 'completedLate'
+    | 'inProgress'
+    | 'upcoming'
+    | 'overdue'
+    | 'planned'
 
 /** Whether this row is covered by the set's planning approval. */
 export type PlanningKey = 'approved' | 'inReview' | 'notApproved'
@@ -28,17 +41,46 @@ export type ResultKey = 'locked' | 'notFiled' | 'ready' | 'pending' | 'approved'
  * today reads "Upcoming", west of it one ending today reads "Overdue".
  */
 export function timelineKey(plan: Plan): TimelineKey {
-    if (plan.realization_date) return 'completed'
-
     const now = today()
     const start = calendarDay(plan.time_frame_start)
     const end = calendarDay(plan.time_frame_end)
+    const realized = calendarDay(plan.realization_date)
 
+    // Filed, so it is no longer outstanding — but a result filed after the
+    // deadline is not the same as one filed on time, and reading both as plain
+    // "Completed" is what hid every missed deadline in this table.
+    if (realized) return end && realized > end ? 'completedLate' : 'completed'
+
+    // Nothing filed and the window has closed. A plan with no end date has no
+    // deadline to miss, so it can never land here.
     if (end && now > end) return 'overdue'
+
     if (start && now < start) return 'upcoming'
     if (start) return 'inProgress'
 
     return 'planned'
+}
+
+/**
+ * How many days past its end date a program is — counted to today while it is
+ * still outstanding, and to the realization date once something was filed.
+ *
+ * Null when the deadline was met, or when there is no deadline to miss. Days,
+ * not milliseconds: both sides are calendar dates, so the subtraction is done
+ * at UTC midnight where every day is exactly 24h and DST cannot shift it.
+ */
+export function daysLate(plan: Plan): number | null {
+    const end = calendarDay(plan.time_frame_end)
+
+    if (!end) return null
+
+    const against = calendarDay(plan.realization_date) ?? today()
+
+    if (against <= end) return null
+
+    const ms = Date.parse(`${against}T00:00:00Z`) - Date.parse(`${end}T00:00:00Z`)
+
+    return Math.round(ms / 86_400_000)
 }
 
 export function planningKey(plan: Plan): PlanningKey {
