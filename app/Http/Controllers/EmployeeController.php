@@ -18,6 +18,7 @@ use App\Models\ResultSummary;
 use App\Models\TrainingCertification;
 use App\Models\WorkExperience;
 use App\Services\EmployeeScopeService;
+use App\Services\FacecardVisibility;
 use App\Services\IdpService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Database\Eloquent\Builder;
@@ -149,7 +150,23 @@ class EmployeeController extends Controller
             ->where('employee_id', $employeeId)
             ->firstOrFail();
 
-        $resultSummary = ResultSummary::where('employee_id', $employeeId)->first();
+        // Restricted fields (9-box, succession, proposed grade, priority) are
+        // stripped here, per the viewer's view_* permissions.
+        $visible = FacecardVisibility::for($user);
+        $resultSummary = FacecardVisibility::resultSummary(
+            ResultSummary::where('employee_id', $employeeId)->first(),
+            $visible,
+        );
+
+        $appraisals = FacecardVisibility::appraisals(collect($this->safeGet(fn () => PerformanceAppraisal::where('employee_id', $employeeId)
+            ->orderByDesc('appraisal_year')->get()
+            ->map(fn ($a) => [
+                'id' => $a->id,
+                'appraisal_year' => (int) $a->appraisal_year,
+                'grade' => $a->grade,
+                'potential' => $a->potential,
+                'talent_box' => $a->talent_box,
+            ]))), $visible)->values();
 
         // The profile's IDP tab is read-only, but it reads the same cycle
         // picker — so a past package's plans can be looked at from here too.
@@ -184,18 +201,13 @@ class EmployeeController extends Controller
                     'name' => $t->certification_name,
                     'organizer' => $t->organizer,
                 ])),
-            'appraisals' => $this->safeGet(fn () => PerformanceAppraisal::where('employee_id', $employeeId)
-                ->orderByDesc('appraisal_year')->get()
-                ->map(fn ($a) => [
-                    'id' => $a->id,
-                    'appraisal_year' => (int) $a->appraisal_year,
-                    'grade' => $a->grade,
-                    'potential' => $a->potential,
-                    'talent_box' => $a->talent_box,
-                ])),
-            'competencyAssessments' => CompetencyAssessment::where('employee_id', $employeeId)
-                ->orderByDesc('period')->get(),
+            'appraisals' => $appraisals,
+            'competencyAssessments' => FacecardVisibility::assessments(
+                CompetencyAssessment::where('employee_id', $employeeId)->orderByDesc('period')->get(),
+                $visible,
+            ),
             'resultSummary' => $resultSummary,
+            'visibility' => $visible,
             'successorLabel' => $this->successorLabel($resultSummary),
             'movements' => $this->movements($employeeId),
             'movementAttributes' => self::MOVEMENT_ATTRIBUTES,
@@ -327,13 +339,21 @@ class EmployeeController extends Controller
         $employee = $this->scope->accessibleQuery($user, ...self::FACECARD_DOWNLOAD)
             ->where('employee_id', $employeeId)->firstOrFail();
 
+        $visible = FacecardVisibility::for($user);
+
         $pdf = Pdf::loadView('pdf.facecard', [
             'employee' => $employee,
-            'competencyAssessments' => CompetencyAssessment::where('employee_id', $employeeId)
-                ->orderByDesc('period')->get(),
-            'appraisals' => $this->safeGet(fn () => PerformanceAppraisal::where('employee_id', $employeeId)
-                ->orderByDesc('appraisal_year')->get()),
-            'resultSummary' => ResultSummary::where('employee_id', $employeeId)->first(),
+            'competencyAssessments' => FacecardVisibility::assessments(
+                CompetencyAssessment::where('employee_id', $employeeId)->orderByDesc('period')->get(),
+                $visible,
+            ),
+            'appraisals' => FacecardVisibility::appraisals($this->safeGet(fn () => PerformanceAppraisal::where('employee_id', $employeeId)
+                ->orderByDesc('appraisal_year')->get()), $visible),
+            'resultSummary' => FacecardVisibility::resultSummary(
+                ResultSummary::where('employee_id', $employeeId)->first(),
+                $visible,
+            ),
+            'visible' => $visible,
         ]);
 
         return $pdf->download('facecard_'.Str::slug($employee->fullname).'.pdf');
@@ -367,7 +387,8 @@ class EmployeeController extends Controller
             'progress' => 0,
         ]);
 
-        GenerateFacecardZip::dispatch($employeeIds, $status->id);
+        // The job has no user, so it is handed the requester's field visibility.
+        GenerateFacecardZip::dispatch($employeeIds, $status->id, FacecardVisibility::for($user));
 
         return response()->json(['job_id' => $status->id]);
     }

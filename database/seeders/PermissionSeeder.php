@@ -18,15 +18,25 @@ class PermissionSeeder extends Seeder
         $permissions = [
             // Import Center
             ['name' => 'view_import_center', 'label' => 'View Import Center Menu', 'group' => 'Import Center', 'section' => 'View'],
-            ['name' => 'import_competency_assessment', 'label' => 'Import Competency Assessment', 'group' => 'Import Center', 'section' => 'Import'],
-            ['name' => 'import_data_master', 'label' => 'Import Data Master (Matrix Grade)', 'group' => 'Import Center', 'section' => 'Import'],
-            ['name' => 'import_idp', 'label' => 'Import Individual Development Program', 'group' => 'Import Center', 'section' => 'Import'],
-            ['name' => 'import_talent_box', 'label' => 'Import Talent Box & Potential', 'group' => 'Import Center', 'section' => 'Import'],
-            ['name' => 'import_proposed_grade', 'label' => 'Import Proposed Grade', 'group' => 'Import Center', 'section' => 'Import'],
-            ['name' => 'import_succession', 'label' => 'Import Succession', 'group' => 'Import Center', 'section' => 'Import'],
+            // One permission per data type, read by ImportController::dataTypesFor().
+            // Talent data — only Competency Assessment has an importer so far;
+            // the others are kept for when theirs land.
+            ['name' => 'import_competency_assessment', 'label' => 'Import Competency Assessment', 'group' => 'Import Center', 'section' => 'Import Talent Data'],
+            ['name' => 'import_data_master', 'label' => 'Import Data Master (Matrix Grade)', 'group' => 'Import Center', 'section' => 'Import Talent Data'],
+            ['name' => 'import_idp', 'label' => 'Import Individual Development Program', 'group' => 'Import Center', 'section' => 'Import Talent Data'],
+            ['name' => 'import_talent_box', 'label' => 'Import Talent Box & Potential', 'group' => 'Import Center', 'section' => 'Import Talent Data'],
+            ['name' => 'import_proposed_grade', 'label' => 'Import Proposed Grade', 'group' => 'Import Center', 'section' => 'Import Talent Data'],
+            ['name' => 'import_succession', 'label' => 'Import Succession', 'group' => 'Import Center', 'section' => 'Import Talent Data'],
+            // Master data.
+            ['name' => 'import_competency_type', 'label' => 'Import Master Competency Type', 'group' => 'Import Center', 'section' => 'Import Master Data'],
+            ['name' => 'import_competency', 'label' => 'Import Master Competency', 'group' => 'Import Center', 'section' => 'Import Master Data'],
+            ['name' => 'import_training', 'label' => 'Import Master Training', 'group' => 'Import Center', 'section' => 'Import Master Data'],
+            ['name' => 'import_development_program', 'label' => 'Import Master Development', 'group' => 'Import Center', 'section' => 'Import Master Data'],
+            ['name' => 'import_review_tools', 'label' => 'Import Review Tools', 'group' => 'Import Center', 'section' => 'Import Master Data'],
             ['name' => 'delete_all_import_logs', 'label' => 'Delete All Import Logs', 'group' => 'Import Center', 'section' => 'Delete'],
 
-            // Facecard
+            // Facecard — each view_* reveals one profile field (on screen and in
+            // the PDF); the matching input_* implies it. See FacecardVisibility.
             ['name' => 'input_successor_position', 'label' => 'Input Successor to Position', 'group' => 'Facecard', 'section' => 'Input'],
             ['name' => 'input_competency_assessment', 'label' => 'Input Competency Assessment', 'group' => 'Facecard', 'section' => 'Input'],
             ['name' => 'input_year_on_year', 'label' => 'Input Year-on-Year 9-Box Mapping', 'group' => 'Facecard', 'section' => 'Input'],
@@ -44,7 +54,17 @@ class PermissionSeeder extends Seeder
 
             // Admin
             ['name' => 'view_admin_setting', 'label' => 'View Admin Setting', 'group' => 'Admin', 'section' => 'View'],
-            ['name' => 'view_idp_master', 'label' => 'View IDP Master', 'group' => 'Admin', 'section' => 'View'],
+
+            // Master Data + IDP Settings — one permission per screen, covering the
+            // screen AND its writes (see MasterDataType::permission() for the
+            // shared master endpoints).
+            ['name' => 'manage_competency_type', 'label' => 'Manage Master Competency Type', 'group' => 'Master Data', 'section' => 'Manage'],
+            ['name' => 'manage_competency', 'label' => 'Manage Master Competency', 'group' => 'Master Data', 'section' => 'Manage'],
+            ['name' => 'manage_master_implementation', 'label' => 'Manage Master Implementation', 'group' => 'Master Data', 'section' => 'Manage'],
+            ['name' => 'manage_development_model', 'label' => 'Manage Development Model', 'group' => 'IDP Settings', 'section' => 'Manage'],
+            ['name' => 'manage_master_training', 'label' => 'Manage Master Training', 'group' => 'IDP Settings', 'section' => 'Manage'],
+            ['name' => 'manage_master_development', 'label' => 'Manage Master Development', 'group' => 'IDP Settings', 'section' => 'Manage'],
+            ['name' => 'manage_review_tools', 'label' => 'Manage Review Tools', 'group' => 'IDP Settings', 'section' => 'Manage'],
             ['name' => 'view_approval_setting', 'label' => 'View & Manage Approval Setting', 'group' => 'Admin', 'section' => 'View'],
 
             // User Guide

@@ -38,30 +38,23 @@ class ImportController extends Controller
     use ReadsSort;
 
     /**
-     * Importable data sets. Each maps to a spreadsheet importer (added when
-     * maatwebsite/excel lands — see processImport).
+     * Importable data sets — label + the permission that unlocks each. The menu
+     * itself needs `view_import_center`; a data type is then offered (and
+     * accepted) only to a user who also holds its own `import_*` permission.
+     *
+     * Only data types with a working importer (see processImport) are listed.
+     * Data Master, IDP, Talent Box, Proposed Grade and Succession join here —
+     * their permissions already exist — once their importers are written.
+     *
+     * @var array<string, array{label: string, permission: string}>
      */
     public const DATA_TYPES = [
-        'competency_assessment' => 'Competency Assessment',
-        'data_master' => 'Data Master (Matrix Grade)',
-        'idp' => 'Individual Development Program',
-        'talent_box' => 'Talent Box & Potential',
-        'proposed_grade' => 'Proposed Grade',
-        'succession' => 'Succession',
-        'competency_type' => 'Master Competency Type',
-        'competency' => 'Master Competency',
-        'training' => 'Master Training',
-        'development_program' => 'Master Development',
-        'review_tools' => 'Review Tools',
-    ];
-
-    /**
-     * Data sets that write IDP master data. The Import Center's own permission
-     * only says a user may upload talent data, so these are offered — and
-     * accepted — only to someone who may manage the masters anyway.
-     */
-    private const MASTER_DATA_TYPES = [
-        'competency_type', 'competency', 'training', 'development_program', 'review_tools',
+        'competency_assessment' => ['label' => 'Competency Assessment', 'permission' => 'import_competency_assessment'],
+        'competency_type' => ['label' => 'Master Competency Type', 'permission' => 'import_competency_type'],
+        'competency' => ['label' => 'Master Competency', 'permission' => 'import_competency'],
+        'training' => ['label' => 'Master Training', 'permission' => 'import_training'],
+        'development_program' => ['label' => 'Master Development', 'permission' => 'import_development_program'],
+        'review_tools' => ['label' => 'Review Tools', 'permission' => 'import_review_tools'],
     ];
 
     /**
@@ -102,8 +95,8 @@ class ImportController extends Controller
     /**
      * Accept an upload, store it, parse it, and record the outcome.
      *
-     * The data sets with an importer are parsed now; the rest store the file
-     * and log as Pending until their per-type importers are added.
+     * Every offered data type has an importer; the Pending branch below is only
+     * a fallback for one added to DATA_TYPES before its importer is wired here.
      */
     public function processImport(
         Request $request,
@@ -216,11 +209,10 @@ class ImportController extends Controller
      */
     private function dataTypesFor(?User $user): array
     {
-        if ($user?->can('view_idp_master')) {
-            return self::DATA_TYPES;
-        }
-
-        return array_diff_key(self::DATA_TYPES, array_flip(self::MASTER_DATA_TYPES));
+        return collect(self::DATA_TYPES)
+            ->filter(fn (array $type) => (bool) $user?->can($type['permission']))
+            ->map(fn (array $type) => $type['label'])
+            ->all();
     }
 
     private function deleteFiles(ImportLog $log): void

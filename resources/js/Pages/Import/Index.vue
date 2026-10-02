@@ -109,8 +109,16 @@ const statusTone: Record<string, string> = {
     <AppLayout>
         <PageHeader :title="t.import.title" :subtitle="t.import.subtitle" />
 
-        <!-- Upload -->
+        <!-- Upload — only the data types this user holds an import_* permission for. -->
+        <div
+            v-if="!dataTypes.length"
+            class="mb-8 flex items-start gap-3 rounded-xl border border-dashed border-border bg-slate-50 p-5 text-sm text-slate-600"
+        >
+            <i class="fa-solid fa-lock mt-0.5 text-slate-400" />
+            <span>{{ t.import.noDataTypes }}</span>
+        </div>
         <form
+            v-else
             class="mb-8 grid grid-cols-1 gap-4 rounded-xl border border-border bg-white p-5 shadow-sm sm:grid-cols-[1fr_1fr_auto] sm:items-end"
             @submit.prevent="submit"
         >

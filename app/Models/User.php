@@ -68,4 +68,25 @@ class User extends Authenticatable
             ->orWhere('manager_l2_id', $this->employee_id)
             ->exists();
     }
+
+    /**
+     * Spatie's syncPermissions() clears the pivot with a bare detach(), deleting
+     * EVERY model_has_permissions row for this user id. That table is shared with
+     * the other HCIS apps (same kpncorp user ids), so only this domain's direct
+     * permissions are detached.
+     *
+     * Roles have no such boundary — they are global across apps — so
+     * syncRoles() would strip the user's roles in every app. Nothing here calls
+     * it; assign/remove single roles instead.
+     */
+    public function syncPermissions(...$permissions)
+    {
+        if ($this->exists) {
+            $this->collectPermissions($permissions);
+            $this->permissions()->detach($this->permissions()->get());
+            $this->setRelation('permissions', collect());
+        }
+
+        return $this->givePermissionTo($permissions);
+    }
 }

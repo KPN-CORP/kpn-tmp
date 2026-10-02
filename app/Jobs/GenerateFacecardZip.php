@@ -7,6 +7,7 @@ use App\Models\Employee;
 use App\Models\JobStatus;
 use App\Models\PerformanceAppraisal;
 use App\Models\ResultSummary;
+use App\Services\FacecardVisibility;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -28,10 +29,12 @@ class GenerateFacecardZip implements ShouldQueue
 
     /**
      * @param  array<int, string>  $employeeIds
+     * @param  array<string, bool>  $visible  the requester's {@see FacecardVisibility}
      */
     public function __construct(
         public array $employeeIds,
         public string $jobStatusId,
+        public array $visible = [],
     ) {}
 
     public function handle(): void
@@ -54,6 +57,10 @@ class GenerateFacecardZip implements ShouldQueue
             return;
         }
 
+        // A job queued before this field existed carries none: show nothing
+        // restricted rather than everything.
+        $visible = array_merge(array_fill_keys(array_keys(FacecardVisibility::FIELDS), false), $this->visible);
+
         $total = max(count($this->employeeIds), 1);
         $done = 0;
 
@@ -63,11 +70,17 @@ class GenerateFacecardZip implements ShouldQueue
             if ($employee) {
                 $pdf = Pdf::loadView('pdf.facecard', [
                     'employee' => $employee,
-                    'competencyAssessments' => CompetencyAssessment::where('employee_id', $employeeId)
-                        ->orderByDesc('period')->get(),
-                    'appraisals' => $this->safeGet(fn () => PerformanceAppraisal::where('employee_id', $employeeId)
-                        ->orderByDesc('appraisal_year')->get()),
-                    'resultSummary' => ResultSummary::where('employee_id', $employeeId)->first(),
+                    'competencyAssessments' => FacecardVisibility::assessments(
+                        CompetencyAssessment::where('employee_id', $employeeId)->orderByDesc('period')->get(),
+                        $visible,
+                    ),
+                    'appraisals' => FacecardVisibility::appraisals($this->safeGet(fn () => PerformanceAppraisal::where('employee_id', $employeeId)
+                        ->orderByDesc('appraisal_year')->get()), $visible),
+                    'resultSummary' => FacecardVisibility::resultSummary(
+                        ResultSummary::where('employee_id', $employeeId)->first(),
+                        $visible,
+                    ),
+                    'visible' => $visible,
                 ]);
                 $zip->addFromString("facecard_{$employeeId}.pdf", $pdf->output());
             }

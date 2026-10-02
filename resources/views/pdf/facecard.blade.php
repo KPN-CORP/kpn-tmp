@@ -46,20 +46,21 @@
         <p class="muted">No competency assessment recorded.</p>
     @else
         <table class="grid">
-            <thead><tr><th>Period</th><th>Matrix Grade</th><th>Proposed Grade</th><th>Priority</th></tr></thead>
+            <thead><tr><th>Period</th><th>Matrix Grade</th>@if($visible['proposed_grade'] ?? false)<th>Proposed Grade</th>@endif @if($visible['priority_dev'] ?? false)<th>Priority</th>@endif</tr></thead>
             <tbody>
             @foreach($competencyAssessments as $a)
                 <tr>
                     <td>{{ $a->period }}</td>
                     <td>{{ $a->matrix_grade ?? '—' }}</td>
-                    <td>{{ $a->proposed_grade ?? '—' }}</td>
-                    <td>{{ $a->priority_for_development ?? '—' }}</td>
+                    @if($visible['proposed_grade'] ?? false)<td>{{ $a->proposed_grade ?? '—' }}</td>@endif
+                    @if($visible['priority_dev'] ?? false)<td>{{ $a->priority_for_development ?? '—' }}</td>@endif
                 </tr>
             @endforeach
             </tbody>
         </table>
     @endif
 
+    @if($visible['nine_box'] ?? false)
     <h2>Talent Box (Year-on-Year)</h2>
     @if($appraisals->isEmpty())
         <p class="muted">No 9-box mapping recorded.</p>
@@ -78,13 +79,16 @@
             </tbody>
         </table>
     @endif
+    @endif
 
+    @if(($visible['critical_position'] ?? false) || ($visible['successor_type'] ?? false) || ($visible['successor_position'] ?? false))
     <h2>Succession Summary</h2>
     <table class="details">
-        <tr><td class="label">Critical Position</td><td>{{ $resultSummary->critical_position ?? '—' }}</td></tr>
-        <tr><td class="label">Successor Type</td><td>{{ $resultSummary->successor_type ?? '—' }}</td></tr>
-        <tr><td class="label">Successor to Position</td><td>{{ $resultSummary->successor_to_position ?? '—' }}</td></tr>
+        @if($visible['critical_position'] ?? false)<tr><td class="label">Critical Position</td><td>{{ $resultSummary->critical_position ?? '—' }}</td></tr>@endif
+        @if($visible['successor_type'] ?? false)<tr><td class="label">Successor Type</td><td>{{ $resultSummary->successor_type ?? '—' }}</td></tr>@endif
+        @if($visible['successor_position'] ?? false)<tr><td class="label">Successor to Position</td><td>{{ $resultSummary->successor_to_position ?? '—' }}</td></tr>@endif
     </table>
+    @endif
 
     <div class="footer">Generated {{ now()->format('d M Y H:i') }}</div>
 </body>

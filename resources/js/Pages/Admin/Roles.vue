@@ -5,7 +5,7 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
-import DataTable, { type Column } from '@/Components/Domain/DataTable.vue'
+import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
@@ -42,8 +42,14 @@ const props = defineProps<{
 
 // --- Page tabs: basic permissions vs data access ---
 const pageTab = ref<'permissions' | 'data'>('permissions')
-const basicRoles = computed(() => props.roles.filter((r) => !r.is_data_access))
-const dataRoles = computed(() => props.roles.filter((r) => r.is_data_access))
+// Search by role name, applied to whichever tab is open.
+const roleSearch = ref('')
+const searchedRoles = computed(() => {
+    const term = roleSearch.value.trim().toLowerCase()
+    return term ? props.roles.filter((r) => r.name.toLowerCase().includes(term)) : props.roles
+})
+const basicRoles = computed(() => searchedRoles.value.filter((r) => !r.is_data_access))
+const dataRoles = computed(() => searchedRoles.value.filter((r) => r.is_data_access))
 
 const toOptions = (values: string[]): Option[] => values.map((v) => ({ value: v, label: v }))
 const businessUnitOptions = computed(() => toOptions(props.scopeOptions.businessUnits))
@@ -62,18 +68,18 @@ function clearScope() {
 }
 
 const basicColumns: Column[] = [
-    { key: 'name', label: t.value.roles.name, tdClass: 'font-medium text-slate-700' },
+    { key: 'name', label: t.value.roles.name, sortable: true, tdClass: 'font-medium text-slate-700' },
     { key: 'scope', label: t.value.roles.scope, sortable: false },
-    { key: 'permissions', label: t.value.roles.permissions, sortable: false, thClass: 'text-center', tdClass: 'text-center' },
-    { key: 'members', label: t.value.roles.members, sortable: false, thClass: 'text-center', tdClass: 'text-center' },
-    { key: 'action', label: '', thClass: 'text-right', tdClass: 'text-right' },
+    { key: 'permissions', label: t.value.roles.permissions, sortable: false, align: 'center' },
+    { key: 'members', label: t.value.roles.members, sortable: false, align: 'center' },
+    { key: 'action', label: '', align: 'right' },
 ]
 
 const dataColumns: Column[] = [
-    { key: 'name', label: t.value.roles.name, tdClass: 'font-medium text-slate-700' },
+    { key: 'name', label: t.value.roles.name, sortable: true, tdClass: 'font-medium text-slate-700' },
     { key: 'scope', label: t.value.roles.appliesTo, sortable: false },
-    { key: 'permissions', label: t.value.roles.dataAccessCol, sortable: false, thClass: 'text-center', tdClass: 'text-center' },
-    { key: 'action', label: '', thClass: 'text-right', tdClass: 'text-right' },
+    { key: 'permissions', label: t.value.roles.dataAccessCol, sortable: false, align: 'center' },
+    { key: 'action', label: '', align: 'right' },
 ]
 
 // --- Create / edit role ---
@@ -268,93 +274,115 @@ function scopeChips(role: Role): string[] {
             </button>
         </div>
 
-        <!-- ===== Permissions tab ===== -->
-        <DataTable v-if="pageTab === 'permissions'" :columns="basicColumns" :rows="basicRoles" row-key="id" min-width="860px">
-            <template #cell-scope="{ row }">
-                <div v-if="scopeChips(row).length" class="flex flex-wrap gap-1">
-                    <span
-                        v-for="s in scopeChips(row)"
-                        :key="s"
-                        class="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500"
-                    >
-                        {{ s }}
+        <section class="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+            <!-- Header: title · search -->
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 p-5">
+                <h3 class="flex items-center gap-2 text-base font-semibold text-slate-800">
+                    {{ pageTab === 'data' ? t.roles.dataAccessTab : t.roles.permissionsTab }}
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                        {{ pageTab === 'data' ? dataRoles.length : basicRoles.length }}
                     </span>
+                </h3>
+
+                <div class="relative">
+                    <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400" />
+                    <input
+                        v-model="roleSearch"
+                        type="search"
+                        :placeholder="t.roles.searchRoles"
+                        class="w-56 rounded-md border border-border bg-white py-2 pl-9 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
                 </div>
-                <span v-else class="text-xs italic text-slate-300">{{ t.roles.unrestricted }}</span>
-            </template>
+            </div>
 
-            <template #cell-permissions="{ row }">
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ row.permissions.length }}</span>
-            </template>
+            <!-- ===== Permissions tab ===== -->
+            <ClientTable v-if="pageTab === 'permissions'" :columns="basicColumns" :rows="basicRoles" row-key="id" :per-page="10" :initial-sort="{ key: 'name', dir: 'asc' }">
+                <template #cell-scope="{ row }">
+                    <div v-if="scopeChips(row).length" class="flex flex-wrap gap-1">
+                        <span
+                            v-for="s in scopeChips(row)"
+                            :key="s"
+                            class="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500"
+                        >
+                            {{ s }}
+                        </span>
+                    </div>
+                    <span v-else class="text-xs italic text-slate-300">{{ t.roles.unrestricted }}</span>
+                </template>
 
-            <template #cell-members="{ row }">
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ row.members.length }}</span>
-            </template>
+                <template #cell-permissions="{ row }">
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ row.permissions.length }}</span>
+                </template>
 
-            <template #cell-action="{ row }">
-                <div class="inline-flex items-center gap-1">
-                    <button
-                        class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
-                        :title="t.roles.edit"
-                        @click="openEdit(row)"
-                    >
-                        <i class="fa-solid fa-pen text-xs" />
-                    </button>
-                    <button
-                        v-if="!row.protected"
-                        class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                        :title="t.roles.delete"
-                        @click="remove(row)"
-                    >
-                        <i class="fa-solid fa-trash text-xs" />
-                    </button>
-                </div>
-            </template>
+                <template #cell-members="{ row }">
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ row.members.length }}</span>
+                </template>
 
-            <template #empty>{{ t.roles.empty }}</template>
-        </DataTable>
+                <template #cell-action="{ row }">
+                    <div class="inline-flex items-center gap-1">
+                        <button
+                            class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
+                            :title="t.roles.edit"
+                            @click="openEdit(row)"
+                        >
+                            <i class="fa-solid fa-pen text-xs" />
+                        </button>
+                        <button
+                            v-if="!row.protected"
+                            class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                            :title="t.roles.delete"
+                            @click="remove(row)"
+                        >
+                            <i class="fa-solid fa-trash text-xs" />
+                        </button>
+                    </div>
+                </template>
 
-        <!-- ===== Data Access tab ===== -->
-        <DataTable v-else :columns="dataColumns" :rows="dataRoles" row-key="id" min-width="720px">
-            <template #cell-scope="{ row }">
-                <div v-if="scopeChips(row).length" class="flex flex-wrap gap-1">
-                    <span
-                        v-for="s in scopeChips(row)"
-                        :key="s"
-                        class="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500"
-                    >
-                        {{ s }}
-                    </span>
-                </div>
-                <span v-else class="text-xs italic text-slate-400">{{ t.roles.allUsers }}</span>
-            </template>
+                <template #empty>{{ roleSearch.trim() ? t.roles.noRolesMatch : t.roles.empty }}</template>
+            </ClientTable>
 
-            <template #cell-permissions="{ row }">
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ row.permissions.length }}</span>
-            </template>
+            <!-- ===== Data Access tab ===== -->
+            <ClientTable v-else :columns="dataColumns" :rows="dataRoles" row-key="id" :per-page="10" :initial-sort="{ key: 'name', dir: 'asc' }">
+                <template #cell-scope="{ row }">
+                    <div v-if="scopeChips(row).length" class="flex flex-wrap gap-1">
+                        <span
+                            v-for="s in scopeChips(row)"
+                            :key="s"
+                            class="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500"
+                        >
+                            {{ s }}
+                        </span>
+                    </div>
+                    <span v-else class="text-xs italic text-slate-400">{{ t.roles.allUsers }}</span>
+                </template>
 
-            <template #cell-action="{ row }">
-                <div class="inline-flex items-center gap-1">
-                    <button
-                        class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
-                        :title="t.roles.edit"
-                        @click="openEdit(row)"
-                    >
-                        <i class="fa-solid fa-pen text-xs" />
-                    </button>
-                    <button
-                        v-if="!row.protected"
-                        class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                        :title="t.roles.delete"
-                        @click="remove(row)"
-                    >
-                        <i class="fa-solid fa-trash text-xs" />
-                    </button>
-                </div>
-            </template>
+                <template #cell-permissions="{ row }">
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ row.permissions.length }}</span>
+                </template>
 
-            <template #empty>{{ t.roles.emptyData }}</template>
-        </DataTable>
+                <template #cell-action="{ row }">
+                    <div class="inline-flex items-center gap-1">
+                        <button
+                            class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-primary"
+                            :title="t.roles.edit"
+                            @click="openEdit(row)"
+                        >
+                            <i class="fa-solid fa-pen text-xs" />
+                        </button>
+                        <button
+                            v-if="!row.protected"
+                            class="h-8 w-8 rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                            :title="t.roles.delete"
+                            @click="remove(row)"
+                        >
+                            <i class="fa-solid fa-trash text-xs" />
+                        </button>
+                    </div>
+                </template>
+
+                <template #empty>{{ roleSearch.trim() ? t.roles.noRolesMatch : t.roles.emptyData }}</template>
+            </ClientTable>
+        </section>
 
         <!-- Create / edit role -->
         <Drawer :show="roleModal" :title="editingId ? t.roles.edit : (form.is_data_access ? t.roles.addDataRole : t.roles.add)" max-width="max-w-2xl" @close="requestClose">

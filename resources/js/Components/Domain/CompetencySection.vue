@@ -37,6 +37,10 @@ const props = defineProps<{
     assessments: Assessment[]
     matrixConfigs: MatrixConfig[]
     canInput: boolean
+    // Whether the viewer may see these two results (FacecardVisibility); when
+    // false the server has already blanked them, so the read-out is dropped.
+    showProposedGrade?: boolean
+    showPriority?: boolean
 }>()
 
 // key drives both `${key}_score` (assessment) and `${key}_min` (matrix config);
@@ -291,13 +295,13 @@ function submit() {
                 </label>
                 <DateInput v-model="selectedDate" />
             </div>
-            <div>
+            <div v-if="showProposedGrade">
                 <label class="mb-1 block text-xs text-slate-500">{{ t.competency.proposedGrade }}</label>
                 <div class="rounded-md border border-border bg-slate-50 px-3 py-2 text-sm text-slate-600">
                     {{ assessmentForYear?.proposed_grade || t.facecard.profile.na }}
                 </div>
             </div>
-            <div>
+            <div v-if="showPriority">
                 <label class="mb-1 block text-xs text-slate-500">{{ t.competency.priority }}</label>
                 <div class="rounded-md border border-border bg-slate-50 px-3 py-2 text-sm text-slate-600">
                     {{ priorityLabel(assessmentForYear?.priority_for_development) }}

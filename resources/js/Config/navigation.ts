@@ -88,22 +88,21 @@ export const navigation: NavItem[] = [
         section: 'administration',
         label: 'masterData',
         icon: 'fa-solid fa-database',
-        permission: 'view_idp_master',
         children: [
             {
                 label: 'masterDataCompetencyType',
                 href: route('master_data.competency_type'),
-                permission: 'view_idp_master',
+                permission: 'manage_competency_type',
             },
             {
                 label: 'masterDataCompetency',
                 href: route('master_data.competency'),
-                permission: 'view_idp_master',
+                permission: 'manage_competency',
             },
             {
                 label: 'masterDataMasterImplementation',
                 href: route('master_data.master_implementation'),
-                permission: 'view_idp_master',
+                permission: 'manage_master_implementation',
             },
         ],
     },
@@ -111,27 +110,26 @@ export const navigation: NavItem[] = [
         section: 'administration',
         label: 'idpSetting',
         icon: 'fa-solid fa-sliders',
-        permission: 'view_idp_master',
         children: [
             {
                 label: 'idpSettingDevelopmentModel',
                 href: route('idp.setting.development_model'),
-                permission: 'view_idp_master',
+                permission: 'manage_development_model',
             },
             {
                 label: 'idpSettingMasterTraining',
                 href: route('idp.setting.master_training'),
-                permission: 'view_idp_master',
+                permission: 'manage_master_training',
             },
             {
                 label: 'idpSettingMasterData',
                 href: route('idp.setting.master_development'),
-                permission: 'view_idp_master',
+                permission: 'manage_master_development',
             },
             {
                 label: 'idpSettingReviewTools',
                 href: route('idp.setting.review_tools'),
-                permission: 'view_idp_master',
+                permission: 'manage_review_tools',
             },
         ],
     },

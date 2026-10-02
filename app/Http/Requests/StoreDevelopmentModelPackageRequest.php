@@ -21,7 +21,7 @@ class StoreDevelopmentModelPackageRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()?->can('view_idp_master') ?? false;
+        return $this->user()?->can('manage_development_model') ?? false;
     }
 
     /**

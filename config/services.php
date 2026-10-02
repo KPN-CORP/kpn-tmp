@@ -55,4 +55,13 @@ return [
         'key' => env('DEV_LOGIN_KEY'),
     ],
 
+    /*
+     * Shared role/permission database. `domain` is this app's row in its
+     * `domains` table; every role and permission this app reads or writes is
+     * scoped to it, so apps sharing the database never see each other's.
+     */
+    'sys_perm' => [
+        'domain' => trim((string) env('DOMAIN_SYS_PERM', '')),
+    ],
+
 ];

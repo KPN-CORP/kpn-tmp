@@ -7,6 +7,7 @@ use App\Models\Employee;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
+use App\Support\PermissionDomain;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -39,7 +40,7 @@ class RoleController extends Controller
                     ? []
                     : User::whereIn((new User)->getKeyName(), $this->userIdsWithRole($role))
                         ->pluck('employee_id')->filter()->values(),
-                'protected' => in_array($role->name, self::PROTECTED_ROLES, true),
+                'protected' => $this->isProtected($role),
                 'default' => $this->isDefaultRole($role),
                 'is_data_access' => (bool) $role->is_data_access,
             ]);
@@ -148,13 +149,50 @@ class RoleController extends Controller
 
     public function destroy(Role $role): RedirectResponse
     {
-        if (in_array($role->name, self::PROTECTED_ROLES, true)) {
+        if ($this->isProtected($role)) {
             return back()->with('error', "The \"{$role->name}\" role cannot be deleted.");
+        }
+
+        // Roles are shared by every app on the permission DB. One that also
+        // carries another app's permissions belongs to that app too, and
+        // deleting it here would take it away from them.
+        if ($this->usedByOtherApps($role)) {
+            return back()->with('error', "The \"{$role->name}\" role is also used by another application and cannot be deleted here.");
         }
 
         $role->delete();
 
         return back()->with('success', 'Role deleted.');
+    }
+
+    /**
+     * Built-in roles. Compared case-insensitively: role names are shared across
+     * apps under a case-insensitive collation, so "Superadmin" is stored as
+     * extra-miles' "superadmin".
+     */
+    private function isProtected(Role $role): bool
+    {
+        foreach (self::PROTECTED_ROLES as $name) {
+            if (strcasecmp($role->name, $name) === 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether the role holds another domain's permissions. Read from the pivot
+     * directly, since the role's permissions() relation only sees this app's.
+     */
+    private function usedByOtherApps(Role $role): bool
+    {
+        return DB::connection($role->getConnectionName())
+            ->table(config('permission.table_names.role_has_permissions').' as rp')
+            ->join(config('permission.table_names.permissions').' as p', 'p.id', '=', 'rp.permission_id')
+            ->where('rp.role_id', $role->getKey())
+            ->where(fn ($q) => $q->whereNull('p.domain_id')->orWhere('p.domain_id', '!=', PermissionDomain::id()))
+            ->exists();
     }
 
     /**
@@ -172,13 +210,13 @@ class RoleController extends Controller
     private function validateRole(Request $request, ?Role $role = null): array
     {
         return $request->validate([
-            'name' => ['required', 'string', 'max:255', Rule::unique('roles', 'name')->ignore($role?->id)],
+            'name' => ['required', 'string', 'max:255', Rule::unique(Role::class, 'name')->ignore($role?->id)],
             'business_unit' => ['nullable', 'array'],
             'company' => ['nullable', 'array'],
             'location' => ['nullable', 'array'],
             'is_data_access' => ['boolean'],
             'permissions' => ['nullable', 'array'],
-            'permissions.*' => ['string', 'exists:permissions,name'],
+            'permissions.*' => ['string', Rule::exists(Permission::class, 'name')->where('domain_id', PermissionDomain::id())],
             'members' => ['nullable', 'array'],
             'members.*' => ['string'],
         ]);

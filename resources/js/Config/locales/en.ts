@@ -829,6 +829,8 @@ export default {
         cancel: 'Cancel',
         save: 'Save',
         searchPermissions: 'Search permissions…',
+        searchRoles: 'Search by role name…',
+        noRolesMatch: 'No roles match your search.',
         selectedCount: 'selected',
         selectAll: 'Select all',
         clearAll: 'Clear all',
@@ -886,7 +888,6 @@ export default {
         statusRejected: 'Rejected',
         waiting: 'Waiting',
         waitingForLayer: 'With layer',
-        becomesYoursAfter: 'it becomes yours to decide once they sign off',
         layer: 'Layer',
         layerShort: 'L',
         // Actions
@@ -957,7 +958,6 @@ export default {
         outcomeRejected: 'Rejected',
         outcomePending: 'Still with layer',
         outcomeMoving: 'Still in the chain',
-        fullChain: 'Approval chain',
         planGone: 'The programs this request covered are no longer in the plan.',
         liveCopy: 'Submitted before submissions were saved, so this shows the plan as it reads now — not necessarily what was decided on.',
         comparePrevious: 'Compared with the previous submission',
@@ -1009,6 +1009,7 @@ export default {
         confirmClear: 'Delete all import logs?',
         templateHint: 'The template provides the required column format, reference data and sample rows.',
         downloadTemplate: 'Download template',
+        noDataTypes: 'Your role does not include permission to import any data type. Ask an administrator to grant one on the Roles screen.',
     },
 
     competency: {

@@ -118,6 +118,31 @@ enum MasterDataType: string
     }
 
     /**
+     * The permission needed to manage this kind — that of the screen it is
+     * managed on. The shared master endpoints are open to any of these at the
+     * route, so this is what stops one screen writing another's masters.
+     */
+    public function permission(): string
+    {
+        return match ($this) {
+            self::CompetencyType => 'manage_competency_type',
+            self::CompetencyName => 'manage_competency',
+            self::DevelopmentProgram => 'manage_master_development',
+            self::ReviewTools => 'manage_review_tools',
+            self::Training => 'manage_master_training',
+        };
+    }
+
+    /**
+     * Every permission that manages some kind, as a `permission:` middleware
+     * argument (`a|b|c`).
+     */
+    public static function anyPermission(): string
+    {
+        return implode('|', array_unique(array_map(fn (self $t) => $t->permission(), self::cases())));
+    }
+
+    /**
      * The `in:` rule body listing every accepted wire value.
      */
     public static function validationList(): string

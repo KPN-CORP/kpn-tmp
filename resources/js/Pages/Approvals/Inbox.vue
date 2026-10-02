@@ -218,13 +218,21 @@ function toggle(id: number) {
     expanded.value = next
 }
 
+/**
+ * The cards that open at all — RequestCard's own rule: a log entry always does
+ * (it holds the plan as decided), a pending one only when it is a resubmission.
+ */
+const expandableIds = computed(() =>
+    props.items.data.filter((i) => isHistory.value || !!i.previous).map((i) => i.step_id),
+)
+
 /** Open when anything is closed; otherwise close everything. */
 const allOpen = computed(
-    () => props.items.data.length > 0 && props.items.data.every((i) => expanded.value.has(i.step_id)),
+    () => expandableIds.value.length > 0 && expandableIds.value.every((id) => expanded.value.has(id)),
 )
 
 function toggleAll() {
-    expanded.value = allOpen.value ? new Set() : new Set(props.items.data.map((i) => i.step_id))
+    expanded.value = allOpen.value ? new Set() : new Set(expandableIds.value)
 }
 </script>
 
@@ -350,9 +358,8 @@ function toggleAll() {
                 opening or closing them all — useful once a desk runs long,
                 where opening cards one at a time is a lot of clicking.
             -->
-            <div class="mb-2 flex items-center justify-end">
+            <div v-if="expandableIds.length" class="mb-2 flex items-center justify-end">
                 <button
-                    v-if="items.data.length"
                     type="button"
                     class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
                     @click="toggleAll"
@@ -362,7 +369,7 @@ function toggleAll() {
                 </button>
             </div>
 
-            <div class="space-y-4">
+            <div class="space-y-3">
                 <RequestCard
                     v-for="item in items.data"
                     :key="item.step_id"

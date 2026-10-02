@@ -3,20 +3,20 @@
  * One request on the approver's desk — the whole card, on both of its surfaces
  * (the pending list and the decision log).
  *
- * The card is built around one rule: an approver must never go looking for what
- * they are approving. So it reads top to bottom as
+ * The card is a pointer, not a copy. The employee's IDP page is where a
+ * request is read in full and decided, and every card links there, so the
+ * face carries only what is needed to pick the next one up:
  *
- *   who and what  →  the facts in one line  →  the full detail  →  the decision
+ *   who  →  what  →  whose turn it is (or what you decided)  →  the link
  *
- * with only the third part collapsible, closed by default, and toggled by
- * clicking anywhere on the header rather than by
- * finding a small button beside it. The decision never collapses: it sits in
- * the footer with the reason it is — or is not — on offer.
+ * It expands only for what that page cannot show: the comparison with the
+ * previous round, and — in the log — the plan exactly as it was decided, since
+ * the IDP page shows it as it reads today. A pending first-round request has
+ * nothing of that kind, so it does not expand at all.
  */
 import { computed } from 'vue'
 import { Link } from '@inertiajs/vue3'
 
-import ApprovalChain from './ApprovalChain.vue'
 import StatusPill from './StatusPill.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDate as fmt, formatDateTime as fmtDateTime } from '@/Composables/useDate'
@@ -162,12 +162,31 @@ function planMark(plan: InboxPlan): { label: string; cls: string } | null {
     return null
 }
 
+/** The programs a resubmitted plan set added or changed, in plan order. */
+const touchedPlans = computed(() => props.item.plans.filter((plan) => planMark(plan) !== null))
+
 const emit = defineEmits<{
     toggle: []
 }>()
 
 const isPlanning = computed(() => props.item.stage === 'planning')
 const canAct = computed(() => !props.history && !!props.item.can_act)
+
+/**
+ * Whether there is anything behind the header. Mirrored by the Inbox's
+ * "expand all", which only counts cards that open.
+ */
+const expandable = computed(() => !!props.history || !!props.item.previous)
+
+function toggle() {
+    if (expandable.value) {
+        emit('toggle')
+    }
+}
+
+const idpHref = computed(() =>
+    route('idp.show', { employeeId: props.item.owner_id, package: props.item.package?.id ?? null }),
+)
 
 /** A result request covers exactly one program; a plan covers the whole set. */
 const single = computed<InboxPlan | null>(() =>
@@ -228,13 +247,6 @@ const mark = computed<{ label: string; tone: Tone; icon: string }>(() => {
     }
 })
 
-/** What the decision in the footer will do next. */
-const actionHint = computed(() =>
-    props.item.level >= props.item.total_levels
-        ? t.value.approvalFlow.approveFinalHint
-        : t.value.approvalFlow.approveNextHint,
-)
-
 /** Where the request went after this layer signed it off (log only). */
 const outcome = computed<{ label: string; tone: Tone }>(() => {
     if (props.item.outcome === 'approved') {
@@ -262,144 +274,97 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
         :class="canAct ? 'border-amber-300 ring-1 ring-amber-200/70' : 'border-border'"
     >
         <!--
-            The header is the disclosure control. A card is a block of reading,
-            so the target is the whole block rather than a button beside it, and
-            the chevron is what says so. `role="button"` rather than a <button>
-            element, so the links inside it stay valid and keep working.
+            The header is the whole card face, and the disclosure control when
+            there is something behind it. `role="button"` rather than a <button>
+            element, so the link inside it stays valid and keeps working.
         -->
         <header
-            role="button"
-            tabindex="0"
-            :aria-expanded="open"
-            class="flex cursor-pointer flex-col gap-3 px-5 py-4 text-left transition hover:bg-slate-50/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 lg:flex-row lg:items-start lg:justify-between"
-            @click="emit('toggle')"
-            @keydown.enter.prevent="emit('toggle')"
-            @keydown.space.prevent="emit('toggle')"
+            :role="expandable ? 'button' : undefined"
+            :tabindex="expandable ? 0 : undefined"
+            :aria-expanded="expandable ? open : undefined"
+            class="flex flex-col gap-3 px-5 py-3.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 lg:flex-row lg:items-center lg:justify-between"
+            :class="expandable ? 'cursor-pointer hover:bg-slate-50/70' : ''"
+            @click="toggle"
+            @keydown.enter.prevent="toggle"
+            @keydown.space.prevent="toggle"
         >
             <div class="flex min-w-0 items-start gap-3">
                 <span
-                    class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                    class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
                     :class="isPlanning ? 'bg-primary/10 text-primary' : 'bg-emerald-50 text-emerald-600'"
+                    :title="isPlanning ? t.approvalFlow.stagePlanning : t.approvalFlow.stageResult"
                 >
                     <i :class="isPlanning ? 'fa-solid fa-file-signature' : 'fa-solid fa-clipboard-check'" />
                 </span>
 
                 <div class="min-w-0">
-                    <div class="flex flex-wrap items-center gap-2">
-                        <StatusPill
-                            :tone="isPlanning ? 'primary' : 'emerald'"
-                            :label="isPlanning ? t.approvalFlow.stagePlanning : t.approvalFlow.stageResult"
-                            :dot="false"
-                            size="sm"
-                        />
-                        <h3 class="truncate font-bold text-slate-800">{{ item.owner_name }}</h3>
+                    <p class="flex flex-wrap items-baseline gap-x-2">
+                        <span class="truncate font-bold text-slate-800">{{ item.owner_name }}</span>
                         <span class="text-xs text-slate-400">{{ item.owner_id }}</span>
-                    </div>
-
-                    <!-- What is being approved, in one line, never collapsed -->
-                    <p class="mt-1 text-sm font-medium leading-snug text-slate-700">
-                        {{ headline }}
-                        <span v-if="isPlanning && item.package" class="font-normal text-slate-400">
-                            · {{ item.package.name }}
-                        </span>
                     </p>
 
-                    <p class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
-                        <span>
-                            <i class="fa-solid fa-layer-group mr-1" />
-                            {{ t.approvalFlow.layer }} {{ item.level }} / {{ item.total_levels }}
+                    <p class="truncate text-sm text-slate-600">
+                        {{ headline }}
+                        <span v-if="isPlanning && item.package" class="text-slate-400">· {{ item.package.name }}</span>
+                    </p>
+
+                    <p class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                        <span>{{ t.approvalFlow.layer }} {{ item.level }}/{{ item.total_levels }}</span>
+                        <span v-if="history && item.decided_at">
+                            <i class="fa-regular fa-clock mr-1" />{{ fmtDateTime(item.decided_at) }}
                         </span>
-                        <span v-if="item.submitted_at">
-                            <i class="fa-solid fa-paper-plane mr-1" />
-                            {{ fmtDateTime(item.submitted_at) }}
+                        <span v-else-if="item.submitted_at">
+                            <i class="fa-solid fa-paper-plane mr-1" />{{ fmtDateTime(item.submitted_at) }}
+                        </span>
+                        <span v-if="history" :class="outcome.tone === 'red' ? 'text-red-600' : outcome.tone === 'emerald' ? 'text-emerald-600' : 'text-amber-600'">
+                            <i class="fa-solid fa-arrow-right-long mr-1 text-[10px]" />{{ outcome.label }}
                         </span>
                         <span v-if="previous" class="font-medium text-amber-600">
-                            <i class="fa-solid fa-rotate mr-1" />
-                            {{ t.approvalFlow.resubmitted }}<template v-if="changeCount">
+                            <i class="fa-solid fa-rotate mr-1" />{{ t.approvalFlow.resubmitted }}<template v-if="changeCount">
                                 · {{ t.approvalFlow.changesCount.replace('{n}', String(changeCount)) }}</template>
                         </span>
                     </p>
                 </div>
             </div>
 
-            <div class="flex shrink-0 items-center gap-2 self-start">
-                <StatusPill :tone="mark.tone" :label="mark.label" :icon="mark.icon" />
+            <div class="flex shrink-0 items-center gap-2 self-start lg:self-center">
+                <StatusPill :tone="mark.tone" :label="mark.label" :icon="mark.icon" size="sm" />
+
+                <!-- Decided on the employee's plan, where the whole of it is read first -->
+                <Link
+                    :href="idpHref"
+                    class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+                    :class="canAct
+                        ? 'bg-primary text-white shadow-sm hover:bg-primary-hover'
+                        : 'border border-border text-primary hover:bg-primary/5'"
+                    @click.stop
+                >
+                    {{ canAct ? t.approvalFlow.reviewAndDecide : t.approvalFlow.openEmployeeIdp }}
+                    <i class="fa-solid fa-arrow-right text-[10px]" />
+                </Link>
 
                 <span
-                    class="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-slate-400 transition"
+                    v-if="expandable"
+                    class="flex h-7 w-7 items-center justify-center rounded-lg border border-border text-slate-400 transition"
                     :class="open ? 'bg-slate-50' : ''"
                     :title="open ? t.approvalFlow.hideDetails : t.approvalFlow.showDetails"
                 >
-                    <i :class="open ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'" class="text-[11px]" />
+                    <i :class="open ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'" class="text-[10px]" />
                 </span>
             </div>
         </header>
 
-        <!--
-            The facts a decision usually turns on, always on screen: what a
-            result delivered, or how big a plan is and where its weight sits.
-        -->
-        <div
-            class="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border bg-slate-50/70 px-5 py-2.5 text-xs text-slate-600"
+        <!-- The note this person left on the decision -->
+        <p
+            v-if="history && item.note && !item.auto"
+            class="border-t border-border bg-slate-50/70 px-5 py-2.5 text-xs leading-relaxed text-slate-600"
         >
-            <template v-if="single">
-                <span>
-                    <i class="fa-regular fa-calendar mr-1 text-slate-400" />
-                    {{ t.idp.status.planned }}:
-                    {{ fmt(single.time_frame_start) }}
-                    <i class="fa-solid fa-arrow-right-long mx-1 text-[10px] text-slate-300" />
-                    {{ single.time_frame_end ? fmt(single.time_frame_end) : '—' }}
-                </span>
+            <i class="fa-solid fa-quote-left mr-1.5 text-[10px] text-slate-300" />
+            {{ item.note }}
+        </p>
 
-                <span v-if="single.realization_date" class="font-medium text-emerald-700">
-                    <i class="fa-regular fa-calendar-check mr-1" />
-                    {{ t.idp.form.realization }}: {{ fmt(single.realization_date) }}
-                </span>
-
-                <a
-                    v-if="isUrl(single.result_evidence)"
-                    :href="single.result_evidence!"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="inline-flex items-center gap-1 font-medium text-primary hover:underline"
-                    @click.stop
-                >
-                    <i class="fa-solid fa-link text-[10px]" />
-                    {{ t.idp.evidenceLabel }}
-                </a>
-                <span v-else-if="single.result_evidence" class="max-w-xs truncate">
-                    <i class="fa-solid fa-paperclip mr-1 text-slate-400" />
-                    {{ single.result_evidence }}
-                </span>
-            </template>
-
-            <template v-else>
-                <span v-for="group in groups" :key="group.model" class="inline-flex items-center gap-1.5">
-                    <i class="fa-solid fa-layer-group text-[10px] text-slate-400" />
-                    {{ group.model }}
-                    <span
-                        class="rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-slate-600 ring-1 ring-inset ring-border"
-                    >
-                        {{ group.plans.length }}
-                    </span>
-                </span>
-            </template>
-
-            <!-- A card the viewer can act on already leads there through
-                 "Review & decide" in its footer, so only the others need it. -->
-            <Link
-                v-if="!canAct"
-                :href="route('idp.show', { employeeId: item.owner_id, package: item.package?.id ?? null })"
-                class="ml-auto shrink-0 font-medium text-primary hover:underline"
-                @click.stop
-            >
-                <i class="fa-solid fa-arrow-up-right-from-square mr-1 text-[10px]" />
-                {{ t.approvalFlow.openEmployeeIdp }}
-            </Link>
-        </div>
-
-        <!-- Everything being approved, in full -->
-        <div v-show="open" class="divide-y divide-border border-t border-border">
+        <!-- Only what the employee's IDP page cannot show -->
+        <div v-if="expandable" v-show="open" class="divide-y divide-border border-t border-border">
             <!-- A log entry that predates snapshots can only show today's plan -->
             <p v-if="history && !item.frozen" class="flex items-start gap-2 bg-slate-50 px-5 py-2.5 text-xs text-slate-500">
                 <i class="fa-solid fa-circle-info mt-0.5 text-slate-400" />
@@ -473,6 +438,28 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                         </li>
                     </ul>
 
+                    <!-- A plan set: each program added or changed, with its before → after -->
+                    <ul v-if="!single && touchedPlans.length" class="mt-3 space-y-2.5 text-xs">
+                        <li v-for="plan in touchedPlans" :key="plan.id">
+                            <p class="text-slate-700">
+                                <span
+                                    class="mr-1 rounded px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase ring-1 ring-inset"
+                                    :class="planMark(plan)!.cls"
+                                >{{ planMark(plan)!.label }}</span>
+                                <span class="font-medium">{{ plan.competency_name }}</span>
+                                · {{ plan.development_program }}
+                            </p>
+                            <ul v-if="changesOf(plan).length" class="mt-1 space-y-0.5 pl-3">
+                                <li v-for="change in changesOf(plan)" :key="change.field" class="flex flex-wrap items-baseline gap-x-1.5 break-words">
+                                    <span class="font-medium text-slate-500">{{ change.label }}:</span>
+                                    <span class="text-red-600/80 line-through">{{ change.before }}</span>
+                                    <i class="fa-solid fa-arrow-right-long text-[10px] text-slate-300" />
+                                    <span class="font-medium text-emerald-700">{{ change.after }}</span>
+                                </li>
+                            </ul>
+                        </li>
+                    </ul>
+
                     <!-- Programs the earlier round had and this one does not -->
                     <div v-if="diff.removed.length" class="mt-3">
                         <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -494,7 +481,7 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                 here, not a repeat — the evidence in particular, which the strip
                 can only truncate.
             -->
-            <div v-if="single" class="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-2">
+            <div v-if="history && single" class="grid grid-cols-1 gap-4 px-5 py-4 lg:grid-cols-2">
                 <section>
                     <p class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         {{ t.idp.status.planned }}
@@ -578,7 +565,7 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
             </div>
 
             <!-- A PLAN is read as the set it is: every program, grouped by model. -->
-            <template v-else>
+            <template v-else-if="history">
                 <div v-for="group in groups" :key="group.model" class="border-b border-border last:border-b-0">
                     <p class="bg-slate-50/70 px-5 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         {{ group.model }}
@@ -630,18 +617,6 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                                 <span class="tabular-nums">{{ target(plan) }}</span>
                             </span>
 
-                            <!-- Before → after, for each field changed since the previous round -->
-                            <ul
-                                v-if="changesOf(plan).length"
-                                class="mt-2 space-y-1 rounded-md bg-amber-50/60 px-2.5 py-2 text-xs ring-1 ring-inset ring-amber-100"
-                            >
-                                <li v-for="change in changesOf(plan)" :key="change.field" class="flex flex-wrap items-baseline gap-x-1.5 break-words">
-                                    <span class="font-medium text-slate-500">{{ change.label }}:</span>
-                                    <span class="text-red-600/80 line-through">{{ change.before }}</span>
-                                    <i class="fa-solid fa-arrow-right-long text-[10px] text-slate-300" />
-                                    <span class="font-medium text-emerald-700">{{ change.after }}</span>
-                                </li>
-                            </ul>
                         </div>
 
                         <!-- When it runs -->
@@ -658,71 +633,10 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
             </template>
 
             <!-- The programs it covered are gone; the decision is not -->
-            <p v-if="!item.plans.length" class="px-5 py-4 text-xs text-slate-400">
+            <p v-if="history && !item.plans.length" class="px-5 py-4 text-xs text-slate-400">
                 {{ t.approvalFlow.planGone }}
             </p>
 
-            <!-- The chain: who has signed off, and who holds it now -->
-            <div v-if="item.chain" class="px-5 py-4">
-                <p class="mb-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    {{ t.approvalFlow.fullChain }}
-                </p>
-                <ApprovalChain :approval="item.chain" :compact="!history" />
-            </div>
         </div>
-
-        <!--
-            The decision, and why it is or is not on offer. Never collapsed —
-            it is the point of the card.
-        -->
-        <footer
-            class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3"
-            :class="canAct ? 'bg-amber-50/60' : 'bg-white'"
-        >
-            <template v-if="history">
-                <p class="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <i class="fa-regular fa-clock text-slate-400" />
-                    <span v-if="item.decided_at">
-                        {{ t.approvalFlow.decidedAt }}: {{ fmtDateTime(item.decided_at) }}
-                    </span>
-                    <span>· {{ t.approvalFlow.layer }} {{ item.level }}</span>
-                </p>
-
-                <StatusPill :tone="outcome.tone" :label="outcome.label" size="sm" />
-            </template>
-
-            <template v-else-if="canAct">
-                <p class="text-xs text-slate-500">
-                    <i class="fa-solid fa-circle-info mr-1 text-slate-400" />
-                    {{ actionHint }}
-                </p>
-
-                <!-- Decided on the employee's plan, where the whole of it is
-                     read first — the same place the owner submits it from. -->
-                <Link
-                    :href="route('idp.show', { employeeId: item.owner_id, package: item.package?.id ?? null })"
-                    class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-hover"
-                    @click.stop
-                >
-                    <i class="fa-solid fa-magnifying-glass text-xs" />
-                    {{ t.approvalFlow.reviewAndDecide }}
-                    <i class="fa-solid fa-arrow-right text-[10px]" />
-                </Link>
-            </template>
-
-            <p v-else class="text-xs text-slate-500">
-                <i class="fa-regular fa-clock mr-1 text-slate-400" />
-                {{ mark.label }} · {{ t.approvalFlow.becomesYoursAfter }}
-            </p>
-        </footer>
-
-        <!-- The note this person left on the decision -->
-        <p
-            v-if="history && item.note && !item.auto"
-            class="border-t border-border bg-slate-50/70 px-5 py-3 text-xs leading-relaxed text-slate-600"
-        >
-            <i class="fa-solid fa-quote-left mr-1.5 text-[10px] text-slate-300" />
-            {{ item.note }}
-        </p>
     </article>
 </template>

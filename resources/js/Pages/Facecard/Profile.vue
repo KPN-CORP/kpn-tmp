@@ -86,6 +86,16 @@ const props = defineProps<{
     canInputNineBox: boolean
     canInputCompetency: boolean
     canInputSuccession: boolean
+    // Restricted fields the viewer may see (FacecardVisibility). The server has
+    // already blanked the hidden ones; these only drop their empty rows.
+    visibility: {
+        nine_box: boolean
+        critical_position: boolean
+        successor_type: boolean
+        successor_position: boolean
+        priority_dev: boolean
+        proposed_grade: boolean
+    }
     // Data Access flags for this employee (self/team, IC vs PM)
     canDownloadFacecard: boolean
     canViewIdp: boolean
@@ -193,6 +203,13 @@ const employmentRight = computed(() => [
     { label: t.value.facecard.profile.joinDateKpn, value: fmtDate(emp.date_of_joining) },
     { label: t.value.facecard.profile.currentGrade, value: emp.job_level },
 ])
+
+// The succession block only shows when at least one of its fields may be seen.
+const showSuccession = computed(() =>
+    props.visibility.critical_position
+    || props.visibility.successor_type
+    || props.visibility.successor_position,
+)
 
 // --- Succession drawer ---
 const successionOpen = ref(false)
@@ -388,17 +405,18 @@ function deletePhoto() {
                         </table>
                     </div>
 
+                    <template v-if="showSuccession">
                     <div class="my-3 border-t border-border" />
 
                     <div class="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
                         <table class="w-full text-sm">
                             <tbody>
-                                <tr class="align-top">
+                                <tr v-if="visibility.critical_position" class="align-top">
                                     <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ t.facecard.profile.criticalPosition }}</td>
                                     <td class="py-1 pr-1 text-slate-300">:</td>
                                     <td class="py-1 text-slate-700">{{ resultSummary?.critical_position || na }}</td>
                                 </tr>
-                                <tr class="align-top">
+                                <tr v-if="visibility.successor_type" class="align-top">
                                     <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ t.facecard.profile.successorType }}</td>
                                     <td class="py-1 pr-1 text-slate-300">:</td>
                                     <td class="py-1 text-slate-700">{{ resultSummary?.successor_type || na }}</td>
@@ -407,7 +425,7 @@ function deletePhoto() {
                         </table>
                         <table class="w-full text-sm">
                             <tbody>
-                                <tr class="align-top">
+                                <tr v-if="visibility.successor_position" class="align-top">
                                     <td class="py-1 pr-2 font-medium text-slate-500 whitespace-nowrap">{{ t.facecard.profile.successorTo }}</td>
                                     <td class="py-1 pr-1 text-slate-300">:</td>
                                     <td class="py-1 text-slate-700">{{ successorLabel || na }}</td>
@@ -415,6 +433,7 @@ function deletePhoto() {
                             </tbody>
                         </table>
                     </div>
+                    </template>
                 </div>
             </div>
 
@@ -545,7 +564,7 @@ function deletePhoto() {
         </div>
 
         <!-- Year-on-Year 9-Box -->
-        <div class="mb-6">
+        <div v-if="visibility.nine_box" class="mb-6">
             <NineBoxSection
                 :employee-id="emp.employee_id"
                 :appraisals="appraisals"
@@ -560,6 +579,8 @@ function deletePhoto() {
                 :assessments="competencyAssessments"
                 :matrix-configs="matrixGradeConfigs"
                 :can-input="canInputCompetency"
+                :show-proposed-grade="visibility.proposed_grade"
+                :show-priority="visibility.priority_dev"
             />
         </div>
         </div>

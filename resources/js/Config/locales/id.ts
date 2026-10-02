@@ -825,6 +825,8 @@ const id: LocaleMessages = {
         cancel: 'Batal',
         save: 'Simpan',
         searchPermissions: 'Cari izin…',
+        searchRoles: 'Cari berdasarkan nama peran…',
+        noRolesMatch: 'Tidak ada peran yang cocok dengan pencarian.',
         selectedCount: 'dipilih',
         selectAll: 'Pilih semua',
         clearAll: 'Hapus semua',
@@ -881,7 +883,6 @@ const id: LocaleMessages = {
         statusRejected: 'Ditolak',
         waiting: 'Menunggu',
         waitingForLayer: 'Di layer',
-        becomesYoursAfter: 'menjadi keputusan Anda setelah mereka menyetujui',
         layer: 'Lapisan',
         layerShort: 'L',
         approve: 'Setujui',
@@ -948,7 +949,6 @@ const id: LocaleMessages = {
         outcomeRejected: 'Ditolak',
         outcomePending: 'Masih di layer',
         outcomeMoving: 'Masih dalam alur',
-        fullChain: 'Alur persetujuan',
         planGone: 'Program yang tercakup dalam permintaan ini sudah tidak ada di rencana.',
         liveCopy: 'Diajukan sebelum pengajuan disimpan, sehingga yang tampil adalah rencana saat ini — belum tentu yang diputuskan.',
         comparePrevious: 'Dibandingkan dengan pengajuan sebelumnya',
@@ -1000,6 +1000,7 @@ const id: LocaleMessages = {
         confirmClear: 'Hapus semua log impor?',
         templateHint: 'Templat memuat format kolom yang diperlukan, data referensi, dan contoh baris.',
         downloadTemplate: 'Unduh templat',
+        noDataTypes: 'Peran Anda belum memiliki izin untuk mengimpor jenis data apa pun. Minta administrator menambahkannya di layar Roles.',
     },
 
     competency: {

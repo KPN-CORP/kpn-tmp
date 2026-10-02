@@ -28,6 +28,7 @@ class MasterDataController extends Controller
     public function store(Request $request): RedirectResponse
     {
         $type = $this->validator->resolveType($request->input('type'));
+        $this->authorizeType($request, $type);
 
         $this->masters->create($type, $this->validator->validate($request, $type));
 
@@ -36,6 +37,8 @@ class MasterDataController extends Controller
 
     public function update(Request $request, MasterDataType $type, int $id): RedirectResponse
     {
+        $this->authorizeType($request, $type);
+
         $master = $type->query()->findOrFail($id);
 
         $this->masters->update(
@@ -55,6 +58,8 @@ class MasterDataController extends Controller
      */
     public function toggleActive(Request $request, MasterDataType $type, int $id): RedirectResponse
     {
+        $this->authorizeType($request, $type);
+
         if (! $type->hasActiveState()) {
             return back()->with('error', 'This master data type cannot be activated or deactivated.');
         }
@@ -74,15 +79,19 @@ class MasterDataController extends Controller
      * The activate / deactivate trail for one master, newest first. Read from
      * the audit log on disk, not from the database.
      */
-    public function statusHistory(MasterDataType $type, int $id): JsonResponse
+    public function statusHistory(Request $request, MasterDataType $type, int $id): JsonResponse
     {
+        $this->authorizeType($request, $type);
+
         return response()->json([
             'history' => $this->masters->statusHistory($type, $id),
         ]);
     }
 
-    public function destroy(MasterDataType $type, int $id): RedirectResponse
+    public function destroy(Request $request, MasterDataType $type, int $id): RedirectResponse
     {
+        $this->authorizeType($request, $type);
+
         $master = $type->query()->findOrFail($id);
 
         if ($blocker = $this->masters->deletionBlocker($type, $master)) {
@@ -92,5 +101,14 @@ class MasterDataController extends Controller
         $this->masters->delete($type, $master);
 
         return back()->with('success', 'Master data deleted successfully.');
+    }
+
+    /**
+     * A user may only write the kinds that belong to a menu they manage (see
+     * {@see MasterDataType::permission()}).
+     */
+    private function authorizeType(Request $request, MasterDataType $type): void
+    {
+        abort_unless($request->user()?->can($type->permission()), 403);
     }
 }
