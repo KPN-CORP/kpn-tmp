@@ -1294,7 +1294,7 @@ function confirmDelete() {
                                         class="whitespace-nowrap text-slate-500"
                                         :title="formatDateTime(block.created_at)"
                                     >
-                                        {{ formatDate(block.created_at) }}
+                                        {{ formatDateTime(block.created_at) }}
                                     </span>
                                 </td>
 
@@ -1303,7 +1303,7 @@ function confirmDelete() {
                                         class="whitespace-nowrap text-slate-500"
                                         :title="formatDateTime(block.updated_at)"
                                     >
-                                        {{ formatDate(block.updated_at) }}
+                                        {{ formatDateTime(block.updated_at) }}
                                     </span>
                                 </td>
 

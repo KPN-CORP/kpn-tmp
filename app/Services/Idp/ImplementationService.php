@@ -49,7 +49,19 @@ class ImplementationService
             $wasActive = (bool) $implementation->is_active;
 
             $implementation->update($data);
-            $this->syncScope($implementation, $data);
+            $scopeChanged = $this->syncScope($implementation, $data);
+
+            /*
+             * The three list-valued parts of the scope live in child tables, so
+             * an edit that only re-points them changes no column on this row —
+             * Eloquent writes nothing and `updated_at` would stand still while
+             * the mapping had plainly been edited. Touching it only when the
+             * scope ACTUALLY changed keeps the other half of the rule:
+             * re-saving an unchanged form still records nothing.
+             */
+            if ($scopeChanged && ! $implementation->wasChanged()) {
+                $implementation->touch();
+            }
 
             if ($wasActive !== (bool) $implementation->is_active) {
                 $this->recordStatus($implementation, (bool) $implementation->is_active, $actor);
@@ -87,32 +99,65 @@ class ImplementationService
     /**
      * Replace the list-valued parts of a mapping's scope.
      *
+     * Returns whether any of them actually changed — which is what tells an
+     * edit that only touched the scope from a form re-saved unchanged.
+     *
      * @param  array<string, mixed>  $data
      */
-    private function syncScope(CompetencyImplementation $implementation, array $data): void
+    private function syncScope(CompetencyImplementation $implementation, array $data): bool
     {
-        $implementation->proficiencyLevels()->sync($data['proficiency_level_ids']);
+        $levels = $implementation->proficiencyLevels()->sync($data['proficiency_level_ids']);
 
-        $this->replaceValues($implementation->grades(), 'grade', $data['grades']);
-        $this->replaceValues(
+        // Every branch is evaluated before the OR: `||` would short-circuit and
+        // skip the writes that follow the first change.
+        $gradesChanged = $this->replaceValues(
+            $implementation->grades(),
+            'grade',
+            $data['grades'],
+        );
+        $unitsChanged = $this->replaceValues(
             $implementation->businessUnits(),
             'business_unit',
             $data['business_units'],
         );
+
+        return $levels['attached'] !== []
+            || $levels['detached'] !== []
+            || $levels['updated'] !== []
+            || $gradesChanged
+            || $unitsChanged;
     }
 
     /**
-     * Replace a child list of raw corporate strings with the submitted one.
+     * Replace a child list of raw corporate strings with the submitted one,
+     * reporting whether that was a change.
+     *
+     * A list that already reads the same is left alone rather than deleted and
+     * rewritten: the rows keep their ids, and an unchanged save stays a no-op
+     * all the way down. Order does not distinguish two scopes — the lists are
+     * rendered sorted — so the comparison is on the sets.
      *
      * @param  list<string>  $values
      */
-    private function replaceValues(HasMany $relation, string $column, array $values): void
+    private function replaceValues(HasMany $relation, string $column, array $values): bool
     {
+        $current = $relation->pluck($column)->all();
+        sort($current);
+
+        $next = array_values(array_unique($values));
+        sort($next);
+
+        if ($current === $next) {
+            return false;
+        }
+
         $relation->delete();
 
-        if ($values !== []) {
-            $relation->createMany(array_map(fn (string $value) => [$column => $value], $values));
+        if ($next !== []) {
+            $relation->createMany(array_map(fn (string $value) => [$column => $value], $next));
         }
+
+        return true;
     }
 
     /**

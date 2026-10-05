@@ -41,7 +41,19 @@ class DevelopmentModelPackageService
         return DB::transaction(function () use ($package, $data) {
             $package->update($this->attributes($data));
 
-            $this->syncModels($package, $data['models'] ?? []);
+            $modelsChanged = $this->syncModels($package, $data['models'] ?? []);
+
+            /*
+             * The models live in their own table, so a save that only renamed
+             * or re-weighted them changes no column on the package: Eloquent
+             * writes nothing and `updated_at` would stand still. Touched only
+             * when a model actually changed, so re-saving an unchanged form is
+             * still a no-op.
+             */
+            if ($modelsChanged && ! $package->wasChanged()) {
+                $package->touch();
+            }
+
             $this->pinCurrent($package);
 
             return $package;
@@ -211,13 +223,14 @@ class DevelopmentModelPackageService
      * deleted. A row still referenced is never reached: the request rejects the
      * save before this runs.
      */
-    private function syncModels(DevelopmentModelPackage $package, mixed $rows): void
+    private function syncModels(DevelopmentModelPackage $package, mixed $rows): bool
     {
         $existing = DevelopmentModel::where('development_model_package_id', $package->id)
             ->get()
             ->keyBy('id');
 
         $keep = [];
+        $changed = false;
 
         foreach ((array) $rows as $row) {
             $row = (array) $row;
@@ -247,6 +260,7 @@ class DevelopmentModelPackageService
 
             if ($current !== null) {
                 $current->update($attributes);
+                $changed = $current->wasChanged() || $changed;
                 $keep[] = $current->id;
 
                 continue;
@@ -255,11 +269,14 @@ class DevelopmentModelPackageService
             $keep[] = DevelopmentModel::create(
                 $attributes + ['development_model_package_id' => $package->id]
             )->id;
+            $changed = true;
         }
 
-        DevelopmentModel::where('development_model_package_id', $package->id)
+        $removed = DevelopmentModel::where('development_model_package_id', $package->id)
             ->when($keep !== [], fn ($q) => $q->whereNotIn('id', $keep))
             ->delete();
+
+        return $changed || $removed > 0;
     }
 
     private function blankToNull(mixed $value): ?string

@@ -63,7 +63,21 @@ class IdpMasterService
 
             $master->fill($this->attributes($type, $data))->save();
 
-            $this->syncLinks($type, $master, $data, $presentKeys);
+            $linksChanged = $this->syncLinks($type, $master, $data, $presentKeys);
+
+            /*
+             * A master's lists — its business units, its rungs, its
+             * sub-competencies, the programs it links to — live in other
+             * tables, so an edit that only re-points them changes no column
+             * here: Eloquent writes nothing and `updated_at` would stand still
+             * while the master had plainly been edited. Touching it only when
+             * a link ACTUALLY changed keeps the other half of the rule, which
+             * the audit trail below depends on too: re-saving an unchanged
+             * form records nothing.
+             */
+            if ($linksChanged && ! $master->wasChanged()) {
+                $master->touch();
+            }
 
             $this->cascadeRename($type, $previousName, $master->name_en);
 
@@ -251,64 +265,92 @@ class IdpMasterService
      * @param  array<string, mixed>  $data
      * @param  array<int, string>  $presentKeys
      */
-    private function syncLinks(MasterDataType $type, Model $master, array $data, array $presentKeys = []): void
+    private function syncLinks(MasterDataType $type, Model $master, array $data, array $presentKeys = []): bool
     {
+        $changed = false;
+
         if ($type === MasterDataType::CompetencyName) {
             /** @var Competency $master */
 
             // Program links are also editable from the program side, so only
             // touch them when this form actually sent them.
             if ($presentKeys === [] || in_array('related_programs', $presentKeys, true)) {
-                $master->developmentPrograms()->sync($this->intList($data['related_programs'] ?? []));
+                $changed = $this->pivotChanged(
+                    $master->developmentPrograms()->sync($this->intList($data['related_programs'] ?? []))
+                ) || $changed;
             }
 
             // Sub-competencies belong to this form alone, but the same guard
             // applies: a caller that did not send them must not wipe them.
             if ($presentKeys === [] || in_array('sub_competencies', $presentKeys, true)) {
-                $this->syncSubCompetencies($master, $data['sub_competencies'] ?? []);
+                $changed = $this->syncSubCompetencies($master, $data['sub_competencies'] ?? []) || $changed;
             }
 
             if ($presentKeys === [] || in_array('proficiency_levels', $presentKeys, true)) {
-                $this->syncOwnedProficiencyLevels($master, $data['proficiency_levels'] ?? []);
+                $changed = $this->syncOwnedProficiencyLevels($master, $data['proficiency_levels'] ?? [])
+                    || $changed;
             }
 
-            return;
+            return $changed;
         }
 
         if ($type === MasterDataType::CompetencyType) {
             /** @var CompetencyType $master */
-            $this->replaceValues($master->businessUnits(), 'business_unit', $data['business_units'] ?? []);
-
-            return;
+            return $this->replaceValues(
+                $master->businessUnits(),
+                'business_unit',
+                $data['business_units'] ?? [],
+            );
         }
 
         if ($type === MasterDataType::Training) {
             /** @var Training $master */
-            $master->proficiencyLevels()->sync($this->intList($data['proficiency_level_ids'] ?? []));
+            // Each call is made BEFORE the ORs: `||` short-circuits, which
+            // would skip the writes that follow the first change.
+            $levels = $this->pivotChanged(
+                $master->proficiencyLevels()->sync($this->intList($data['proficiency_level_ids'] ?? []))
+            );
 
             // The corporate scope is raw strings, so each list is replaced
             // wholesale — the same way a program's grades are.
-            $this->replaceValues($master->businessUnits(), 'business_unit', $data['business_units'] ?? []);
-            $this->replaceValues($master->workLocations(), 'work_location', $data['work_locations'] ?? []);
+            $units = $this->replaceValues(
+                $master->businessUnits(),
+                'business_unit',
+                $data['business_units'] ?? [],
+            );
+            $sites = $this->replaceValues(
+                $master->workLocations(),
+                'work_location',
+                $data['work_locations'] ?? [],
+            );
 
-            return;
+            return $levels || $units || $sites;
         }
 
         if ($type === MasterDataType::DevelopmentProgram) {
             /** @var DevelopmentProgram $master */
-            $master->competencies()->sync($this->intList($data['related_competencies'] ?? []));
+            $competencies = $this->pivotChanged(
+                $master->competencies()->sync($this->intList($data['related_competencies'] ?? []))
+            );
 
-            $master->grades()->delete();
-            $grades = collect($data['grades'] ?? [])
-                ->map(fn ($grade) => trim((string) $grade))
-                ->filter()
-                ->unique()
-                ->values();
+            $grades = $this->replaceValues($master->grades(), 'grade', $data['grades'] ?? []);
 
-            if ($grades->isNotEmpty()) {
-                $master->grades()->createMany($grades->map(fn ($grade) => ['grade' => $grade])->all());
-            }
+            return $competencies || $grades;
         }
+
+        return $changed;
+    }
+
+    /**
+     * Whether a `sync()` on a pivot actually moved anything.
+     *
+     * @param  array{attached: array<int, mixed>, detached: array<int, mixed>, updated: array<int, mixed>}  $result
+     */
+    private function pivotChanged(array $result): bool
+    {
+        return $result['attached'] !== []
+            || $result['detached'] !== []
+            || $result['updated'] !== [];
     }
 
     /**
@@ -332,11 +374,12 @@ class IdpMasterService
      * Switching a rung on or off is recorded in the same audit log the masters
      * use, so the per-row history reads back the way theirs does.
      */
-    private function syncOwnedProficiencyLevels(Competency $competency, mixed $rows): void
+    private function syncOwnedProficiencyLevels(Competency $competency, mixed $rows): bool
     {
         $existing = $competency->proficiencyLevels()->get()->keyBy('id');
         $keep = [];
         $sequence = 0;
+        $changed = false;
 
         foreach ((array) $rows as $row) {
             $row = (array) $row;
@@ -366,6 +409,7 @@ class IdpMasterService
             if ($level !== null) {
                 $wasActive = (bool) $level->is_active;
                 $level->update($attributes);
+                $changed = $level->wasChanged() || $changed;
 
                 // Only the transition is logged, so re-saving an unchanged
                 // ladder adds nothing.
@@ -380,6 +424,7 @@ class IdpMasterService
                 }
             } else {
                 $level = $competency->proficiencyLevels()->create($attributes);
+                $changed = true;
 
                 // A rung created switched off is a transition worth recording;
                 // one created active is just the default.
@@ -395,12 +440,17 @@ class IdpMasterService
             }
 
             $keep[] = $level->id;
-            $this->syncOwnedKeyBehaviors($level, $row['key_behaviors'] ?? []);
+
+            // A behavior changing under an unchanged rung still means the form
+            // was edited, so it counts.
+            $changed = $this->syncOwnedKeyBehaviors($level, $row['key_behaviors'] ?? []) || $changed;
         }
 
-        $competency->proficiencyLevels()
+        $removed = $competency->proficiencyLevels()
             ->when($keep !== [], fn ($q) => $q->whereNotIn('id', $keep))
             ->delete();
+
+        return $changed || $removed > 0;
     }
 
     /**
@@ -408,11 +458,12 @@ class IdpMasterService
      * themselves — and, like them, ordered by their position in the submitted
      * list rather than by a number the form sends.
      */
-    private function syncOwnedKeyBehaviors(CompetencyProficiencyLevel $level, mixed $rows): void
+    private function syncOwnedKeyBehaviors(CompetencyProficiencyLevel $level, mixed $rows): bool
     {
         $existing = $level->keyBehaviors()->get()->keyBy('id');
         $keep = [];
         $sequence = 0;
+        $changed = false;
 
         foreach ((array) $rows as $row) {
             $row = (array) $row;
@@ -433,17 +484,21 @@ class IdpMasterService
 
             if ($behavior !== null) {
                 $behavior->update($attributes);
+                $changed = $behavior->wasChanged() || $changed;
                 $keep[] = $behavior->id;
 
                 continue;
             }
 
             $keep[] = $level->keyBehaviors()->create($attributes)->id;
+            $changed = true;
         }
 
-        $level->keyBehaviors()
+        $removed = $level->keyBehaviors()
             ->when($keep !== [], fn ($q) => $q->whereNotIn('id', $keep))
             ->delete();
+
+        return $changed || $removed > 0;
     }
 
     /**
@@ -457,10 +512,11 @@ class IdpMasterService
      * deleted. A row with a blank name is dropped: the form's own remove button
      * is how a row goes away, but an unfilled one should not become a record.
      */
-    private function syncSubCompetencies(Competency $competency, mixed $rows): void
+    private function syncSubCompetencies(Competency $competency, mixed $rows): bool
     {
         $existing = $competency->subCompetencies()->get()->keyBy('id');
         $keep = [];
+        $changed = false;
 
         foreach ((array) $rows as $row) {
             $row = (array) $row;
@@ -480,36 +536,58 @@ class IdpMasterService
 
             if ($current !== null) {
                 $current->update($attributes);
+                $changed = $current->wasChanged() || $changed;
                 $keep[] = $current->id;
 
                 continue;
             }
 
             $keep[] = $competency->subCompetencies()->create($attributes)->id;
+            $changed = true;
         }
 
-        $competency->subCompetencies()
+        $removed = $competency->subCompetencies()
             ->when($keep !== [], fn ($q) => $q->whereNotIn('id', $keep))
             ->delete();
+
+        return $changed || $removed > 0;
     }
 
     /**
      * Replace a child list of raw corporate strings with the submitted one,
-     * trimmed and de-duplicated.
+     * trimmed and de-duplicated, reporting whether that was a change.
+     *
+     * A list that already reads the same is left alone rather than deleted and
+     * rewritten: the rows keep their ids, and an unchanged save stays a no-op
+     * all the way down. Order does not distinguish two lists — every screen
+     * renders them sorted — so the comparison is on the sets, and a list whose
+     * order alone differs keeps the order it already had.
      */
-    private function replaceValues(HasMany $relation, string $column, mixed $values): void
+    private function replaceValues(HasMany $relation, string $column, mixed $values): bool
     {
-        $relation->delete();
-
         $clean = collect((array) $values)
             ->map(fn ($value) => trim((string) $value))
             ->filter()
             ->unique()
             ->values();
 
+        $current = $relation->pluck($column)->all();
+        sort($current);
+
+        $next = $clean->all();
+        sort($next);
+
+        if ($current === $next) {
+            return false;
+        }
+
+        $relation->delete();
+
         if ($clean->isNotEmpty()) {
             $relation->createMany($clean->map(fn (string $value) => [$column => $value])->all());
         }
+
+        return true;
     }
 
     /**
