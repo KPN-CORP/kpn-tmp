@@ -43,14 +43,14 @@ class CompetencyController extends Controller
 
     public function index(): Response
     {
-        $competencies = Competency::with(['proficiencyLevels.keyBehaviors', 'subCompetencies'])
+        $competencies = fn () => Competency::with(['proficiencyLevels.keyBehaviors', 'subCompetencies'])
             ->orderBy('name_en')
             ->get()
             ->map(fn (Competency $c) => $this->options->competencyPayload($c));
 
         return Inertia::render('MasterData/Competency', [
             'competencies' => $competencies,
-            'competencyTypes' => $this->options->competencyTypes(),
+            'competencyTypes' => fn () => $this->options->competencyTypes(),
         ]);
     }
 

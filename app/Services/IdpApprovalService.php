@@ -370,7 +370,46 @@ class IdpApprovalService
     /** How big the desk is — everything visible, at every layer. */
     public function pendingCountFor(User $user): int
     {
-        return $this->pendingFor($user)->count();
+        return $this->pendingStepQuery($user)?->count() ?? 0;
+    }
+
+    /**
+     * pendingFor() as a query, for counting without hydrating the approvals,
+     * their plans and their chains. Null when the user has no employee id (and
+     * so cannot sit on any chain).
+     */
+    private function pendingStepQuery(User $user): ?Builder
+    {
+        if (blank($user->employee_id)) {
+            return null;
+        }
+
+        // Qualified: pendingStageCountsFor() joins idp_approvals, which has a
+        // `status` of its own.
+        return IdpApprovalStep::query()
+            ->where('idp_approval_steps.approver_employee_id', $user->employee_id)
+            ->where('idp_approval_steps.status', 'pending')
+            ->whereHas('approval', fn (Builder $q) => $q->where('idp_approvals.status', 'pending'));
+    }
+
+    /**
+     * Pending requests on the desk per stage (planning / result), counted in SQL.
+     *
+     * @return array{planning: int, result: int}
+     */
+    public function pendingStageCountsFor(User $user): array
+    {
+        $counts = $this->pendingStepQuery($user)
+            ?->join('idp_approvals', 'idp_approvals.id', '=', 'idp_approval_steps.idp_approval_id')
+            ->groupBy('idp_approvals.stage')
+            ->selectRaw('idp_approvals.stage, count(*) as total')
+            ->pluck('total', 'stage')
+            ?? collect();
+
+        return [
+            'planning' => (int) ($counts[IdpApproval::STAGE_PLANNING] ?? 0),
+            'result' => (int) ($counts[IdpApproval::STAGE_RESULT] ?? 0),
+        ];
     }
 
     /**
@@ -386,9 +425,16 @@ class IdpApprovalService
             ->values();
     }
 
+    /**
+     * How many requests this user may decide right now — the shell's badge, read
+     * on every page, so it is one COUNT rather than actionableFor()->count().
+     */
     public function actionableCountFor(User $user): int
     {
-        return $this->actionableFor($user)->count();
+        return $this->pendingStepQuery($user)
+            ?->whereHas('approval', fn (Builder $q) => $q
+                ->whereColumn('idp_approvals.current_level', 'idp_approval_steps.level'))
+            ->count() ?? 0;
     }
 
     /**

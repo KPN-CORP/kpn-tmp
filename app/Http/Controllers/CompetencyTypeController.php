@@ -25,10 +25,10 @@ class CompetencyTypeController extends Controller
     public function index(): Response
     {
         return Inertia::render('MasterData/CompetencyType', [
-            'competencyTypes' => $this->options->competencyTypes(),
+            'competencyTypes' => fn () => $this->options->competencyTypes(),
             // The corporate business-unit master — the only source for what
             // units exist (see App\Models\BusinessUnit).
-            'businessUnits' => $this->corporate->businessUnits(),
+            'businessUnits' => fn () => $this->corporate->businessUnits(),
         ]);
     }
 }

@@ -25,6 +25,11 @@ const props = defineProps<{
     from?: number | null
     to?: number | null
     perPageOptions?: number[]
+    /**
+     * Server mode: the props a page link reloads (an Inertia partial reload).
+     * Omitted, a page change re-renders every prop, shared ones included.
+     */
+    only?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -158,6 +163,8 @@ function goTo(p: number | '…') {
             <!-- ===================== Server mode ===================== -->
             <template v-if="serverMode">
                 <Link
+                    :only="only"
+                    preserve-scroll
                     :href="prev?.url ?? ''"
                     class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border border-border bg-white px-3 text-sm text-slate-600 transition hover:bg-slate-50"
                     :class="{ 'pointer-events-none opacity-40': !prev?.url }"
@@ -167,6 +174,8 @@ function goTo(p: number | '…') {
                 </Link>
 
                 <Link
+                    :only="only"
+                    preserve-scroll
                     v-for="link in linkPages"
                     :key="link.label"
                     :href="link.url ?? ''"
@@ -181,6 +190,8 @@ function goTo(p: number | '…') {
                 />
 
                 <Link
+                    :only="only"
+                    preserve-scroll
                     :href="next?.url ?? ''"
                     class="inline-flex h-9 min-w-9 items-center justify-center rounded-md border border-border bg-white px-3 text-sm text-slate-600 transition hover:bg-slate-50"
                     :class="{ 'pointer-events-none opacity-40': !next?.url }"

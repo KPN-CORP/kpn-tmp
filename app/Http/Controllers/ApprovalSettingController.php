@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ReadsPerPage;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Requests\UpdateApprovalSuperiorRequest;
 use App\Imports\ApprovalLayerImport;
@@ -10,6 +11,7 @@ use App\Models\ApprovalSuperiorHistory;
 use App\Models\BusinessUnit;
 use App\Models\Employee;
 use App\Services\EmployeeScopeService;
+use App\Support\AccessCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -26,6 +28,7 @@ use Maatwebsite\Excel\Facades\Excel;
  */
 class ApprovalSettingController extends Controller
 {
+    use ReadsPerPage;
     use ReadsSort;
 
     public function __construct(private readonly EmployeeScopeService $scope) {}
@@ -42,7 +45,7 @@ class ApprovalSettingController extends Controller
 
         $employees = $this->filteredQuery($user, $filters)
             ->orderBy($sort['key'], $sort['dir'])
-            ->paginate((int) $request->integer('per_page', 25))
+            ->paginate($this->perPage($request, 25))
             ->withQueryString();
 
         // Load saved overrides for just this page's employees.
@@ -80,7 +83,9 @@ class ApprovalSettingController extends Controller
             'employees' => $employees,
             'filters' => $filters,
             'sort' => $sort,
-            'filterOptions' => $this->filterOptions($user),
+            // Depends on the scope, not the filters, so a search/sort/page
+            // reload (`only: [...]`) skips it.
+            'filterOptions' => fn () => $this->filterOptions($user),
         ]);
     }
 
@@ -164,6 +169,9 @@ class ApprovalSettingController extends Controller
             'created_at' => now(),
         ]);
 
+        // Whether an approver "has a team" is cached for the shell's menu.
+        AccessCache::flush();
+
         return back()->with('success', 'Approval layers updated successfully.');
     }
 
@@ -227,6 +235,7 @@ class ApprovalSettingController extends Controller
 
         $import = new ApprovalLayerImport($request->user()->id, $request->user()->name);
         Excel::import($import, $request->file('file'));
+        AccessCache::flush();
 
         $message = "Imported {$import->imported()} employee layer(s).";
         if ($import->errors()) {

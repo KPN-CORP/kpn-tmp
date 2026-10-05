@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exports\ReportExport;
+use App\Http\Controllers\Concerns\ReadsPerPage;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Models\BusinessUnit;
 use App\Models\Employee;
@@ -25,6 +26,7 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
  */
 class ReportController extends Controller
 {
+    use ReadsPerPage;
     use ReadsSort;
 
     /**
@@ -54,7 +56,7 @@ class ReportController extends Controller
         $rows = $this->filteredQuery($user, $filters)
             ->with($this->eagerLoads($filters['year'], $canTalent, $canIdp))
             ->orderBy($sort['key'], $sort['dir'])
-            ->paginate((int) $request->integer('per_page', 10))
+            ->paginate($this->perPage($request))
             ->withQueryString()
             ->through(fn (Employee $employee) => $this->reportRow($employee, $canTalent, $canIdp));
 
@@ -62,8 +64,10 @@ class ReportController extends Controller
             'rows' => $rows,
             'filters' => $filters,
             'sort' => $sort,
-            'filterOptions' => $this->filterOptions($user),
-            'availableYears' => $this->availableYears(),
+            // Neither depends on the filters, so a search/sort/page reload
+            // (`only: [...]`) skips both.
+            'filterOptions' => fn () => $this->filterOptions($user),
+            'availableYears' => fn () => $this->availableYears(),
             'can' => ['talent' => $canTalent, 'idp' => $canIdp],
         ]);
     }
@@ -108,7 +112,8 @@ class ReportController extends Controller
     {
         return [
             'search' => $request->string('search')->trim()->value(),
-            'year' => $request->string('year')->value(),
+            // A four-digit year or nothing: it becomes a date range below.
+            'year' => preg_match('/^\d{4}$/', $request->string('year')->value()) ? $request->string('year')->value() : '',
             'business_unit' => $request->string('business_unit')->value(),
             'job_level' => $request->string('job_level')->value(),
             'designation' => $request->string('designation')->value(),
@@ -154,7 +159,9 @@ class ReportController extends Controller
         if ($canIdp) {
             $loads['developmentPlans'] = function ($q) use ($year) {
                 if ($year !== '') {
-                    $q->whereYear('time_frame_end', $year);
+                    // A range rather than whereYear(): YEAR(col) hides the
+                    // column from its index.
+                    $q->whereBetween('time_frame_end', ["{$year}-01-01", "{$year}-12-31"]);
                 }
             };
         }

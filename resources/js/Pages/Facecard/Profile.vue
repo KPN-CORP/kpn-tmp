@@ -101,17 +101,18 @@ const props = defineProps<{
     canViewIdp: boolean
     canDownloadIdp: boolean
     // IDP tab (rendered inline via IdpPanel) — the same payload the manage
-    // screen gets, including the two-stage workflow state.
-    developmentModels: any[]
-    options: {
+    // screen gets, including the two-stage workflow state. Absent when the
+    // viewer may not see this employee's IDP (canViewIdp is false).
+    developmentModels?: any[]
+    options?: {
         competencyTypes: MasterOption[]
         competencyNames: MasterOption[]
         developmentPrograms: MasterOption[]
         reviewTools: MasterOption[]
     }
-    competencyMap: Record<string, Array<MasterOption & { model_id: number | null }>>
-    planning: PlanningState
-    progress: StageProgress
+    competencyMap?: Record<string, Array<MasterOption & { model_id: number | null }>>
+    planning?: PlanningState
+    progress?: StageProgress
 }>()
 
 const emp = props.employee.data
@@ -587,7 +588,7 @@ function deletePhoto() {
         <!-- ===== End Face Card tab ===== -->
 
         <!-- ===== Individual Development Plan tab ===== -->
-        <div v-show="tab === 'idp'">
+        <div v-if="canViewIdp && developmentModels && options && competencyMap && planning && progress" v-show="tab === 'idp'">
             <IdpPanel
                 :employee="{ employee_id: emp.employee_id, fullname: emp.fullname, designation_name: emp.designation_name }"
                 :development-models="developmentModels"

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\UnitOfMeasurement;
+use App\Http\Controllers\Concerns\ReadsPerPage;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Requests\ActOnIdpApprovalRequest;
 use App\Http\Requests\SubmitIdpResultRequest;
@@ -37,6 +38,7 @@ use Inertia\Response;
  */
 class IdpApprovalController extends Controller
 {
+    use ReadsPerPage;
     use ReadsSort;
 
     /**
@@ -78,7 +80,7 @@ class IdpApprovalController extends Controller
      */
     public function submitPlanning(Request $request, string $employeeId): RedirectResponse
     {
-        abort_unless($this->scope->canView($request->user(), $employeeId), 403);
+        abort_unless($this->scope->canManageIdp($request->user(), $employeeId), 403);
 
         $package = $this->stage->currentPackage();
 
@@ -104,7 +106,7 @@ class IdpApprovalController extends Controller
      */
     public function saveResult(SubmitIdpResultRequest $request, IndividualDevelopmentPlan $idp): RedirectResponse
     {
-        abort_unless($this->scope->canView($request->user(), $idp->employee_id), 403);
+        abort_unless($this->scope->canManageIdp($request->user(), $idp->employee_id), 403);
 
         if (! $idp->isPlanningApproved()) {
             return back()->with('error', 'The planning for this program has not been approved yet, so its result cannot be filed.');
@@ -142,7 +144,7 @@ class IdpApprovalController extends Controller
      */
     public function submitResult(Request $request, IndividualDevelopmentPlan $idp): RedirectResponse
     {
-        abort_unless($this->scope->canView($request->user(), $idp->employee_id), 403);
+        abort_unless($this->scope->canManageIdp($request->user(), $idp->employee_id), 403);
 
         try {
             $this->approvals->submitResult($idp, $request->user());
@@ -160,7 +162,7 @@ class IdpApprovalController extends Controller
      */
     public function submitAllResults(Request $request, string $employeeId): RedirectResponse
     {
-        abort_unless($this->scope->canView($request->user(), $employeeId), 403);
+        abort_unless($this->scope->canManageIdp($request->user(), $employeeId), 403);
 
         $plans = IndividualDevelopmentPlan::where('employee_id', $employeeId)
             ->whereNotNull('planning_approved_at')
@@ -298,7 +300,7 @@ class IdpApprovalController extends Controller
             )
             ->values();
 
-        $perPage = max(1, (int) $request->integer('per_page', 25));
+        $perPage = $this->perPage($request, 25);
         $page = LengthAwarePaginator::resolveCurrentPage();
 
         $items = new LengthAwarePaginator(
@@ -347,14 +349,7 @@ class IdpApprovalController extends Controller
      */
     private function pendingStageTotals(User $user): array
     {
-        $stages = $this->approvals->pendingFor($user)
-            ->map(fn ($step) => $step->approval?->stage)
-            ->filter();
-
-        return [
-            'planning' => $stages->filter(fn ($stage) => $stage === IdpApproval::STAGE_PLANNING)->count(),
-            'result' => $stages->filter(fn ($stage) => $stage === IdpApproval::STAGE_RESULT)->count(),
-        ];
+        return $this->approvals->pendingStageCountsFor($user);
     }
 
     /**

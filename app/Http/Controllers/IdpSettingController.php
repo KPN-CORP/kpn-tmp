@@ -34,13 +34,18 @@ class IdpSettingController extends Controller
      */
     public function index(): Response
     {
-        [$packages, $activePackageId] = $this->packages->listData();
+        // Every prop is a closure, so a save that reloads only what it changed
+        // skips the rest. The package list feeds two of them; read it once.
+        $list = null;
+        $listData = function () use (&$list) {
+            return $list ??= $this->packages->listData();
+        };
 
         return Inertia::render('Idp/Settings', [
-            'packages' => $packages,
-            'activePackageId' => $activePackageId,
-            'developmentModels' => $this->packages->models(),
-            'competencies' => $this->options->competencies(
+            'packages' => fn () => $listData()[0],
+            'activePackageId' => fn () => $listData()[1],
+            'developmentModels' => fn () => $this->packages->models(),
+            'competencies' => fn () => $this->options->competencies(
                 fn (Competency $c) => [
                     'description_en' => $c->description_en,
                     'description_id' => $c->description_id,
@@ -52,20 +57,20 @@ class IdpSettingController extends Controller
                 ],
                 ['proficiencyLevels', 'developmentPrograms:id,name_en'],
             ),
-            'competencyTypes' => $this->options->competencyTypes(),
-            'proficiencyLevels' => $this->options->proficiencyLevels(),
+            'competencyTypes' => fn () => $this->options->competencyTypes(),
+            'proficiencyLevels' => fn () => $this->options->proficiencyLevels(),
             // The master-implementation map drives the program form's
             // proficiency + grade pickers: a program may only target a level
             // some implementation maps its competencies to, and only the
             // grades that mapping covers.
-            'implementations' => $this->options->implementationScopes(),
+            'implementations' => fn () => $this->options->implementationScopes(),
             // A program's name is either typed or taken from Master Training,
             // so the form needs the catalogue to pick from. The active flag
             // rides on the option; the form keeps an inactive training listed
             // only while a program already points at it.
-            'trainings' => $this->options->trainings(),
-            'grades' => $this->corporate->grades(),
-            'developmentPrograms' => $this->options->developmentPrograms(),
+            'trainings' => fn () => $this->options->trainings(),
+            'grades' => fn () => $this->corporate->grades(),
+            'developmentPrograms' => fn () => $this->options->developmentPrograms(),
         ]);
     }
 
@@ -90,7 +95,7 @@ class IdpSettingController extends Controller
     public function reviewTools(): Response
     {
         return Inertia::render('Idp/ReviewTools', [
-            'reviewTools' => $this->options->options(
+            'reviewTools' => fn () => $this->options->options(
                 MasterDataType::ReviewTools->query()->orderBy('name_en')->get()
             ),
         ]);
@@ -102,7 +107,9 @@ class IdpSettingController extends Controller
      */
     public function masterTraining(): Response
     {
-        $trainings = Training::with(['proficiencyLevels:id', 'businessUnits', 'workLocations'])
+        // Closures, so a partial reload after a save or toggle (`only:
+        // ['trainings']`) skips the corporate location reads and the option lists.
+        $trainings = fn () => Training::with(['proficiencyLevels:id', 'businessUnits', 'workLocations'])
             ->orderBy('name_en')
             ->get()
             ->map(fn (Training $t) => $this->options->option($t) + [
@@ -117,21 +124,19 @@ class IdpSettingController extends Controller
                 'work_locations' => $t->workLocations->pluck('work_location')->all(),
             ]);
 
-        $locations = $this->corporate->workLocations();
-
         return Inertia::render('Idp/MasterTraining', [
             'trainings' => $trainings,
-            'competencyTypes' => $this->options->competencyTypes(),
+            'competencyTypes' => fn () => $this->options->competencyTypes(),
             // Competencies carry their type so the form can cascade
             // (type -> competency); the active flag rides on the option and is
             // what keeps inactive competencies off the list.
-            'competencies' => $this->options->competencies(),
+            'competencies' => fn () => $this->options->competencies(),
             // Every proficiency level in the app, each carrying the competency
             // that owns it — that is what the form scopes the picker by, since
             // a training targets rungs of the competency it builds.
-            'proficiencyLevels' => $this->options->proficiencyLevels(),
-            'businessUnits' => $locations['businessUnits'],
-            'workLocationsByBu' => $locations['byBusinessUnit'],
+            'proficiencyLevels' => fn () => $this->options->proficiencyLevels(),
+            'businessUnits' => fn () => $this->corporate->workLocations()['businessUnits'],
+            'workLocationsByBu' => fn () => $this->corporate->workLocations()['byBusinessUnit'],
         ]);
     }
 }

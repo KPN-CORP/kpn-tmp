@@ -111,6 +111,9 @@ function reload(extra: Record<string, unknown> = {}) {
         preserveState: true,
         preserveScroll: true,
         replace: true,
+        // The filter options, the years and the shared shell data do not change
+        // with a search, sort or page; skip recomputing them.
+        only: ['rows', 'filters', 'sort'],
     })
 }
 
@@ -311,6 +314,7 @@ function exportUrl(reportName: 'talent_report' | 'idp_progress'): string {
 
         <Pagination
             :links="rows.links"
+            :only="['rows', 'filters', 'sort']"
             :per-page="rows.per_page"
             :total="rows.total"
             :from="rows.from"

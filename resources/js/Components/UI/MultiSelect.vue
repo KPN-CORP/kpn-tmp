@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 /**
  * Searchable multi-select. Binds a string[] of values; selected items show as
@@ -38,12 +38,22 @@ const props = defineProps<{
     clearAllLabel?: string
 }>()
 
-const emit = defineEmits<{ (e: 'update:modelValue', value: string[]): void }>()
+const emit = defineEmits<{
+    (e: 'update:modelValue', value: string[]): void
+    /**
+     * What is typed in the search box, as it changes (and '' on opening). A
+     * parent that fetches options from the server listens to this and swaps
+     * `options`; the local filter then just narrows what came back.
+     */
+    (e: 'search', value: string): void
+}>()
 
 const open = ref(false)
 const search = ref('')
 const root = ref<HTMLElement | null>(null)
 const searchRef = ref<HTMLInputElement | null>(null)
+
+watch(search, (value) => emit('search', value))
 
 const selectedOptions = computed(() =>
     props.modelValue.map((v) => props.options.find((o) => o.value === v) ?? { value: v, label: v }),

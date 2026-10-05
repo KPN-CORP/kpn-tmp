@@ -7,6 +7,7 @@ use App\Exports\Templates\CompetencyTypeTemplateExport;
 use App\Exports\Templates\DevelopmentProgramTemplateExport;
 use App\Exports\Templates\ReviewToolTemplateExport;
 use App\Exports\Templates\TrainingTemplateExport;
+use App\Http\Controllers\Concerns\ReadsPerPage;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Imports\CompetencyAssessmentImport;
 use App\Imports\CompetencyImport;
@@ -23,6 +24,7 @@ use App\Services\Idp\Rules\ProgramMasterRules;
 use App\Services\Idp\Rules\TrainingMasterRules;
 use App\Services\IdpMasterService;
 use App\Services\MatrixGradeService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -35,6 +37,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ImportController extends Controller
 {
+    use ReadsPerPage;
     use ReadsSort;
 
     /**
@@ -85,9 +88,10 @@ class ImportController extends Controller
                     'template' => isset(self::TEMPLATES[$value]),
                 ])->values(),
             'sort' => ['key' => $sort['key'], 'dir' => $dir],
-            'logs' => ImportLog::with('user:id,name')
+            'logs' => $this->visibleLogs($request->user())
+                ->with('user:id,name')
                 ->orderBy($sort['key'], $dir)
-                ->paginate((int) $request->integer('per_page', 10))
+                ->paginate($this->perPage($request))
                 ->withQueryString(),
         ]);
     }
@@ -177,8 +181,9 @@ class ImportController extends Controller
         return Excel::download($export, $type.'_import_template.xlsx');
     }
 
-    public function download(ImportLog $log): StreamedResponse
+    public function download(Request $request, ImportLog $log): StreamedResponse
     {
+        abort_unless($this->canSeeLog($request->user(), $log), 404);
         abort_unless($log->original_file_path && Storage::disk('local')->exists($log->original_file_path), 404);
 
         $name = Str::of($log->data_type)->slug('_').'_'.$log->id.'.xlsx';
@@ -186,8 +191,10 @@ class ImportController extends Controller
         return Storage::disk('local')->download($log->original_file_path, $name);
     }
 
-    public function destroy(ImportLog $log): RedirectResponse
+    public function destroy(Request $request, ImportLog $log): RedirectResponse
     {
+        abort_unless($this->canSeeLog($request->user(), $log), 404);
+
         $this->deleteFiles($log);
         $log->delete();
 
@@ -213,6 +220,66 @@ class ImportController extends Controller
             ->filter(fn (array $type) => (bool) $user?->can($type['permission']))
             ->map(fn (array $type) => $type['label'])
             ->all();
+    }
+
+    /**
+     * Data types that still have logs but are not offered for upload here, with
+     * the permission that covers them: the single-employee IDP upload (written by
+     * IdpController::import), and the types whose Pending-only importers were
+     * withdrawn but whose old logs remain.
+     *
+     * @var array<string, string>
+     */
+    private const LOG_ONLY_TYPES = [
+        'idp' => 'import_idp',
+        'data_master' => 'import_data_master',
+        'talent_box' => 'import_talent_box',
+        'proposed_grade' => 'import_proposed_grade',
+        'succession' => 'import_succession',
+    ];
+
+    /**
+     * Data types whose logs this user may see even when someone else uploaded
+     * them: the ones whose import permission they hold.
+     *
+     * @return list<string>
+     */
+    private function logTypesFor(User $user): array
+    {
+        $types = array_keys($this->dataTypesFor($user));
+
+        foreach (self::LOG_ONLY_TYPES as $type => $permission) {
+            if ($user->can($permission)) {
+                $types[] = $type;
+            }
+        }
+
+        return $types;
+    }
+
+    /**
+     * The logs this user may list, download and delete: their own uploads, plus
+     * every upload of a data type they may import. A log holds the uploaded
+     * spreadsheet, so holding `view_import_center` alone must not expose other
+     * people's files.
+     */
+    private function visibleLogs(User $user): Builder
+    {
+        $types = $this->logTypesFor($user);
+
+        return ImportLog::query()->where(function (Builder $q) use ($user, $types) {
+            $q->where('user_id', $user->id);
+
+            if ($types !== []) {
+                $q->orWhereIn('data_type', $types);
+            }
+        });
+    }
+
+    private function canSeeLog(User $user, ImportLog $log): bool
+    {
+        return (int) $log->user_id === (int) $user->id
+            || in_array($log->data_type, $this->logTypesFor($user), true);
     }
 
     private function deleteFiles(ImportLog $log): void

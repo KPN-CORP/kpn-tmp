@@ -7,7 +7,9 @@ use App\Models\Employee;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
+use App\Support\AccessCache;
 use App\Support\PermissionDomain;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -26,7 +28,11 @@ class RoleController extends Controller
 
     public function index(): Response
     {
-        $roles = Role::with('permissions:id,name')->orderBy('name')->get()
+        $roleModels = Role::with('permissions:id,name')->orderBy('name')->get();
+        // Data-access roles auto-apply by scope, so they carry no member list.
+        $membersByRole = $this->membersByRole($roleModels->reject(fn (Role $role) => $role->is_data_access));
+
+        $roles = $roleModels
             ->map(fn (Role $role) => [
                 'id' => $role->id,
                 'name' => $role->name,
@@ -34,12 +40,11 @@ class RoleController extends Controller
                 'company' => $role->company ?? [],
                 'location' => $role->location ?? [],
                 'permissions' => $role->permissions->pluck('name'),
-                // Data-access roles auto-apply by scope, so they carry no member
-                // list; basic roles list their assigned members.
-                'members' => $role->is_data_access
-                    ? []
-                    : User::whereIn((new User)->getKeyName(), $this->userIdsWithRole($role))
-                        ->pluck('employee_id')->filter()->values(),
+                // Basic roles list their assigned members (employee ids, which
+                // the form posts back), plus a label for each so the picker can
+                // name them without shipping every user.
+                'members' => collect($membersByRole[$role->id] ?? [])->pluck('value')->values(),
+                'member_options' => array_values($membersByRole[$role->id] ?? []),
                 'protected' => $this->isProtected($role),
                 'default' => $this->isDefaultRole($role),
                 'is_data_access' => (bool) $role->is_data_access,
@@ -68,10 +73,74 @@ class RoleController extends Controller
                     'section' => $p->section ?? '',
                 ])->values(),
             'scopeOptions' => $this->scopeOptions(),
-            'users' => User::whereNotNull('employee_id')->orderBy('name')
-                ->get(['employee_id', 'name'])
-                ->map(fn ($u) => ['value' => $u->employee_id, 'label' => "{$u->name} ({$u->employee_id})"]),
         ]);
+    }
+
+    /**
+     * Live search for the member picker. The user table holds every corporate
+     * account (thousands), so it is searched on demand rather than shipped
+     * with the page.
+     */
+    public function searchUsers(Request $request): JsonResponse
+    {
+        $term = trim((string) $request->query('q', ''));
+
+        $users = User::whereNotNull('employee_id')
+            ->when($term !== '', fn ($query) => $query->where(fn ($q) => $q
+                ->where('employee_id', 'like', "%{$term}%")
+                ->orWhere('name', 'like', "%{$term}%")))
+            ->orderBy('name')
+            ->limit(30)
+            ->get(['employee_id', 'name']);
+
+        return response()->json($users->map(fn (User $u) => $this->memberOption($u))->values());
+    }
+
+    /** @return array{value: string, label: string} */
+    private function memberOption(User $user): array
+    {
+        return ['value' => (string) $user->employee_id, 'label' => "{$user->name} ({$user->employee_id})"];
+    }
+
+    /**
+     * Every given role's members as picker options, keyed by role id — read in
+     * two queries (one pivot read, one user read) rather than two per role. The
+     * pivot is on the shared permission DB, where each round trip is slow.
+     *
+     * @param  Collection<int, Role>  $roles
+     * @return array<int|string, array<int, array{value: string, label: string}>>
+     */
+    private function membersByRole(Collection $roles): array
+    {
+        if ($roles->isEmpty()) {
+            return [];
+        }
+
+        $roleKey = config('permission.column_names.role_pivot_key') ?: 'role_id';
+        $modelKey = config('permission.column_names.model_morph_key');
+
+        $pivot = DB::connection($roles->first()->getConnectionName())
+            ->table(config('permission.table_names.model_has_roles'))
+            ->whereIn($roleKey, $roles->modelKeys())
+            ->where('model_type', (new User)->getMorphClass())
+            ->get([$roleKey, $modelKey]);
+
+        $users = User::whereIn((new User)->getKeyName(), $pivot->pluck($modelKey)->unique())
+            ->whereNotNull('employee_id')
+            ->orderBy('name')
+            ->get([(new User)->getKeyName(), 'employee_id', 'name'])
+            ->keyBy(fn (User $u) => $u->getKey());
+
+        $userIdsByRole = $pivot->groupBy($roleKey)
+            ->map(fn (Collection $rows) => $rows->pluck($modelKey)->flip());
+
+        return $roles->mapWithKeys(fn (Role $role) => [
+            $role->id => $users
+                ->filter(fn (User $u) => isset($userIdsByRole[$role->id][$u->getKey()]))
+                ->map(fn (User $u) => $this->memberOption($u))
+                ->values()
+                ->all(),
+        ])->all();
     }
 
     /**
@@ -119,6 +188,9 @@ class RoleController extends Controller
             $this->syncMembers($role, $data['members'] ?? []);
         }
 
+        // Cached permission names and data-access roles are now stale.
+        AccessCache::flush();
+
         return back()->with('success', "Role \"{$role->name}\" created.");
     }
 
@@ -144,6 +216,9 @@ class RoleController extends Controller
             $this->syncMembers($role, $data['members'] ?? []);
         }
 
+        // Cached permission names and data-access roles are now stale.
+        AccessCache::flush();
+
         return back()->with('success', "Role \"{$role->name}\" updated.");
     }
 
@@ -161,6 +236,9 @@ class RoleController extends Controller
         }
 
         $role->delete();
+
+        // Cached permission names and data-access roles are now stale.
+        AccessCache::flush();
 
         return back()->with('success', 'Role deleted.');
     }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Head, Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -140,7 +140,7 @@ function reload() {
             direction: props.sort.dir,
             per_page: state.per_page,
         },
-        { preserveState: true, preserveScroll: true, replace: true },
+        { preserveState: true, preserveScroll: true, replace: true, only: ['employees', 'filters', 'sort'] },
     )
 }
 
@@ -156,7 +156,7 @@ function changeSort(sort: Sort) {
             direction: sort.dir,
             per_page: state.per_page,
         },
-        { preserveState: true, preserveScroll: true, replace: true },
+        { preserveState: true, preserveScroll: true, replace: true, only: ['employees', 'filters', 'sort'] },
     )
 }
 
@@ -236,6 +236,8 @@ function pollStatus(jobId: string) {
         try {
             const res = await fetch(route('idp.bulk_status', jobId), { headers: { Accept: 'application/json' } })
             const data = await res.json()
+            // Stopped — or the page was left — while this request was in flight.
+            if (poll === undefined) return
             bulk.progress = data.progress ?? 0
             if (data.error) {
                 bulk.error = data.error
@@ -253,8 +255,13 @@ function pollStatus(jobId: string) {
 
 function stopBulk() {
     clearInterval(poll)
+    poll = undefined
     bulk.running = false
 }
+
+// Leaving the page must stop the polling; otherwise it keeps running and can
+// still redirect to the zip from whatever page the user moved on to.
+onBeforeUnmount(stopBulk)
 
 </script>
 
@@ -384,6 +391,7 @@ function stopBulk() {
 
         <Pagination
             :links="employees.links"
+            :only="['employees', 'filters', 'sort']"
             :per-page="employees.per_page"
             :total="employees.total"
             :from="employees.from"

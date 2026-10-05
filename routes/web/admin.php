@@ -25,6 +25,7 @@ Route::prefix('user-guide')->name('user_guide.')->group(function () {
 Route::middleware('permission:view_admin_setting')
     ->prefix('admin/roles')->name('roles.')->group(function () {
         Route::get('/', [RoleController::class, 'index'])->name('index');
+        Route::get('users', [RoleController::class, 'searchUsers'])->name('users');
         Route::post('/', [RoleController::class, 'store'])->name('store');
         Route::put('{role}', [RoleController::class, 'update'])->name('update');
         Route::delete('{role}', [RoleController::class, 'destroy'])->name('destroy');

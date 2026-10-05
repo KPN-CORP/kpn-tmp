@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Exports\IdpExport;
 use App\Exports\Templates\IdpPlanTemplateExport;
+use App\Http\Controllers\Concerns\ReadsPerPage;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Requests\StoreIndividualDevelopmentPlanRequest;
 use App\Http\Requests\UpdateIndividualDevelopmentPlanRequest;
@@ -41,10 +42,11 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class IdpController extends Controller
 {
+    use ReadsPerPage;
     use ReadsSort;
 
     /** Data Access capability pairs: [self permission (IC), team permission (PM)]. */
-    private const IDP_VIEW = ['ic_view_idp', 'pm_view_idp'];
+    private const IDP_VIEW = EmployeeScopeService::IDP_VIEW;
 
     private const IDP_DOWNLOAD = ['ic_download_idp', 'pm_download_idp'];
 
@@ -76,7 +78,7 @@ class IdpController extends Controller
 
         $employees = $this->filteredQuery(clone $base, $filters)
             ->orderBy($sort['key'], $sort['dir'])
-            ->paginate((int) $request->integer('per_page', 10))
+            ->paginate($this->perPage($request))
             ->withQueryString()
             ->through(fn ($employee) => (new EmployeeResource($employee))->resolve());
 
@@ -90,7 +92,9 @@ class IdpController extends Controller
             'employees' => $employees,
             'filters' => $filters,
             'sort' => $sort,
-            'filterOptions' => $this->filterOptions(clone $base),
+            // Depends on the scope, not the filters, so a search/sort/page
+            // reload (`only: [...]`) skips it.
+            'filterOptions' => fn () => $this->filterOptions(clone $base),
         ]);
     }
 
@@ -316,9 +320,9 @@ class IdpController extends Controller
      */
     public function downloadTemplate(Request $request, string $employeeId): BinaryFileResponse
     {
-        abort_unless($this->scope->canView($request->user(), $employeeId), 403);
+        abort_unless($this->scope->canManageIdp($request->user(), $employeeId), 403);
 
-        $employee = $this->scope->query($request->user())->where('employee_id', $employeeId)->first();
+        $employee = Employee::where('employee_id', $employeeId)->first();
         $safeName = $employee ? Str::slug($employee->fullname ?? $employeeId, '_') : $employeeId;
 
         // Generated, not a file on disk: the columns then always match what the
@@ -370,7 +374,7 @@ class IdpController extends Controller
     public function import(Request $request, string $employeeId): RedirectResponse
     {
         $user = $request->user();
-        abort_unless($this->scope->canView($user, $employeeId), 403);
+        abort_unless($this->scope->canManageIdp($user, $employeeId), 403);
 
         $request->validate([
             'idp_file' => ['required', 'file', 'mimes:xlsx,xls', 'max:10240'],
@@ -513,7 +517,7 @@ class IdpController extends Controller
         $user = $request->user();
         $employeeId = $request->validated('employee_id');
 
-        abort_unless($this->scope->canView($user, $employeeId), 403);
+        abort_unless($this->scope->canManageIdp($user, $employeeId), 403);
 
         $data = $request->validated();
 
@@ -545,7 +549,7 @@ class IdpController extends Controller
      */
     public function update(UpdateIndividualDevelopmentPlanRequest $request, IndividualDevelopmentPlan $idp): RedirectResponse
     {
-        abort_unless($this->scope->canView($request->user(), $idp->employee_id), 403);
+        abort_unless($this->scope->canManageIdp($request->user(), $idp->employee_id), 403);
 
         // Read before the save: a change of development model can move the row
         // to another package, and BOTH sets then stop describing what was
@@ -578,7 +582,7 @@ class IdpController extends Controller
 
     public function destroy(Request $request, IndividualDevelopmentPlan $idp): RedirectResponse
     {
-        abort_unless($this->scope->canView($request->user(), $idp->employee_id), 403);
+        abort_unless($this->scope->canManageIdp($request->user(), $idp->employee_id), 403);
 
         $packageId = $this->stage->packageIdFor($idp);
 

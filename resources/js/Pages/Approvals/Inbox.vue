@@ -92,7 +92,7 @@ function reload(sort: Sort = props.sort, view: string = props.view) {
             direction: sort.dir,
             per_page: state.per_page,
         },
-        { preserveState: true, preserveScroll: true, replace: true },
+        { preserveState: true, preserveScroll: true, replace: true, except: ['unitsOfMeasurement', 'permissions'] },
     )
 }
 

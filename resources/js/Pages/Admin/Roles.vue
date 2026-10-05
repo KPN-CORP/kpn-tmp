@@ -7,6 +7,7 @@ import Drawer from '@/Components/Domain/Drawer.vue'
 import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
+import UserMultiSelect from '@/Components/Domain/UserMultiSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
@@ -21,6 +22,8 @@ interface Role {
     location: string[]
     permissions: string[]
     members: string[]
+    /** The members as picker options — `members` with a label each. */
+    member_options: Option[]
     protected: boolean
     default: boolean
     is_data_access: boolean
@@ -37,7 +40,6 @@ const props = defineProps<{
     permissionGroups: Record<string, Perm[]>
     dataAccessPermissions: Perm[]
     scopeOptions: { businessUnits: string[]; companies: string[]; locations: string[] }
-    users: Option[]
 }>()
 
 // --- Page tabs: basic permissions vs data access ---
@@ -110,12 +112,16 @@ function blankRole(): RoleFormData {
 }
 
 const form = useForm<RoleFormData>(blankRole())
+// Labels for the members the open role already has; everyone else is found by
+// the picker's live search.
+const memberOptions = ref<Option[]>([])
 
 // Loads the values as both the form data and its defaults, so `isDirty` — which
 // drives the discard prompt — measures this sitting's edits (see `seedForm`).
 function openCreate() {
     editingId.value = null
     editingDefault.value = false
+    memberOptions.value = []
     seedForm(form, { ...blankRole(), is_data_access: pageTab.value === 'data' })
     permissionSearch.value = ''
     roleModal.value = true
@@ -124,6 +130,7 @@ function openCreate() {
 function openEdit(role: Role) {
     editingId.value = role.id
     editingDefault.value = role.default
+    memberOptions.value = role.member_options
     seedForm(form, {
         name: role.name,
         business_unit: [...role.business_unit],
@@ -465,7 +472,7 @@ function scopeChips(role: Role): string[] {
                             </span>
                         </div>
                         <div class="p-3">
-                            <MultiSelect v-model="form.members" :options="users" :placeholder="t.roles.searchUsers" />
+                            <UserMultiSelect v-model="form.members" :selected="memberOptions" :placeholder="t.roles.searchUsers" />
                             <p class="mt-2 text-xs text-slate-400">{{ t.roles.membersHint }}</p>
                         </div>
                     </div>

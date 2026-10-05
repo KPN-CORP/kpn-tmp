@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Services\CorporateScopeService;
+use App\Services\EmployeeScopeService;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -18,6 +19,10 @@ class AppServiceProvider extends ServiceProvider
         // checking a submitted scope against them. One instance per request is
         // what makes its memoization worth anything.
         $this->app->singleton(CorporateScopeService::class);
+
+        // Scoped, not singleton: it memoizes per-user answers, which must not
+        // outlive the request (or queued job) that computed them.
+        $this->app->scoped(EmployeeScopeService::class);
     }
 
     /**

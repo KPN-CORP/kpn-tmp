@@ -362,9 +362,15 @@ function closeMaster() {
 // something to lose. Backdrop click, Escape and Cancel all route through here.
 const { confirming, requestClose, discard } = useUnsavedGuard(masterForm, closeMaster)
 
+// What a program save or delete can change: the programs themselves, and the
+// competencies' links to them. Reloading only these skips the rest of the
+// screen's option lists (trainings, implementations, grades, rungs, …).
+const reloadOnly = ['developmentPrograms', 'competencies', 'flash']
+
 function submitMaster() {
     const opts = {
         preserveScroll: true,
+        only: reloadOnly,
         onSuccess: () => closeMaster(),
     }
 
@@ -399,6 +405,7 @@ function confirmDelete() {
 
     router.delete(pendingDelete.value.url, {
         preserveScroll: true,
+        only: reloadOnly,
         onStart: () => (deleting.value = true),
         onFinish: () => (deleting.value = false),
         onSuccess: () => (pendingDelete.value = null),

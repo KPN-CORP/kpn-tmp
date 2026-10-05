@@ -93,11 +93,7 @@ const props = defineProps<{
     competencies: Competency[]
     proficiencyLevels: ProficiencyLevel[]
     grades: string[]
-    // Dynamic org-scope hierarchy: business unit → job family / function → position.
     businessUnits: string[]
-    jobFamiliesByBu: Record<string, string[]>
-    functionsByBu: Record<string, string[]>
-    positionsByBuFunction: Record<string, Record<string, string[]>>
 }>()
 
 /**
@@ -203,39 +199,6 @@ const gradeOptions = computed<Option[]>(() => toStringOptions(props.grades))
 // --- Cascading org hierarchy ---
 
 const businessUnitOptions = computed<Option[]>(() => toStringOptions(props.businessUnits))
-
-/**
- * The children of the hierarchy are the **union** across the selected business
- * units — a mapping that covers several units may reach a job family, function
- * or position belonging to any of them. Same convention Master Training uses
- * for the work locations of several units.
- *
- * These three are not rendered today (the org-scope section only offers the
- * business units), but the columns are still stored and submitted, so they stay
- * in step with the selection.
- */
-function unionFor(map: Record<string, string[]>): Option[] {
-    const values = new Set<string>()
-    for (const bu of implForm.business_units) {
-        for (const value of map[bu] ?? []) values.add(value)
-    }
-    return toStringOptions([...values].sort())
-}
-
-const jobFamilyOptions = computed<Option[]>(() => unionFor(props.jobFamiliesByBu))
-
-const functionOptions = computed<Option[]>(() => unionFor(props.functionsByBu))
-
-const positionOptions = computed<Option[]>(() => {
-    const fn = implForm.function_name
-    if (!fn) return []
-
-    const values = new Set<string>()
-    for (const bu of implForm.business_units) {
-        for (const value of props.positionsByBuFunction[bu]?.[fn] ?? []) values.add(value)
-    }
-    return toStringOptions([...values].sort())
-})
 
 /**
  * --------------------------------------------------------------------------

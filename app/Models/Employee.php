@@ -128,29 +128,30 @@ class Employee extends Model
         return $this->hasMany(PerformanceAppraisal::class, 'employee_id', 'employee_id');
     }
 
-    // --- App-owned (mysql) relations: hop connections explicitly ---
+    // --- Relations to models on another connection ---
+    //
+    // Each related model declares its own `$connection`, which is what the
+    // relation query runs on. Do NOT call `$this->setConnection()` here: it
+    // returns $this, so it would move THIS employee onto that connection and any
+    // later refresh / lazy load on it would query the wrong database.
 
     public function user(): HasOne
     {
-        return $this->setConnection('mysql')
-            ->hasOne(User::class, 'employee_id', 'employee_id');
+        return $this->hasOne(User::class, 'employee_id', 'employee_id');
     }
 
     public function developmentPlans(): HasMany
     {
-        return $this->setConnection('mysql')
-            ->hasMany(IndividualDevelopmentPlan::class, 'employee_id', 'employee_id');
+        return $this->hasMany(IndividualDevelopmentPlan::class, 'employee_id', 'employee_id');
     }
 
     public function competencyAssessments(): HasMany
     {
-        return $this->setConnection('mysql')
-            ->hasMany(CompetencyAssessment::class, 'employee_id', 'employee_id');
+        return $this->hasMany(CompetencyAssessment::class, 'employee_id', 'employee_id');
     }
 
     public function resultSummary(): HasOne
     {
-        return $this->setConnection('mysql')
-            ->hasOne(ResultSummary::class, 'employee_id', 'employee_id');
+        return $this->hasOne(ResultSummary::class, 'employee_id', 'employee_id');
     }
 }

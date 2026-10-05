@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Employee;
 use App\Models\Role;
 use App\Models\User;
+use App\Support\AccessCache;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
@@ -30,6 +31,22 @@ class EmployeeScopeService
 {
     /** The single role that may see every employee. */
     private const SUPERADMIN_ROLE = 'Superadmin';
+
+    /** Data Access permissions (self, team) that open an employee's IDP. */
+    public const IDP_VIEW = ['ic_view_idp', 'pm_view_idp'];
+
+    // Per-request memos. The service is bound `scoped` (one instance per
+    // request / queued job), and a page asks the same questions several times —
+    // the facecard profile alone checks four capabilities for one employee.
+
+    /** @var array<int|string, list<string>> user id => data-access permission names */
+    private array $dataPermissions = [];
+
+    /** @var array<string, Employee|null> employee_id => corporate row */
+    private array $employees = [];
+
+    /** @var array<int|string, list<string>> user id => reportee employee_ids */
+    private array $teams = [];
 
     public function query(User $user): Builder
     {
@@ -136,6 +153,20 @@ class EmployeeScopeService
     }
 
     /**
+     * Whether the user may work on an employee's IDP — add, edit, delete,
+     * import and submit plans and results.
+     *
+     * This is the SAME rule that opens the IDP screen (and that the screen uses
+     * for `canManage`), so whoever sees the plan's edit controls may use them,
+     * and nobody can write a plan they cannot see. Approving / rejecting is
+     * separate: the approval service only lets the current-layer approver act.
+     */
+    public function canManageIdp(User $user, string $employeeId): bool
+    {
+        return $this->canAccess($user, $employeeId, ...self::IDP_VIEW);
+    }
+
+    /**
      * The Data Access permission names that auto-apply to this user — the union
      * of every data-access role whose Access Scope contains the user's own
      * employee record (an unscoped data role applies to everyone).
@@ -144,17 +175,39 @@ class EmployeeScopeService
      */
     public function effectiveDataPermissions(User $user): array
     {
-        $employee = $this->userEmployee($user);
+        return $this->dataPermissions[$user->getKey()] ??= (function () use ($user) {
+            $employee = $this->userEmployee($user);
 
-        return Role::query()
+            return collect($this->dataAccessRoles())
+                ->filter(fn (object $role) => $this->dataRoleApplies($role, $employee))
+                ->flatMap(fn (object $role) => $role->permissions)
+                ->unique()
+                ->values()
+                ->all();
+        })();
+    }
+
+    /**
+     * Every data-access role as {business_unit, company, location, permissions}.
+     * Read from the shared permission DB (slow round trips) and identical for
+     * every user, so it is cached across requests; {@see AccessCache::flush()}
+     * runs when a role is saved.
+     *
+     * @return list<object{business_unit: array, company: array, location: array, permissions: list<string>}>
+     */
+    private function dataAccessRoles(): array
+    {
+        return array_map(fn (array $role) => (object) $role, AccessCache::remember('data-access-roles', fn () => Role::query()
             ->where('is_data_access', true)
             ->with('permissions:id,name')
             ->get()
-            ->filter(fn (Role $role) => $this->dataRoleApplies($role, $employee))
-            ->flatMap(fn (Role $role) => $role->permissions->pluck('name'))
-            ->unique()
-            ->values()
-            ->all();
+            ->map(fn (Role $role) => [
+                'business_unit' => $role->business_unit ?? [],
+                'company' => $role->company ?? [],
+                'location' => $role->location ?? [],
+                'permissions' => $role->permissions->pluck('name')->all(),
+            ])
+            ->all()));
     }
 
     /**
@@ -162,7 +215,7 @@ class EmployeeScopeService
      * employee falls within every scope dimension the role sets (AND within a
      * role). A role with no scope at all applies to everyone.
      */
-    private function dataRoleApplies(Role $role, ?Employee $employee): bool
+    private function dataRoleApplies(object $role, ?Employee $employee): bool
     {
         if ($this->roleIsUnscoped($role)) {
             return true;
@@ -198,7 +251,13 @@ class EmployeeScopeService
             return null;
         }
 
-        return Employee::where('employee_id', $user->employee_id)->first();
+        $id = (string) $user->employee_id;
+
+        if (! array_key_exists($id, $this->employees)) {
+            $this->employees[$id] = Employee::where('employee_id', $id)->first();
+        }
+
+        return $this->employees[$id];
     }
 
     /**
@@ -209,9 +268,18 @@ class EmployeeScopeService
      */
     private function teamIds(User $user): array
     {
-        $employee = $this->userEmployee($user);
+        if (blank($user->employee_id)) {
+            return [];
+        }
 
-        return $employee ? $employee->reporteeIds() : [];
+        // The user's own corporate row may be missing (an incomplete or sampled
+        // master) while their reports still name them as manager — fall back to
+        // the same manager_l1/l2 lookup reporteeIds() uses, so a gap in the
+        // master never empties a manager's team.
+        return $this->teams[$user->getKey()] ??= (
+            $this->userEmployee($user)
+                ?? (new Employee)->forceFill(['employee_id' => $user->employee_id])
+        )->reporteeIds();
     }
 
     /**

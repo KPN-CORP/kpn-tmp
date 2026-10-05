@@ -34,7 +34,10 @@ class CompetencyImplementationController extends Controller
 
     public function index(): Response
     {
-        $implementations = CompetencyImplementation::with(['proficiencyLevels:id', 'grades', 'businessUnits'])
+        // Every prop is a closure, so a partial reload (`only: [...]` after a
+        // save or a toggle) computes only what it asked for — the corporate
+        // reads behind the option lists are skipped entirely.
+        $implementations = fn () => CompetencyImplementation::with(['proficiencyLevels:id', 'grades', 'businessUnits'])
             ->orderByDesc('id')
             ->get()
             ->map(fn (CompetencyImplementation $i) => [
@@ -55,14 +58,12 @@ class CompetencyImplementationController extends Controller
                 'updated_at' => $i->updated_at?->toIso8601String(),
             ]);
 
-        $hierarchy = $this->corporate->orgHierarchy();
-
         return Inertia::render('MasterData/MasterImplementation', [
             'implementations' => $implementations,
-            'competencyTypes' => $this->options->competencyTypes(),
+            'competencyTypes' => fn () => $this->options->competencyTypes(),
             // Competencies carry their type + their own proficiency ladder so
             // the form can cascade (type -> competency -> proficiency levels).
-            'competencies' => $this->options->competencies(
+            'competencies' => fn () => $this->options->competencies(
                 fn (Competency $c) => [
                     // The short identifier, shown in front of the name in the
                     // list. Asked for here rather than added to the shared
@@ -72,13 +73,12 @@ class CompetencyImplementationController extends Controller
                 ],
                 ['proficiencyLevels'],
             ),
-            'proficiencyLevels' => $this->options->proficiencyLevels(),
-            'grades' => $this->corporate->grades(),
-            // Dynamic org-scope hierarchy (all guarded reads off kpncorp).
-            'businessUnits' => $hierarchy['businessUnits'],
-            'jobFamiliesByBu' => $hierarchy['jobFamiliesByBu'],
-            'functionsByBu' => $hierarchy['functionsByBu'],
-            'positionsByBuFunction' => $hierarchy['positionsByBuFunction'],
+            'proficiencyLevels' => fn () => $this->options->proficiencyLevels(),
+            'grades' => fn () => $this->corporate->grades(),
+            // The org scope offers business units only. The job family /
+            // function / position hierarchy (~150 KB, three corporate scans) is
+            // not shipped: the form renders none of those fields.
+            'businessUnits' => fn () => $this->corporate->businessUnits(),
         ]);
     }
 

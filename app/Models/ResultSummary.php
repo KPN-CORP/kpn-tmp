@@ -11,6 +11,8 @@ class ResultSummary extends Model
     /** @use HasFactory<\Database\Factories\ResultSummaryFactory> */
     use HasFactory;
 
+    protected $connection = 'mysql';
+
     protected $table = 'result_summaries';
     protected $guarded = ['id'];
 

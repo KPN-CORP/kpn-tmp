@@ -11,6 +11,8 @@ class CompetencyAssessment extends Model
     /** @use HasFactory<\Database\Factories\CompetencyAssessmentFactory> */
     use HasFactory;
 
+    protected $connection = 'mysql';
+
     protected $table = 'competency_assessments';
 
     protected $fillable = [

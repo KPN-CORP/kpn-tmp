@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\ApprovalChainService;
 use App\Services\EmployeeScopeService;
 use App\Services\IdpApprovalService;
+use App\Support\AccessCache;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -46,7 +47,15 @@ class HandleInertiaRequests extends Middleware
             ...parent::share($request),
 
             'auth' => [
-                'user' => $user,
+                // Only what the shell shows. The whole model would also carry
+                // `token` / `email_log` and whatever relations happen to be
+                // loaded (roles with all their permissions — ~14 KB).
+                'user' => $user ? [
+                    'id' => $user->getKey(),
+                    'employee_id' => $user->employee_id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                ] : null,
                 // The corporate employee record (kpncorp). Resolved lazily and
                 // guarded so a missing/unreachable kpncorp connection can never
                 // break the app shell.
@@ -56,10 +65,10 @@ class HandleInertiaRequests extends Middleware
                 'has_team' => fn () => $this->hasTeam($user),
             ],
 
-            // Drives permission-gated menu items in useNavigation().
-            'permissions' => $user && method_exists($user, 'getAllPermissions')
-                ? $user->getAllPermissions()->pluck('name')->values()
-                : [],
+            // Drives permission-gated menu items in useNavigation(). Lazy, so a
+            // partial reload skips it, and cached: it is several round trips to
+            // the shared permission DB. Routes still check permissions live.
+            'permissions' => fn () => $this->permissionNames($user),
 
             // In-app approval notifications for the signed-in user.
             'notifications' => fn () => $this->notifications($user),
@@ -113,6 +122,19 @@ class HandleInertiaRequests extends Middleware
         }
     }
 
+    /** @return list<string> */
+    private function permissionNames(?User $user): array
+    {
+        if (! $user || ! method_exists($user, 'getAllPermissions')) {
+            return [];
+        }
+
+        return AccessCache::remember(
+            'permissions:'.$user->getKey(),
+            fn () => $user->getAllPermissions()->pluck('name')->values()->all(),
+        );
+    }
+
     private function pendingApprovals($user): int
     {
         if (! $user) {
@@ -145,6 +167,15 @@ class HandleInertiaRequests extends Middleware
         if (! $user || empty($user->employee_id)) {
             return false;
         }
+
+        // Read on every full page load and costs several cross-database
+        // queries; it changes only when a chain, a role or the corporate
+        // manager changes. AccessCache is flushed on the first two.
+        return AccessCache::remember('has-team:'.$user->getKey(), fn () => $this->computeHasTeam($user));
+    }
+
+    private function computeHasTeam(User $user): bool
+    {
 
         if (app(ApprovalChainService::class)->hasSubordinates((string) $user->employee_id)) {
             return true;

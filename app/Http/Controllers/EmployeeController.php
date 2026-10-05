@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Exports\EmployeeExport;
+use App\Http\Controllers\Concerns\ReadsPerPage;
 use App\Http\Controllers\Concerns\ReadsSort;
 use App\Http\Resources\EmployeeResource;
 use App\Jobs\GenerateFacecardZip;
@@ -36,6 +37,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class EmployeeController extends Controller
 {
+    use ReadsPerPage;
     use ReadsSort;
 
     /**
@@ -59,7 +61,7 @@ class EmployeeController extends Controller
 
     private const FACECARD_DOWNLOAD = ['ic_download_facecard', 'pm_download_facecard'];
 
-    private const IDP_VIEW = ['ic_view_idp', 'pm_view_idp'];
+    private const IDP_VIEW = EmployeeScopeService::IDP_VIEW;
 
     private const IDP_DOWNLOAD = ['ic_download_idp', 'pm_download_idp'];
 
@@ -84,7 +86,7 @@ class EmployeeController extends Controller
 
         $employees = $this->filteredQuery(clone $base, $filters)
             ->orderBy($sort['key'], $sort['dir'])
-            ->paginate((int) $request->integer('per_page', 10))
+            ->paginate($this->perPage($request))
             ->withQueryString()
             ->through(fn ($employee) => (new EmployeeResource($employee))->resolve());
 
@@ -92,7 +94,9 @@ class EmployeeController extends Controller
             'employees' => $employees,
             'filters' => $filters,
             'sort' => $sort,
-            'filterOptions' => $this->filterOptions(clone $base),
+            // Depends on the scope, not the filters, so a search/sort/page
+            // reload (`only: [...]`) skips it.
+            'filterOptions' => fn () => $this->filterOptions(clone $base),
         ]);
     }
 
@@ -168,9 +172,11 @@ class EmployeeController extends Controller
                 'talent_box' => $a->talent_box,
             ]))), $visible)->values();
 
-        // The profile's IDP tab is read-only, but it reads the same cycle
-        // picker — so a past package's plans can be looked at from here too.
-        $idp = $this->idp->manageData($employeeId, $user);
+        // The IDP tab is read-only and shows the active cycle. Its data is only
+        // loaded for a viewer the IDP Data Access rules let see it — hiding the
+        // tab alone would still ship the plans in the page props.
+        $canViewIdp = $this->scope->canAccess($user, (string) $employeeId, ...self::IDP_VIEW);
+        $idp = $canViewIdp ? $this->idp->manageData($employeeId, $user) : [];
 
         return Inertia::render('Facecard/Profile', array_merge($idp, [
             'employee' => new EmployeeResource($employee),
@@ -217,7 +223,7 @@ class EmployeeController extends Controller
             'canInputSuccession' => $user->can('input_successor_position'),
             // Data Access flags for this employee — drive the download buttons
             'canDownloadFacecard' => $this->scope->canAccess($user, (string) $employeeId, ...self::FACECARD_DOWNLOAD),
-            'canViewIdp' => $this->scope->canAccess($user, (string) $employeeId, ...self::IDP_VIEW),
+            'canViewIdp' => $canViewIdp,
             'canDownloadIdp' => $this->scope->canAccess($user, (string) $employeeId, ...self::IDP_DOWNLOAD),
         ]));
     }
