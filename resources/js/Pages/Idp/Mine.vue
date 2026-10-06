@@ -4,11 +4,12 @@
  * screen uses, opened straight on their own record. Their team's plans live on
  * the list (`idp.list`), so this page carries no "back to list".
  */
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { Head } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
 import IdpPanel from '@/Components/Domain/IdpPanel.vue'
+import DownloadMenu from '@/Components/Domain/Idp/DownloadMenu.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
 import type {
@@ -20,8 +21,6 @@ import type {
 } from '@/types/idp'
 
 const { t } = useLocale()
-
-const panel = ref<InstanceType<typeof IdpPanel> | null>(null)
 
 // Everything past `employee` is absent when the user has no plan of their own
 // to show (no employee record, or not allowed to see it).
@@ -43,34 +42,12 @@ const emp = computed(() => props.employee?.data ?? null)
     <AppLayout>
         <PageHeader :title="t.idp.mineTitle" :subtitle="t.idp.mineSubtitle">
             <template v-if="emp" #actions>
-                <button
-                    type="button"
-                    class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
-                    @click="panel?.openUpload()"
-                >
-                    <i class="fa-solid fa-file-arrow-up text-xs" />
-                    {{ t.idp.upload.button }}
-                </button>
-                <a
-                    :href="route('idp.download_pdf', { employeeId: emp.employee_id })"
-                    class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover"
-                >
-                    <i class="fa-solid fa-file-pdf text-xs" />
-                    {{ t.idp.downloadPdf }}
-                </a>
-                <a
-                    :href="route('idp.export', { employeeId: emp.employee_id })"
-                    class="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
-                >
-                    <i class="fa-solid fa-file-excel text-xs" />
-                    {{ t.idp.exportExcel }}
-                </a>
+                <DownloadMenu :employee-id="emp.employee_id" />
             </template>
         </PageHeader>
 
         <IdpPanel
             v-if="emp && developmentModels && options && competencyMap && planning && progress"
-            ref="panel"
             sticky-header
             :employee="emp"
             :development-models="developmentModels"

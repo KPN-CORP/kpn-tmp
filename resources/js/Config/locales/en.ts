@@ -247,6 +247,8 @@ export default {
         backToList: 'Back to list',
         downloadPdf: 'Download PDF',
         exportExcel: 'Export Excel',
+        // The one header button that opens the PDF / Excel choice.
+        download: 'Download',
         addPlan: 'Add plan',
         editPlan: 'Edit plan',
         noPlans: 'No plans yet for this model.',

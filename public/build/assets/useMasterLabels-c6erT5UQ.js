@@ -1,1 +1,0 @@
-import{h as s}from"./app-sjOYYLgz.js";function u(){const{locale:n}=s();function o(e){if(!e)return"";const r=n.value==="id"?e.value_id:e.value_en;return(r??"").trim()!==""?r:e.value}function i(e){const r=n.value==="id"?e.description_id:e.description_en,a=n.value==="id"?e.description_en:e.description_id;return(r||a||"").trim()}return{masterName:o,rowDescription:i}}export{u};

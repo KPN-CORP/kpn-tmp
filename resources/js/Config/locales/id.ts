@@ -249,6 +249,8 @@ const id: LocaleMessages = {
         backToList: 'Kembali ke daftar',
         downloadPdf: 'Unduh PDF',
         exportExcel: 'Ekspor Excel',
+        // The one header button that opens the PDF / Excel choice.
+        download: 'Unduh',
         addPlan: 'Tambah rencana',
         editPlan: 'Ubah rencana',
         noPlans: 'Belum ada rencana untuk model ini.',
