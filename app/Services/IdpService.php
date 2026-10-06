@@ -36,11 +36,16 @@ class IdpService
     /**
      * @param  User|null  $viewer  the signed-in user (drives can_act)
      * @param  bool  $canManage  whether the viewer may edit / submit this IDP
+     * @param  bool  $withOptions  false skips the plan form's master option lists
+     *                             (programs, competencies, review tools, types) — a
+     *                             PDF never renders the form, and the bulk zip would
+     *                             otherwise reload the whole catalogue per employee
      */
     public function manageData(
         string $employeeId,
         ?User $viewer = null,
         bool $canManage = false,
+        bool $withOptions = true,
     ): array {
         $allPlans = IndividualDevelopmentPlan::where('employee_id', $employeeId)
             ->orderByDesc('id')
@@ -71,6 +76,29 @@ class IdpService
         )->values();
 
         $workflow = $this->workflow($employeeId, $activePackage, $models, $allPlans, $viewer, $canManage);
+
+        $developmentModels = $models->map(fn ($m) => [
+            'id' => $m->id,
+            'name' => $m->name,
+            'percentage' => $m->percentage,
+            'description_en' => $m->description_en,
+            'description_id' => $m->description_id,
+            // Only a viewer who may manage the plan can add to it, and only to
+            // an active-package model while the set is not frozen in review.
+            'can_add' => $canManage && in_array($m->id, $activeIds, true) && $workflow['planning']['plans_editable'],
+            'is_active_package' => in_array($m->id, $activeIds, true),
+            'plans' => ($plans->get($m->id) ?? collect())
+                ->map(fn ($p) => array_merge($p->toArray(), ['stage' => $workflow['planFlags'][$p->id]]))
+                ->values(),
+        ]);
+
+        if (! $withOptions) {
+            return [
+                'developmentModels' => $developmentModels,
+                'planning' => $workflow['planning'],
+                'progress' => $workflow['progress'],
+            ];
+        }
 
         $programs = DevelopmentProgram::with('competencyType:id,name_en')
             ->orderBy('name_en')
@@ -130,20 +158,7 @@ class IdpService
         }
 
         return [
-            'developmentModels' => $models->map(fn ($m) => [
-                'id' => $m->id,
-                'name' => $m->name,
-                'percentage' => $m->percentage,
-                'description_en' => $m->description_en,
-                'description_id' => $m->description_id,
-                // Only active-package models accept new plans; historical ones
-                // are shown read-only so past plans stay visible.
-                'can_add' => in_array($m->id, $activeIds, true) && $workflow['planning']['plans_editable'],
-                'is_active_package' => in_array($m->id, $activeIds, true),
-                'plans' => ($plans->get($m->id) ?? collect())
-                    ->map(fn ($p) => array_merge($p->toArray(), ['stage' => $workflow['planFlags'][$p->id]]))
-                    ->values(),
-            ]),
+            'developmentModels' => $developmentModels,
             'options' => [
                 // Every type — the catch-all "Others" included — picks its
                 // competency from the master data, so a type carries nothing

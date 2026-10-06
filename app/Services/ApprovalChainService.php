@@ -43,6 +43,63 @@ class ApprovalChainService
     }
 
     /**
+     * Whether $approverId is the FIRST layer of $employeeId's effective chain —
+     * the approver closest to the employee, who also looks after their plan.
+     */
+    public function isLayerOne(string $approverId, string $employeeId): bool
+    {
+        $approverId = trim($approverId);
+
+        return $approverId !== '' && ($this->layersFor($employeeId)[0] ?? null) === $approverId;
+    }
+
+    /**
+     * Every employee whose effective chain starts with $approverId: their
+     * layer-1 reports. The mirror image of layersFor()[0], honouring the same
+     * defaulting rule — a saved override decides; only an employee WITHOUT one
+     * falls back to the corporate manager_l1_id.
+     *
+     * @return list<string>
+     */
+    public function layerOneReports(string $approverId): array
+    {
+        $approverId = trim($approverId);
+
+        if ($approverId === '') {
+            return [];
+        }
+
+        // Overrides that name them at all, kept where they come FIRST.
+        $fromOverrides = ApprovalSuperior::whereJsonContains('layers', $approverId)
+            ->get(['employee_id', 'layers'])
+            ->filter(fn (ApprovalSuperior $row) => ($row->approverIds()[0] ?? null) === $approverId)
+            ->pluck('employee_id');
+
+        try {
+            $corporate = Employee::where('manager_l1_id', $approverId)->pluck('employee_id');
+        } catch (\Throwable) {
+            // kpncorp unreachable: the overrides are all that can be known.
+            return $fromOverrides->map(fn ($id) => (string) $id)->values()->all();
+        }
+
+        // A corporate report counts only while no override of its own decides
+        // its chain (an override naming this approver first is already above).
+        $overridden = $corporate->isEmpty()
+            ? collect()
+            : ApprovalSuperior::whereIn('employee_id', $corporate)
+                ->get(['employee_id', 'layers'])
+                ->filter(fn (ApprovalSuperior $row) => $row->approverIds() !== [])
+                ->pluck('employee_id');
+
+        return $fromOverrides
+            ->merge($corporate->diff($overridden))
+            ->map(fn ($id) => (string) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
      * Whether anyone's effective chain names this employee as an approver —
      * i.e. whether they have subordinates at all.
      *

@@ -5,7 +5,7 @@ import AppLayout from '@/Layouts/AppLayout.vue'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
 import NineBoxSection from '@/Components/Domain/NineBoxSection.vue'
-import CompetencySection from '@/Components/Domain/CompetencySection.vue'
+import CompetencySection, { type Assessment, type MatrixConfig } from '@/Components/Domain/CompetencySection.vue'
 import InternalMovementSection from '@/Components/Domain/InternalMovementSection.vue'
 import IdpPanel from '@/Components/Domain/IdpPanel.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
@@ -14,7 +14,7 @@ import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDate as fmtDate, formatDateTime } from '@/Composables/useDate'
 import { route } from '@/Config/route'
-import type { PlanningState, StageProgress } from '@/types/idp'
+import type { DevelopmentModelView, IdpOptions, PlanningState, ProgramOption, StageProgress } from '@/types/idp'
 
 const { t } = useLocale()
 
@@ -64,12 +64,6 @@ interface Movement {
     status: string | null
 }
 
-interface MasterOption {
-    value: string
-    value_en: string | null
-    value_id: string | null
-}
-
 const props = defineProps<{
     employee: { data: Employee }
     photoUrl: string | null
@@ -77,12 +71,12 @@ const props = defineProps<{
     workExperiences: Array<Record<string, any>>
     trainings: Array<Record<string, any>>
     appraisals: Appraisal[]
-    competencyAssessments: Array<Record<string, any>>
+    competencyAssessments: Assessment[]
     resultSummary: ResultSummary | null
     successorLabel: string | null
     movements: Movement[]
     movementAttributes: string[]
-    matrixGradeConfigs: Array<Record<string, any>>
+    matrixGradeConfigs: MatrixConfig[]
     canInputNineBox: boolean
     canInputCompetency: boolean
     canInputSuccession: boolean
@@ -103,14 +97,9 @@ const props = defineProps<{
     // IDP tab (rendered inline via IdpPanel) — the same payload the manage
     // screen gets, including the two-stage workflow state. Absent when the
     // viewer may not see this employee's IDP (canViewIdp is false).
-    developmentModels?: any[]
-    options?: {
-        competencyTypes: MasterOption[]
-        competencyNames: MasterOption[]
-        developmentPrograms: MasterOption[]
-        reviewTools: MasterOption[]
-    }
-    competencyMap?: Record<string, Array<MasterOption & { model_id: number | null }>>
+    developmentModels?: DevelopmentModelView[]
+    options?: IdpOptions
+    competencyMap?: Record<string, ProgramOption[]>
     planning?: PlanningState
     progress?: StageProgress
 }>()

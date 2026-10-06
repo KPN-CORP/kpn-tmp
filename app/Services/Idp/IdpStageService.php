@@ -7,6 +7,7 @@ use App\Models\DevelopmentModelPackage;
 use App\Models\IdpApproval;
 use App\Models\IndividualDevelopmentPlan;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -176,6 +177,42 @@ class IdpStageService
     /**
      * @throws ValidationException
      */
+    /**
+     * Run `$work` in a transaction that holds a row lock on the employee's plan
+     * set for this package — the one lock every change to the set and every
+     * planning submission takes, so they run one at a time. Without it a double
+     * submit opens two approval rounds, and an edit can land on a set that was
+     * submitted a moment earlier.
+     *
+     * READ COMMITTED (when this opens the outermost transaction) is what makes
+     * the checks inside `$work` reliable: every read after the lock sees what a
+     * competing request committed while this one waited. Under the default
+     * REPEATABLE READ the snapshot is fixed at the first plain read, which
+     * happens before the lock is granted.
+     *
+     * @template T
+     *
+     * @param  \Closure(Collection<int, IndividualDevelopmentPlan>): T  $work  receives the locked plans
+     * @return T
+     */
+    public function withPlanSetLocked(string $employeeId, ?int $packageId, \Closure $work): mixed
+    {
+        if (DB::transactionLevel() === 0) {
+            DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        }
+
+        return DB::transaction(function () use ($employeeId, $packageId, $work) {
+            $plans = $packageId === null
+                ? collect()
+                : IndividualDevelopmentPlan::where('employee_id', $employeeId)
+                    ->whereIn('development_model_id', $this->modelIdsFor($packageId) ?: [0])
+                    ->lockForUpdate()
+                    ->get();
+
+            return $work($plans);
+        });
+    }
+
     public function assertPlansEditable(string $employeeId, ?int $packageId): void
     {
         if ($this->plansEditable($this->planningApproval($employeeId, $packageId))) {

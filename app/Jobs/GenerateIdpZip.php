@@ -2,27 +2,27 @@
 
 namespace App\Jobs;
 
-use App\Models\Employee;
+use App\Jobs\Bulk\BulkPdfExport;
 use App\Models\JobStatus;
-use App\Services\IdpService;
-use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Storage;
-use ZipArchive;
 
 /**
- * Renders each requested employee's IDP to a PDF and bundles them into one zip,
- * reporting progress through a JobStatus row that the frontend polls.
+ * Starts a bulk IDP PDF zip: each requested employee's IDP for the active
+ * cycle, with progress on the uuid JobStatus row the frontend polls.
+ *
+ * The work itself runs as a chain of short jobs ({@see BulkPdfExport}); this
+ * entry job only lays it out, so it stays the controller's single dispatch
+ * point and a job queued before the chain existed still runs.
  */
 class GenerateIdpZip implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    private const DIR = 'idp-zips';
+    public int $tries = 1;
 
     /**
      * @param  array<int, string>  $employeeIds
@@ -32,61 +32,17 @@ class GenerateIdpZip implements ShouldQueue
         public string $jobStatusId,
     ) {}
 
-    public function handle(IdpService $idp): void
+    public function handle(): void
     {
-        $status = JobStatus::find($this->jobStatusId);
-        if (! $status) {
+        if (! JobStatus::whereKey($this->jobStatusId)->update(['status' => 'processing', 'progress' => 0])) {
             return;
         }
 
-        $status->update(['status' => 'processing', 'progress' => 0]);
-
-        Storage::disk('local')->makeDirectory(self::DIR);
-        $fileName = 'idp_bulk_'.$this->jobStatusId.'.zip';
-        $absolutePath = Storage::disk('local')->path(self::DIR.'/'.$fileName);
-
-        $zip = new ZipArchive;
-        if ($zip->open($absolutePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
-            $status->update(['status' => 'failed', 'error_message' => 'Could not create zip archive.']);
-
-            return;
-        }
-
-        $total = max(count($this->employeeIds), 1);
-        $done = 0;
-
-        foreach ($this->employeeIds as $employeeId) {
-            $employee = Employee::where('employee_id', $employeeId)->first();
-
-            if ($employee) {
-                // Always the active cycle - the only one the screens show.
-                $data = $idp->manageData($employeeId);
-                $pdf = Pdf::loadView('pdf.idp', [
-                    'employee' => $employee,
-                    'developmentModels' => $data['developmentModels'],
-                    'planning' => $data['planning'],
-                ]);
-                $zip->addFromString("idp_{$employeeId}.pdf", $pdf->output());
-            }
-
-            $done++;
-            $status->update(['progress' => (int) round($done / $total * 100)]);
-        }
-
-        $zip->close();
-
-        $status->update([
-            'status' => 'completed',
-            'progress' => 100,
-            'file_name' => $fileName,
-        ]);
+        BulkPdfExport::start('idp', $this->employeeIds, $this->jobStatusId);
     }
 
     public function failed(\Throwable $e): void
     {
-        JobStatus::where('id', $this->jobStatusId)->update([
-            'status' => 'failed',
-            'error_message' => $e->getMessage(),
-        ]);
+        Bulk\ZipBulkPdfs::markFailed($this->jobStatusId, $e);
     }
 }

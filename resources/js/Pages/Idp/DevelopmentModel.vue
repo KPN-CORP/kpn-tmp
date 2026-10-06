@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Head, Link, router } from '@inertiajs/vue3'
+import { Head, Link } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -9,6 +9,7 @@ import IconButton from '@/Components/UI/IconButton.vue'
 import ClientTable, { type Column } from '@/Components/Domain/ClientTable.vue'
 import { route } from '@/Config/route'
 import { useLocale } from '@/Composables/useLocale'
+import { useDeleteConfirm } from '@/Composables/useDeleteConfirm'
 
 const { t, locale } = useLocale()
 
@@ -234,29 +235,16 @@ if (activeId != null) expanded.value.push(activeId)
  * --------------------------------------------------------------------------
  */
 
-const pendingDelete = ref<{ id: number; name: string } | null>(null)
-const deleting = ref(false)
+const { pendingDelete, deleting, confirmDelete, cancelDelete } = useDeleteConfirm(reloadOnly)
 
 function deletePackage(pkg: Package) {
     // The active/current package can't be deleted — the button is disabled, but
     // guard here too.
     if (pkg.is_active || pkg.is_current) return
 
-    pendingDelete.value = { id: pkg.id, name: pkg.name }
+    pendingDelete.value = { url: route('idp.setting.packages.destroy', pkg.id), name: pkg.name }
 }
 
-function confirmDelete() {
-    if (!pendingDelete.value) return
-
-    router.delete(route('idp.setting.packages.destroy', pendingDelete.value.id), {
-        preserveScroll: true,
-        preserveState: true,
-        only: reloadOnly,
-        onStart: () => (deleting.value = true),
-        onFinish: () => (deleting.value = false),
-        onSuccess: () => (pendingDelete.value = null),
-    })
-}
 </script>
 
 <template>
@@ -605,7 +593,7 @@ function confirmDelete() {
             variant="danger"
             :processing="deleting"
             @confirm="confirmDelete"
-            @close="pendingDelete = null"
+            @close="cancelDelete"
         >
             <p
                 v-if="pendingDelete?.name"

@@ -9,6 +9,7 @@ import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDateTime as fmt } from '@/Composables/useDate'
 import { route } from '@/Config/route'
+import type { Paginator } from '@/types/pagination'
 
 const { t } = useLocale()
 
@@ -21,14 +22,6 @@ interface Log {
     original_file_path: string | null
     user?: { name: string } | null
 }
-interface Paginator {
-    data: Log[]
-    links: { url: string | null; label: string; active: boolean }[]
-    total: number
-    from: number | null
-    to: number | null
-    per_page: number
-}
 
 interface DataType {
     value: string
@@ -39,7 +32,7 @@ interface DataType {
 
 const props = defineProps<{
     dataTypes: DataType[]
-    logs: Paginator
+    logs: Paginator<Log>
     sort: Sort
 }>()
 

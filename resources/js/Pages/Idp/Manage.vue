@@ -8,7 +8,7 @@ import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
 import type {
     DevelopmentModelView,
-    MasterOption,
+    IdpOptions,
     PlanningState,
     ProgramOption,
     StageProgress,
@@ -21,12 +21,7 @@ const panel = ref<InstanceType<typeof IdpPanel> | null>(null)
 const props = defineProps<{
     employee: { data: { employee_id: string; fullname: string; designation_name: string | null } }
     developmentModels: DevelopmentModelView[]
-    options: {
-        competencyTypes: MasterOption[]
-        competencyNames: MasterOption[]
-        developmentPrograms: ProgramOption[]
-        reviewTools: MasterOption[]
-    }
+    options: IdpOptions
     competencyMap: Record<string, ProgramOption[]>
     planning: PlanningState
     progress: StageProgress

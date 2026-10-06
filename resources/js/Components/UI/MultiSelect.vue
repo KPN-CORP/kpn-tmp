@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useLocale } from '@/Composables/useLocale'
 
 /**
  * Searchable multi-select. Binds a string[] of values; selected items show as
@@ -15,6 +16,8 @@ export interface Option {
      */
     description?: string
 }
+
+const { t } = useLocale()
 
 const props = defineProps<{
     modelValue: string[]
@@ -143,7 +146,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
                 v-if="selectedBelow || selectedOptions.length === 0"
                 class="text-slate-400"
             >
-                {{ placeholder || 'Select…' }}
+                {{ placeholder || t.common.selectPlaceholder }}
             </span>
 
             <i class="fa-solid fa-chevron-down ml-auto shrink-0 text-xs text-slate-400" />
@@ -158,7 +161,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
                     ref="searchRef"
                     v-model="search"
                     type="text"
-                    placeholder="Search…"
+                    :placeholder="t.common.searchPlaceholder"
                     class="w-full rounded border border-border bg-white px-2 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                 >
             </div>
@@ -183,8 +186,8 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
                         <span class="truncate">
                             {{
                                 allFilteredSelected
-                                    ? clearAllLabel || 'Clear all'
-                                    : selectAllLabel || 'Select all'
+                                    ? clearAllLabel || t.common.clearAll
+                                    : selectAllLabel || t.common.selectAll
                             }}
                         </span>
                         <span class="ml-auto shrink-0 text-xs font-normal text-slate-400">
@@ -226,7 +229,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocMouseDown))
                     </button>
                 </li>
                 <li v-if="filtered.length === 0" class="px-3 py-4 text-center text-xs text-slate-400">
-                    No matches
+                    {{ t.common.noMatches }}
                 </li>
             </ul>
         </div>

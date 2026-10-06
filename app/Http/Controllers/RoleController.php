@@ -172,21 +172,28 @@ class RoleController extends Controller
         $data = $this->validateRole($request);
         $isData = (bool) ($data['is_data_access'] ?? false);
 
-        $role = Role::create([
-            'name' => $data['name'],
-            'guard_name' => 'web',
-            'business_unit' => $data['business_unit'] ?? [],
-            'company' => $data['company'] ?? [],
-            'location' => $data['location'] ?? [],
-            'is_data_access' => $isData,
-        ]);
+        // One transaction on the role's own connection (the shared permission
+        // DB), so a failure part-way never leaves a role without its
+        // permissions or members.
+        $role = DB::connection((new Role)->getConnectionName())->transaction(function () use ($data, $isData) {
+            $role = Role::create([
+                'name' => $data['name'],
+                'guard_name' => 'web',
+                'business_unit' => $data['business_unit'] ?? [],
+                'company' => $data['company'] ?? [],
+                'location' => $data['location'] ?? [],
+                'is_data_access' => $isData,
+            ]);
 
-        $role->syncPermissions($data['permissions'] ?? []);
+            $role->syncPermissions($data['permissions'] ?? []);
 
-        // Data-access roles auto-apply by scope; only basic roles carry members.
-        if (! $isData) {
-            $this->syncMembers($role, $data['members'] ?? []);
-        }
+            // Data-access roles auto-apply by scope; only basic roles carry members.
+            if (! $isData) {
+                $this->syncMembers($role, $data['members'] ?? []);
+            }
+
+            return $role;
+        });
 
         // Cached permission names and data-access roles are now stale.
         AccessCache::flush();
@@ -201,20 +208,22 @@ class RoleController extends Controller
         $isData = (bool) $role->is_data_access;
         $data = $this->validateRole($request, $role);
 
-        $role->update([
-            // The default role's name is referenced elsewhere (User::BASELINE_ROLE),
-            // so it must not be renamed.
-            'name' => $isDefault ? $role->name : $data['name'],
-            'business_unit' => $data['business_unit'] ?? [],
-            'company' => $data['company'] ?? [],
-            'location' => $data['location'] ?? [],
-        ]);
+        DB::connection($role->getConnectionName())->transaction(function () use ($role, $data, $isData, $isDefault) {
+            $role->update([
+                // The default role's name is referenced elsewhere
+                // (User::BASELINE_ROLE), so it must not be renamed.
+                'name' => $isDefault ? $role->name : $data['name'],
+                'business_unit' => $data['business_unit'] ?? [],
+                'company' => $data['company'] ?? [],
+                'location' => $data['location'] ?? [],
+            ]);
 
-        $role->syncPermissions($data['permissions'] ?? []);
+            $role->syncPermissions($data['permissions'] ?? []);
 
-        if (! $isData) {
-            $this->syncMembers($role, $data['members'] ?? []);
-        }
+            if (! $isData) {
+                $this->syncMembers($role, $data['members'] ?? []);
+            }
+        });
 
         // Cached permission names and data-access roles are now stale.
         AccessCache::flush();

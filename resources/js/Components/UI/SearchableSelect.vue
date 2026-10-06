@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useLocale } from '@/Composables/useLocale'
 
 /**
  * A searchable single-select (combobox). Binds a string value; options are
@@ -19,6 +20,8 @@ export interface Option {
      */
     description?: string
 }
+
+const { t } = useLocale()
 
 const props = defineProps<{
     modelValue: string
@@ -139,7 +142,7 @@ onUnmounted(() => {
             @click="toggle"
         >
             <span class="truncate" :class="selectedLabel ? 'text-slate-700' : 'text-slate-400'">
-                {{ selectedLabel || placeholder || 'Select…' }}
+                {{ selectedLabel || placeholder || t.common.selectPlaceholder }}
             </span>
             <i
                 class="fa-solid fa-chevron-down shrink-0 text-xs text-slate-400 transition-transform"
@@ -159,7 +162,7 @@ onUnmounted(() => {
                         ref="searchRef"
                         v-model="search"
                         type="text"
-                        placeholder="Search…"
+                        :placeholder="t.common.searchPlaceholder"
                         class="w-full rounded border border-border bg-white px-2 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                     >
                 </div>
@@ -195,7 +198,7 @@ onUnmounted(() => {
                         </button>
                     </li>
                     <li v-if="filtered.length === 0" class="px-3 py-4 text-center text-xs text-slate-400">
-                        No matches
+                        {{ t.common.noMatches }}
                     </li>
                 </ul>
             </div>

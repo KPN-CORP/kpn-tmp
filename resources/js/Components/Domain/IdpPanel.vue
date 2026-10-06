@@ -13,7 +13,7 @@
  * orchestrates them: it owns the plan form (and its master-driven cascade), the
  * drawers, and the calls that move the workflow along.
  */
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { router, useForm } from '@inertiajs/vue3'
 import Drawer from '@/Components/Domain/Drawer.vue'
 import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
@@ -43,6 +43,7 @@ import { route } from '@/Config/route'
 import type {
     ApprovalInfo,
     DevelopmentModelView,
+    IdpOptions,
     MasterOption,
     Plan,
     PlanningState,
@@ -57,14 +58,7 @@ const props = withDefaults(
     defineProps<{
         employee: { employee_id: string; fullname: string; designation_name: string | null }
         developmentModels: DevelopmentModelView[]
-        options: {
-            competencyTypes: MasterOption[]
-            competencyNames: MasterOption[]
-            developmentPrograms: ProgramOption[]
-            reviewTools: MasterOption[]
-            /** The unit catalogue, both languages, grouped. */
-            unitsOfMeasurement: UomOption[]
-        }
+        options: IdpOptions
         competencyMap: Record<string, ProgramOption[]>
         planning: PlanningState
         progress: StageProgress
@@ -478,6 +472,44 @@ const accents = [
 // already in the props, so filtering costs nothing and the tracker's totals —
 // which describe the plan, not the current view of it — stay untouched.
 const filters = ref<PlanFilterState>(blankPlanFilters())
+
+/**
+ * Where a Task Box link pointed: one program's row (`?focus=<plan id>`, a
+ * result request) or the plan's sign-off card (`?focus=plan`). Read once, on
+ * arrival — the page scrolls there and marks it.
+ */
+const focusParam = (() => {
+    try {
+        return new URLSearchParams(window.location.search).get('focus')
+    } catch {
+        return null
+    }
+})()
+const focusPlanId = focusParam && /^\d+$/.test(focusParam) ? Number(focusParam) : null
+const focusSignOff = focusParam === 'plan'
+
+// A pointed-at row stays marked for as long as it still waits on this viewer;
+// one that does not (opened from the log, or already decided) only flashes.
+const focusFlash = ref(focusParam !== null)
+
+const highlightPlanId = computed<number | null>(() => {
+    if (focusPlanId === null) return null
+    const plan = props.developmentModels.flatMap((m) => m.plans).find((p) => p.id === focusPlanId)
+
+    return plan && (focusFlash.value || plan.stage.result.can_act) ? focusPlanId : null
+})
+
+onMounted(async () => {
+    if (focusParam === null) return
+
+    // The tables have already opened the page holding the row (they read
+    // focusPlanId in their own setup); wait for that to render, then scroll.
+    await nextTick()
+    const target = document.getElementById(focusSignOff ? 'plan-signoff' : `plan-row-${focusPlanId}`)
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+
+    window.setTimeout(() => (focusFlash.value = false), 4000)
+})
 const filtering = computed(() => hasPlanFilters(filters.value))
 
 const allPlans = computed(() => props.developmentModels.flatMap((m) => m.plans))
@@ -988,6 +1020,8 @@ defineExpose({ openUpload })
                 :plans-editable="planning.plans_editable"
                 :rows-editable="canEdit"
                 :submitting-result-id="submittingResultId"
+                :focus-plan-id="focusPlanId"
+                :highlight-plan-id="highlightPlanId"
                 @add="openCreate(model.id)"
                 @edit="openEdit"
                 @delete="askDelete"
@@ -1019,6 +1053,9 @@ defineExpose({ openUpload })
                  is read first -->
             <PlanSignOffCard
                 v-if="signOffMode"
+                id="plan-signoff"
+                class="scroll-mt-24 transition"
+                :class="focusSignOff && (focusFlash || signOffMode === 'decide') ? 'ring-2 ring-amber-300 ring-offset-2' : ''"
                 :mode="signOffMode"
                 :planning="planning"
                 :models="developmentModels"

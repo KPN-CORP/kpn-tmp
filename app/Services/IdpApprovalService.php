@@ -51,33 +51,39 @@ class IdpApprovalService
      */
     public function submitPlanning(string $employeeId, int $packageId, User $user): IdpApproval
     {
-        $current = $this->stage->planningApproval($employeeId, $packageId);
-
-        if ($current?->status === 'pending') {
-            throw ValidationException::withMessages([
-                'approval' => 'This development plan is already awaiting planning approval.',
-            ]);
-        }
-
-        $plans = $this->stage->plansIn($employeeId, $packageId);
-
-        if ($plans->isEmpty()) {
-            throw ValidationException::withMessages([
-                'approval' => 'Add at least one development plan before submitting the planning for approval.',
-            ]);
-        }
-
-        // Nothing to approve: every row already carries a sign-off. Keyed on the
-        // rows rather than the header, for the same reason planningStatus() is.
-        if ($plans->every->isPlanningApproved()) {
-            throw ValidationException::withMessages([
-                'approval' => 'This development plan has already been approved and nothing has changed since.',
-            ]);
-        }
-
         $layers = $this->requireLayers($employeeId);
 
-        return DB::transaction(function () use ($employeeId, $packageId, $user, $layers, $plans) {
+        // Every check runs under the plan-set lock, so a double submit (or a
+        // plan edited mid-submit) waits here and then sees the other's outcome
+        // instead of opening a second round.
+        return $this->stage->withPlanSetLocked($employeeId, $packageId, function (Collection $plans) use ($employeeId, $packageId, $user, $layers) {
+            $pending = IdpApproval::planning()
+                ->where('employee_id', $employeeId)
+                ->where('development_model_package_id', $packageId)
+                ->where('status', 'pending')
+                ->exists();
+
+            if ($pending) {
+                throw ValidationException::withMessages([
+                    'approval' => 'This development plan is already awaiting planning approval.',
+                ]);
+            }
+
+            if ($plans->isEmpty()) {
+                throw ValidationException::withMessages([
+                    'approval' => 'Add at least one development plan before submitting the planning for approval.',
+                ]);
+            }
+
+            // Nothing to approve: every row already carries a sign-off. Keyed on
+            // the rows rather than the header, for the same reason
+            // planningStatus() is.
+            if ($plans->every->isPlanningApproved()) {
+                throw ValidationException::withMessages([
+                    'approval' => 'This development plan has already been approved and nothing has changed since.',
+                ]);
+            }
+
             $approval = IdpApproval::create([
                 'stage' => IdpApproval::STAGE_PLANNING,
                 'individual_development_plan_id' => null,
@@ -105,39 +111,45 @@ class IdpApprovalService
      */
     public function submitResult(IndividualDevelopmentPlan $plan, User $user): IdpApproval
     {
-        // The current round — a resubmitted result opens a new one.
-        $existing = IdpApproval::result()
-            ->where('individual_development_plan_id', $plan->id)
-            ->latest('id')
-            ->first();
-
-        if ($existing && $existing->status === 'pending') {
-            throw ValidationException::withMessages([
-                'approval' => 'The result of this program is already awaiting approval.',
-            ]);
-        }
-
-        if ($existing && $existing->status === 'approved') {
-            throw ValidationException::withMessages([
-                'approval' => 'The result of this program has already been approved.',
-            ]);
-        }
-
-        if (! $plan->isPlanningApproved()) {
-            throw ValidationException::withMessages([
-                'approval' => 'The planning for this program has not been approved yet, so its result cannot be submitted.',
-            ]);
-        }
-
-        if (! $plan->isRealized()) {
-            throw ValidationException::withMessages([
-                'approval' => 'Fill in the realization date and the result evidence before submitting this result.',
-            ]);
-        }
-
         $layers = $this->requireLayers($plan->employee_id);
 
         return DB::transaction(function () use ($plan, $user, $layers) {
+            // Lock the program's row first: a double submit waits here and then
+            // finds the round the first one opened. Being the transaction's
+            // first read, the lock also fixes its snapshot AFTER the wait, so
+            // the checks below see what the other request committed.
+            $plan = IndividualDevelopmentPlan::whereKey($plan->getKey())->lockForUpdate()->firstOrFail();
+
+            // The current round - a resubmitted result opens a new one.
+            $existing = IdpApproval::result()
+                ->where('individual_development_plan_id', $plan->id)
+                ->latest('id')
+                ->first();
+
+            if ($existing && $existing->status === 'pending') {
+                throw ValidationException::withMessages([
+                    'approval' => 'The result of this program is already awaiting approval.',
+                ]);
+            }
+
+            if ($existing && $existing->status === 'approved') {
+                throw ValidationException::withMessages([
+                    'approval' => 'The result of this program has already been approved.',
+                ]);
+            }
+
+            if (! $plan->isPlanningApproved()) {
+                throw ValidationException::withMessages([
+                    'approval' => 'The planning for this program has not been approved yet, so its result cannot be submitted.',
+                ]);
+            }
+
+            if (! $plan->isRealized()) {
+                throw ValidationException::withMessages([
+                    'approval' => 'Fill in the realization date and the result evidence before submitting this result.',
+                ]);
+            }
+
             // A NEW row per round, never an overwrite: a rejected result that is
             // filed again keeps the earlier round, its decisions and what it
             // said, so the log can show both and what changed between them.
@@ -242,6 +254,7 @@ class IdpApprovalService
     public function approve(IdpApproval $approval, User $user, string $note): IdpApproval
     {
         return DB::transaction(function () use ($approval, $user, $note) {
+            $approval = $this->lockForDecision($approval);
             $step = $this->guardCurrentApprover($approval, $user);
 
             $step->update([
@@ -277,6 +290,7 @@ class IdpApprovalService
     public function reject(IdpApproval $approval, User $user, string $note): IdpApproval
     {
         return DB::transaction(function () use ($approval, $user, $note) {
+            $approval = $this->lockForDecision($approval);
             $step = $this->guardCurrentApprover($approval, $user);
 
             $step->update([
@@ -496,6 +510,20 @@ class IdpApprovalService
         }
 
         return $approval->currentStep()?->approver_employee_id === $employeeId;
+    }
+
+    /**
+     * Re-read the approval under a row lock, with fresh steps. Two decisions on
+     * one request - two approvers, or one double click - then run one after the
+     * other, and the second meets the state the first left (no longer pending,
+     * or another layer's turn) instead of advancing the chain twice.
+     */
+    private function lockForDecision(IdpApproval $approval): IdpApproval
+    {
+        return IdpApproval::whereKey($approval->getKey())
+            ->lockForUpdate()
+            ->firstOrFail()
+            ->load('steps');
     }
 
     /**

@@ -1,5 +1,6 @@
-<script setup lang="ts">
+<script setup lang="ts" generic="T extends Record<string, any>">
 import { computed, ref, watch } from 'vue'
+import { useLocale } from '@/Composables/useLocale'
 import Pagination from '@/Components/UI/Pagination.vue'
 
 export interface Column {
@@ -24,10 +25,14 @@ export interface Column {
     mergeKey?: string
 }
 
+const { t } = useLocale()
+
 const props = withDefaults(
     defineProps<{
         columns: Column[]
-        rows: Record<string, any>[]
+        // Generic over the row type, so the parent's slot handlers receive
+        // its own row interface rather than an untyped record.
+        rows: T[]
         rowKey?: string
         perPage?: number
         initialSort?: { key: string; dir: 'asc' | 'desc' } | null
@@ -53,7 +58,7 @@ const props = withDefaults(
     {
         perPage: 5,
         initialSort: null,
-        emptyText: 'No data.',
+        emptyText: '',
         numbered: false,
         selectable: false,
         selectedKey: null,
@@ -63,7 +68,7 @@ const props = withDefaults(
     },
 )
 
-const emit = defineEmits<{ (e: 'row-click', row: Record<string, any>): void }>()
+const emit = defineEmits<{ (e: 'row-click', row: T): void }>()
 
 const sortKey = ref(props.initialSort?.key ?? '')
 const sortDir = ref<'asc' | 'desc'>(props.initialSort?.dir ?? 'asc')
@@ -95,14 +100,14 @@ function toggleSort(col: Column) {
 }
 
 // Type-aware comparison: numbers, then dates, then locale strings; nulls last.
-function cmp(a: any, b: any): number {
+function cmp(a: unknown, b: unknown): number {
     if (a == null || a === '') return b == null || b === '' ? 0 : 1
     if (b == null || b === '') return -1
     const an = Number(a)
     const bn = Number(b)
     if (!Number.isNaN(an) && !Number.isNaN(bn)) return an - bn
-    const ad = Date.parse(a)
-    const bd = Date.parse(b)
+    const ad = Date.parse(String(a))
+    const bd = Date.parse(String(b))
     if (!Number.isNaN(ad) && !Number.isNaN(bd)) return ad - bd
     return String(a).localeCompare(String(b))
 }
@@ -141,7 +146,7 @@ const showPager = computed(
         sorted.value.length > Math.min(...props.perPageOptions),
 )
 
-function rowKeyVal(row: Record<string, any>, i: number) {
+function rowKeyVal(row: T, i: number) {
     return props.rowKey ? row[props.rowKey] : i
 }
 
@@ -156,7 +161,7 @@ function isActive(col: Column) {
 // Total column count, so an expanded row can span the full table width.
 const colSpan = computed(() => props.columns.length + (props.numbered ? 1 : 0))
 
-function isExpanded(row: Record<string, any>, i: number) {
+function isExpanded(row: T, i: number) {
     return props.expandedKeys.includes(rowKeyVal(row, i))
 }
 
@@ -176,7 +181,7 @@ const mergeSpans = computed<Record<string, number>[]>(() => {
     // A row's group at depth d is everything it agrees on up to and including
     // that column — which is what makes the nesting hierarchical.
     const SEP = String.fromCharCode(0)
-    const sig = (row: Record<string, any>, depth: number) =>
+    const sig = (row: T, depth: number) =>
         cols
             .slice(0, depth + 1)
             .map((c) => String(row?.[c.mergeKey ?? c.key] ?? ''))
@@ -299,7 +304,7 @@ function dividerClass(colKey?: string) {
                     </template>
                     <tr v-if="pageRows.length === 0">
                         <td :colspan="colSpan" class="px-4 py-8 text-center text-slate-400">
-                            <slot name="empty">{{ emptyText }}</slot>
+                            <slot name="empty">{{ emptyText || t.common.noRecords }}</slot>
                         </td>
                     </tr>
                 </tbody>

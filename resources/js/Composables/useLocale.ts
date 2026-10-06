@@ -1,7 +1,7 @@
 import { computed, ref, watch } from 'vue'
-import { locales } from '@/Config/locales'
+import { loadLocale, locales, type Locale } from '@/Config/locales'
 
-export type Locale = keyof typeof locales
+export type { Locale }
 
 const STORAGE_KEY = 'app-locale'
 
@@ -36,10 +36,23 @@ watch(
     { immediate: true },
 )
 
-export function useLocale() {
-    const t = computed(() => locales[currentLocale.value])
+/**
+ * Load the stored language before the app mounts, so the first render is
+ * already in it rather than flashing English.
+ */
+export function prepareLocale(): Promise<void> {
+    return loadLocale(currentLocale.value).catch(() => {
+        // Chunk failed to load: fall back to English for this session.
+        currentLocale.value = 'en'
+    })
+}
 
-    function setLocale(locale: Locale) {
+export function useLocale() {
+    // Falls back to English for the moment a newly chosen language is loading.
+    const t = computed(() => locales[currentLocale.value] ?? locales.en!)
+
+    async function setLocale(locale: Locale) {
+        await loadLocale(locale)
         currentLocale.value = locale
     }
 

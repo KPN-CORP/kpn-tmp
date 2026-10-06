@@ -184,8 +184,13 @@ function toggle() {
     }
 }
 
+// Lands on the thing to decide, not the top of the page: a result's own
+// program row, or the plan's sign-off card at the foot of the page.
 const idpHref = computed(() =>
-    route('idp.show', { employeeId: props.item.owner_id, package: props.item.package?.id ?? null }),
+    route('idp.show', {
+        employeeId: props.item.owner_id,
+        focus: props.item.stage === 'planning' ? 'plan' : (props.item.plans[0]?.id ?? null),
+    }),
 )
 
 /** A result request covers exactly one program; a plan covers the whole set. */
@@ -200,6 +205,16 @@ const headline = computed(() => {
     }
 
     return `${t.value.approvalFlow.planningSubject} · ${props.item.plans.length} ${t.value.approvalFlow.programs}`
+})
+
+/** Where a result's program sits in the plan: development model, competency type, competency. */
+const resultContext = computed<string[]>(() => {
+    const plan = single.value
+    if (!plan) return []
+
+    return [plan.development_model, plan.competency_type, plan.competency_name]
+        .map((part) => (part ?? '').trim())
+        .filter((part) => part !== '')
 })
 
 /** Programs grouped by development model — how the plan itself is laid out. */
@@ -269,9 +284,16 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
 </script>
 
 <template>
+    <!--
+        The left edge is coloured by stage, so a plan approval and a result
+        approval can be told apart while scrolling, before reading a word.
+    -->
     <article
-        class="overflow-hidden rounded-xl border bg-white shadow-sm transition"
-        :class="canAct ? 'border-amber-300 ring-1 ring-amber-200/70' : 'border-border'"
+        class="overflow-hidden rounded-xl border border-l-4 bg-white shadow-sm transition"
+        :class="[
+            canAct ? 'border-amber-300 ring-1 ring-amber-200/70' : 'border-border',
+            isPlanning ? 'border-l-primary' : 'border-l-emerald-500',
+        ]"
     >
         <!--
             The header is the whole card face, and the disclosure control when
@@ -292,18 +314,42 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
                 <span
                     class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
                     :class="isPlanning ? 'bg-primary/10 text-primary' : 'bg-emerald-50 text-emerald-600'"
-                    :title="isPlanning ? t.approvalFlow.stagePlanning : t.approvalFlow.stageResult"
+                    :title="isPlanning ? t.approvalFlow.planApprovalBadge : t.approvalFlow.resultApprovalBadge"
                 >
                     <i :class="isPlanning ? 'fa-solid fa-file-signature' : 'fa-solid fa-clipboard-check'" />
                 </span>
 
                 <div class="min-w-0">
-                    <p class="flex flex-wrap items-baseline gap-x-2">
+                    <p class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span
+                            class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+                            :class="isPlanning ? 'bg-primary/10 text-primary' : 'bg-emerald-50 text-emerald-700'"
+                        >
+                            <i :class="isPlanning ? 'fa-solid fa-file-signature' : 'fa-solid fa-clipboard-check'" class="text-[10px]" />
+                            {{ isPlanning ? t.approvalFlow.planApprovalBadge : t.approvalFlow.resultApprovalBadge }}
+                        </span>
                         <span class="truncate font-bold text-slate-800">{{ item.owner_name }}</span>
                         <span class="text-xs text-slate-400">{{ item.owner_id }}</span>
                     </p>
 
-                    <p class="truncate text-sm text-slate-600">
+                    <!--
+                        A result covers one program: say where it sits in the
+                        plan (model › competency type › competency) above its
+                        name. Two lines rather than one, so truncation never
+                        eats the program name, which is what the card is about.
+                    -->
+                    <p
+                        v-if="resultContext.length"
+                        class="flex min-w-0 items-center gap-1 truncate text-xs text-slate-500"
+                        :title="resultContext.join(' › ')"
+                    >
+                        <template v-for="(part, i) in resultContext" :key="i">
+                            <i v-if="i > 0" class="fa-solid fa-chevron-right text-[8px] text-slate-300" />
+                            <span class="truncate" :class="i === resultContext.length - 1 ? 'font-medium text-slate-600' : ''">{{ part }}</span>
+                        </template>
+                    </p>
+
+                    <p class="truncate text-sm text-slate-600" :class="isPlanning ? '' : 'font-medium text-slate-700'">
                         {{ headline }}
                         <span v-if="isPlanning && item.package" class="text-slate-400">· {{ item.package.name }}</span>
                     </p>

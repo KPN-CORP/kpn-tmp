@@ -1,11 +1,15 @@
 import '../css/app.css'
-import './bootstrap'
 
 import { createApp, h } from 'vue'
 import { createInertiaApp } from '@inertiajs/vue3'
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers'
 
-import '@fortawesome/fontawesome-free/css/all.min.css'
+// Only the icon families the app uses (solid + regular). `all.min.css` would
+// also ship the brands set and its font, which no screen renders.
+import '@fortawesome/fontawesome-free/css/fontawesome.min.css'
+import '@fortawesome/fontawesome-free/css/solid.min.css'
+import '@fortawesome/fontawesome-free/css/regular.min.css'
+import { prepareLocale } from './Composables/useLocale'
 
 // Taken from the server (a <meta> tag) rather than a VITE_ var: VITE_ vars are
 // baked in at build time, so whoever ran the build would decide the name and an
@@ -26,9 +30,12 @@ createInertiaApp({
         ),
 
     setup({ el, App, props, plugin }) {
-        createApp({ render: () => h(App, props) })
-            .use(plugin)
-            .mount(el)
+        // Mount once the stored language is loaded (instant for English).
+        prepareLocale().then(() => {
+            createApp({ render: () => h(App, props) })
+                .use(plugin)
+                .mount(el)
+        })
     },
 
     progress: {

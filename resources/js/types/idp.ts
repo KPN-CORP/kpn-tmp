@@ -39,6 +39,19 @@ export interface UomOption {
     group_id: string
 }
 
+/**
+ * The master option lists the IDP panel's plan form picks from — the `options`
+ * prop of IdpPanel, shipped by IdpService::manageData().
+ */
+export interface IdpOptions {
+    competencyTypes: MasterOption[]
+    competencyNames: MasterOption[]
+    developmentPrograms: ProgramOption[]
+    reviewTools: MasterOption[]
+    /** The unit catalogue, both languages, grouped. */
+    unitsOfMeasurement: UomOption[]
+}
+
 export type StepStatus = 'pending' | 'approved' | 'rejected'
 
 export interface ApprovalStep {

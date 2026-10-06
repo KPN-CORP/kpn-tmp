@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Head, Link, router } from '@inertiajs/vue3'
+import { Head, Link } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -16,8 +16,11 @@ import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import ProficiencyLevelCell from '@/Components/Domain/ProficiencyLevelCell.vue'
 import { useActiveStateToggle } from '@/Composables/useActiveStateToggle'
 import { route } from '@/Config/route'
+import { useDeleteConfirm } from '@/Composables/useDeleteConfirm'
+import { useMasterLabels } from '@/Composables/useMasterLabels'
 
 const { t, locale } = useLocale()
+const { masterName, rowDescription } = useMasterLabels()
 
 interface Competency {
     id: number
@@ -94,17 +97,6 @@ const props = defineProps<{
  */
 const reloadOnly = ['competencies', 'flash']
 
-// Localized name for a competency / competency type, falling back to the
-// canonical `value`.
-function masterName(item: {
-    value: string
-    value_en?: string | null
-    value_id?: string | null
-}): string {
-    const preferred = locale.value === 'id' ? item.value_id : item.value_en
-    return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
-}
-
 // Localized competency description (falls back to the other language).
 function competencyDescription(c: Competency): string {
     const preferred = locale.value === 'id' ? c.description_id : c.description_en
@@ -135,21 +127,7 @@ function deleteMaster(id: number, name?: string) {
     }
 }
 
-const pendingDelete = ref<{ url: string; name?: string } | null>(null)
-const deleting = ref(false)
-
-function confirmDelete() {
-    if (!pendingDelete.value) return
-
-    router.delete(pendingDelete.value.url, {
-        preserveScroll: true,
-        preserveState: true,
-        only: reloadOnly,
-        onStart: () => (deleting.value = true),
-        onFinish: () => (deleting.value = false),
-        onSuccess: () => (pendingDelete.value = null),
-    })
-}
+const { pendingDelete, deleting, confirmDelete, cancelDelete } = useDeleteConfirm(reloadOnly)
 
 /**
  * --------------------------------------------------------------------------
@@ -181,17 +159,6 @@ function competencyTypeCode(id: number | null): string {
  * `name_en` / `name_id` (the DB's own field names) rather than the masters'
  * `value` / `value_en`, so they need their own reader.
  */
-// The row's description in the reading language, falling back to the other —
-// same rule as rowName() below.
-function rowDescription(row: {
-    description_en?: string | null
-    description_id?: string | null
-}): string {
-    const preferred = locale.value === 'id' ? row.description_id : row.description_en
-    const fallback = locale.value === 'id' ? row.description_en : row.description_id
-
-    return (preferred || fallback || '').trim()
-}
 
 function rowName(row: { name_en: string; name_id?: string | null }): string {
     const preferred = locale.value === 'id' ? row.name_id : row.name_en
@@ -992,7 +959,7 @@ function changeCompetencyPerPage(size: number) {
             variant="danger"
             :processing="deleting"
             @confirm="confirmDelete"
-            @close="pendingDelete = null"
+            @close="cancelDelete"
         >
             <p
                 v-if="pendingDelete?.name"

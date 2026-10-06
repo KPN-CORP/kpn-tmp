@@ -1,0 +1,1228 @@
+<script setup lang="ts">
+/**
+ * The development-program add/edit drawer of the Master Development screen
+ * (`Pages/Idp/Settings.vue`). The page owns the data and decides what a save
+ * reloads (`reloadOnly`); this owns the form, its cascade and its watchers, so
+ * their timing relative to the synchronous seeding in `open()` is exactly what
+ * it was when they lived on the page.
+ */
+import { computed, nextTick, ref, watch } from 'vue'
+import { useForm } from '@inertiajs/vue3'
+
+import Drawer from '@/Components/Domain/Drawer.vue'
+import UnsavedChangesDialog from '@/Components/Domain/UnsavedChangesDialog.vue'
+import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
+import SearchableSelect from '@/Components/UI/SearchableSelect.vue'
+import FormSection from '@/Components/UI/FormSection.vue'
+import { useLocale } from '@/Composables/useLocale'
+import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
+import { useMasterLabels } from '@/Composables/useMasterLabels'
+import { route } from '@/Config/route'
+import {
+    gradeRangeLabel as gradeRangeLabelIn,
+    gradesForLevel as gradesForLevelIn,
+    localizedModelName,
+} from '@/Components/Domain/Idp/programScope'
+import type {
+    DevCompetency as Competency,
+    DevCompetencyType as CompetencyType,
+    DevImplementation as Implementation,
+    DevModel as Model,
+    DevPackage as Package,
+    DevProficiencyLevel as ProficiencyLevel,
+    DevProgram as Program,
+    DevTraining as Training,
+    MasterType,
+} from '@/types/masterDevelopment'
+
+const { t, locale } = useLocale()
+const { masterName, rowDescription } = useMasterLabels()
+
+const props = defineProps<{
+    developmentModels: Model[]
+    packages: Package[]
+    activePackageId: number | null
+    competencies: Competency[]
+    competencyTypes: CompetencyType[]
+    proficiencyLevels: ProficiencyLevel[]
+    implementations: Implementation[]
+    trainings: Training[]
+    grades: string[]
+    // What a save reloads — the page's call, not the drawer's.
+    reloadOnly: string[]
+}>()
+
+function modelName(model: {
+    name: string
+    name_en?: string | null
+    name_id?: string | null
+}): string {
+    return localizedModelName(model, locale.value)
+}
+
+const modelById = computed(() => {
+    const m = new Map<number, Model>()
+    for (const mod of props.developmentModels) m.set(mod.id, mod)
+    return m
+})
+
+/**
+ * --------------------------------------------------------------------------
+ * Master data
+ * --------------------------------------------------------------------------
+ */
+
+const masterModal = ref(false)
+const masterType = ref<MasterType>('development_program')
+const editingMasterId = ref<number | null>(null)
+
+// For a development program, the model dropdown is scoped to a chosen package.
+const masterPackageId = ref<number | null>(null)
+
+function blankMaster() {
+    return {
+    type: 'development_program' as MasterType,
+    // Canonical `value` tracks the English name (value_en) server-side.
+    value_en: '',
+    value_id: '',
+    // Program → what the activity covers, in both languages.
+    description_en: '',
+    description_id: '',
+    development_model_id: null as number | null,
+    // Program → the training its name + description were taken from, or null
+    // when typed. The values themselves still travel in value_en / value_id and
+    // description_en / description_id; the server copies them off the training
+    // on save so the two can never disagree.
+    training_id: null as number | null,
+    // Program → competency type (scopes the competency picker below).
+    competency_type_id: null as number | null,
+    // Program → the one competency it develops. Still posted as a list: the
+    // link is a pivot (a competency reaches many programs), and the Competency
+    // screen edits the other side of it.
+    related_competencies: [] as number[],
+    // Program → proficiency level (options come from the master
+    // implementations of the picked competencies).
+    proficiency_level_id: null as number | null,
+    // "Others"-type program → free-typed proficiency level. Its competency
+    // is picked from the masters filed under "Others", like any other type.
+    custom_proficiency_level: '' as string,
+    // Program → corporate scope: the grades the implementation covers for the
+    // chosen proficiency level (any number of them).
+    grades: [] as string[],
+    }
+}
+
+const masterForm = useForm(blankMaster())
+
+/**
+ * The typed name + description, held while a training is supplying them, so
+ * moving the program back onto a model that types its own never loses what was
+ * written.
+ */
+const typedText = ref({ en: '', id: '', descEn: '', descId: '' })
+
+/**
+ * What the program held when the drawer opened. The pickers narrow to what is
+ * still effective / still implemented, which would otherwise quietly drop a
+ * selection made back when the masters looked different — so whatever was
+ * loaded stays on offer, and the server exempts it from the same checks.
+ */
+const loadedCompetencyIds = ref<number[]>([])
+const loadedProficiencyLevelId = ref<number | null>(null)
+const loadedGrades = ref<string[]>([])
+const loadedTrainingId = ref<number | null>(null)
+
+function openMaster(type: MasterType, item?: Program) {
+    masterType.value = type
+    editingMasterId.value = item?.id ?? null
+
+    // Seed the form without the competency-type watcher reacting (it would wipe
+    // the loaded selection); a fresh drawer starts with an empty snapshot cache.
+    applyingOpen.value = true
+    typeCache.value = {}
+
+    const program = item as Partial<Program> | undefined
+    const isProgram = type === 'development_program'
+
+    const values = {
+        ...blankMaster(),
+        type,
+        value_en: program?.value_en ?? item?.value ?? '',
+        value_id: program?.value_id ?? '',
+        description_en: isProgram ? program?.description_en ?? '' : '',
+        description_id: isProgram ? program?.description_id ?? '' : '',
+        development_model_id: (item as Program)?.development_model_id ?? null,
+        // A program that stored a training took its name + description from
+        // there; everything else typed them.
+        training_id: isProgram ? program?.training_id ?? null : null,
+        // Preselect the competency this program is currently linked to. A
+        // handful of legacy programs carry two; the form develops one, so it
+        // opens on the first and saving settles the link on it.
+        related_competencies:
+            isProgram && item
+                ? props.competencies
+                      .filter((c) => c.related_program.includes((item as Program).id))
+                      .map((c) => c.id)
+                      .slice(0, 1)
+                : [],
+        // Program scope fields (competency type / proficiency level / grades).
+        competency_type_id: isProgram ? program?.competency_type_id ?? null : null,
+        proficiency_level_id: isProgram ? program?.proficiency_level_id ?? null : null,
+        custom_proficiency_level: isProgram ? program?.custom_proficiency_level ?? '' : '',
+        grades: isProgram ? [...(program?.grades ?? [])] : [],
+    }
+
+    // Loaded as both data and defaults, so `isDirty` — which drives the discard
+    // prompt — measures this sitting's edits (see `seedForm`).
+    seedForm(masterForm, values)
+
+    // Stash what was typed, unless a training supplied it — in which case
+    // there is nothing of the user's own to come back to.
+    typedText.value =
+        values.training_id != null
+            ? { en: '', id: '', descEn: '', descId: '' }
+            : {
+                  en: values.value_en,
+                  id: values.value_id,
+                  descEn: values.description_en,
+                  descId: values.description_id,
+              }
+
+    // Resolve the package the model dropdown should be scoped to: from the
+    // program's current model when editing, else default to the active package.
+    if (isProgram) {
+        const modelId = values.development_model_id
+        const model =
+            modelId != null
+                ? props.developmentModels.find((m) => m.id === modelId)
+                : null
+        masterPackageId.value =
+            model?.development_model_package_id ?? props.activePackageId ?? null
+    } else {
+        masterPackageId.value = null
+    }
+
+    loadedCompetencyIds.value = [...values.related_competencies]
+    loadedProficiencyLevelId.value = values.proficiency_level_id
+    loadedGrades.value = [...values.grades]
+    loadedTrainingId.value = values.training_id
+
+    // Seed the cache with the loaded type's selection so that leaving it and
+    // coming back restores exactly what was stored.
+    if (isProgram && values.competency_type_id != null) {
+        typeCache.value[values.competency_type_id] = snapshotType()
+    }
+
+    // Let the watcher run again once this synchronous seeding has settled.
+    nextTick(() => (applyingOpen.value = false))
+
+    masterModal.value = true
+}
+
+function closeMaster() {
+    masterModal.value = false
+    seedForm(masterForm, blankMaster())
+}
+
+// Closing the drawer throws the draft away, so confirm first when there is
+// something to lose. Backdrop click, Escape and Cancel all route through here.
+const { confirming, requestClose, discard } = useUnsavedGuard(masterForm, closeMaster)
+
+function submitMaster() {
+    const opts = {
+        preserveScroll: true,
+        only: props.reloadOnly,
+        onSuccess: () => closeMaster(),
+    }
+
+    if (editingMasterId.value) {
+        masterForm.put(
+            route('idp.setting.masters.update', [masterType.value, editingMasterId.value]),
+            opts,
+        )
+    } else {
+        masterForm.post(route('idp.setting.masters.store'), opts)
+    }
+}
+
+const masterTitle = () => {
+    const type =
+        masterType.value === 'development_program'
+            ? t.value.idp.settings.program
+            : t.value.idp.settings.reviewTool
+
+    const prefix = editingMasterId.value
+        ? t.value.idp.settings.edit
+        : t.value.idp.settings.add
+
+    return `${prefix} ${type}`
+}
+
+// Packages as dropdown options (active one flagged) for the program form.
+const packageOptions = computed<Option[]>(() =>
+    props.packages.map((p) => ({
+        value: String(p.id),
+        label: p.is_active
+            ? `${p.name} · ${t.value.idp.settings.activeBadge}`
+            : p.name,
+    })),
+)
+
+// Development models for the chosen package only — the weighting is shown after
+// the name so it's clear at a glance. Empty until a package is picked.
+const packageModelOptions = computed<Option[]>(() =>
+    masterPackageId.value == null
+        ? []
+        : props.developmentModels
+              .filter(
+                  (m) => m.development_model_package_id === masterPackageId.value,
+              )
+              .map((m) => ({
+                  value: String(m.id),
+                  label: `${modelName(m)} (${m.percentage}%)`,
+              })),
+)
+
+// Switching package clears a model that no longer belongs to it.
+function onProgramPackageChange(value: string) {
+    masterPackageId.value = value === '' ? null : Number(value)
+
+    const model = props.developmentModels.find(
+        (m) => m.id === masterForm.development_model_id,
+    )
+    if (!model || model.development_model_package_id !== masterPackageId.value) {
+        masterForm.development_model_id = null
+    }
+}
+
+// Competencies offered to the program: those of the chosen competency type
+// (all of them when no type is picked) that are still active — a deactivated
+// competency can no longer be developed by new work.
+//
+// A competency the program was loaded with keeps its place even once switched
+// off, so editing some other field never silently unlinks it.
+const competencyOptions = computed<Option[]>(() => {
+    const loaded = new Set(loadedCompetencyIds.value)
+
+    return props.competencies
+        .filter(
+            (c) =>
+                (masterForm.competency_type_id == null ||
+                    c.competency_type_id === masterForm.competency_type_id) &&
+                (c.is_active || loaded.has(c.id)),
+        )
+        .map((c) => ({ value: String(c.id), label: masterName(c) }))
+})
+
+// A program develops exactly one competency; the pivot behind it still takes a
+// list, so the single select reads and writes the first (only) entry.
+const selectedCompetencyValue = computed<string>({
+    get: () => {
+        const [id] = masterForm.related_competencies
+        return id == null ? '' : String(id)
+    },
+    set: (value) => {
+        masterForm.related_competencies = value === '' ? [] : [Number(value)]
+    },
+})
+
+/**
+ * --------------------------------------------------------------------------
+ * Program name + description: typed, or taken from Master Training
+ * --------------------------------------------------------------------------
+ * Which of the two applies is not the program's choice: the development model
+ * it is filed under declares it (`uses_master_training`). A model that draws
+ * from the catalogue asks for a training and copies its name + description; any
+ * other model asks for both to be written out. The server decides the same way.
+ */
+
+// Whether the program's development model takes its programs from Master
+// Training. No model chosen means the text is typed.
+const usesMasterTraining = computed<boolean>(() => {
+    if (masterType.value !== 'development_program') return false
+    if (masterForm.development_model_id == null) return false
+
+    return (
+        modelById.value.get(masterForm.development_model_id)
+            ?.uses_master_training === true
+    )
+})
+
+// Only active trainings can name a new program. One the program was loaded
+// with keeps its place even once switched off, so editing some other field
+// never silently blanks the name.
+const trainingOptions = computed<Option[]>(() =>
+    props.trainings
+        .filter((tr) => tr.is_active || tr.id === loadedTrainingId.value)
+        .map((training) => ({
+            value: String(training.id),
+            label: masterName(training),
+        })),
+)
+
+const selectedTrainingValue = computed<string>({
+    get: () =>
+        masterForm.training_id == null ? '' : String(masterForm.training_id),
+    set: (value) => {
+        masterForm.training_id = value === '' ? null : Number(value)
+    },
+})
+
+// Mirror the chosen training's name + description into the form, so the drawer
+// shows exactly what will be stored. The server copies them again on save —
+// that is what the saved values actually rely on.
+function applyTrainingText() {
+    const training = props.trainings.find(
+        (tr) => tr.id === masterForm.training_id,
+    )
+
+    masterForm.value_en = training?.value_en ?? training?.value ?? ''
+    masterForm.value_id = training?.value_id ?? ''
+    masterForm.description_en = training?.description_en ?? ''
+    masterForm.description_id = training?.description_id ?? ''
+}
+
+// Moving the program onto a model that draws from the catalogue stashes the
+// typed text and restores it on the way back, so switching models never loses
+// what was written.
+watch(usesMasterTraining, (uses) => {
+    if (applyingOpen.value) return
+
+    if (uses) {
+        typedText.value = {
+            en: masterForm.value_en,
+            id: masterForm.value_id,
+            descEn: masterForm.description_en,
+            descId: masterForm.description_id,
+        }
+        applyTrainingText()
+
+        return
+    }
+
+    masterForm.training_id = null
+    masterForm.value_en = typedText.value.en
+    masterForm.value_id = typedText.value.id
+    masterForm.description_en = typedText.value.descEn
+    masterForm.description_id = typedText.value.descId
+})
+
+watch(
+    () => masterForm.training_id,
+    () => {
+        if (!applyingOpen.value && usesMasterTraining.value) {
+            applyTrainingText()
+        }
+    },
+)
+
+// Competency types as SearchableSelect options for the program form.
+const competencyTypeOptions = computed<Option[]>(() =>
+    props.competencyTypes.map((ct) => ({
+        value: String(ct.id),
+        label: masterName(ct),
+    })),
+)
+
+const competencyTypeById = computed(() => {
+    const m = new Map<number, CompetencyType>()
+    for (const ct of props.competencyTypes) m.set(ct.id, ct)
+    return m
+})
+
+// Whether the picked competency type is the catch-all "Others" — programs on it
+// free-type their competencies + proficiency level instead of picking masters.
+const isOthersType = computed<boolean>(() => {
+    if (masterForm.competency_type_id == null) return false
+    const v = (
+        competencyTypeById.value.get(masterForm.competency_type_id)?.value ?? ''
+    )
+        .trim()
+        .toLowerCase()
+    return v === 'others' || v === 'other' || v === 'lainnya'
+})
+
+const proficiencyLevelById = computed(() => {
+    const m = new Map<number, ProficiencyLevel>()
+    for (const pl of props.proficiencyLevels) m.set(pl.id, pl)
+    return m
+})
+
+/**
+ * --------------------------------------------------------------------------
+ * Program scope, derived from the master implementations
+ * --------------------------------------------------------------------------
+ * Master Implementation is what says at which proficiency levels a competency
+ * is actually rolled out, and to which grades. A program therefore offers only
+ * the levels its competencies are implemented at, and only the grades that
+ * mapping covers. The server enforces the same rule on save.
+ */
+
+// The implementation rows covering the competencies this program develops.
+const implementationScopes = computed<Implementation[]>(() => {
+    const selected = new Set(masterForm.related_competencies)
+
+    return props.implementations.filter(
+        (i) => i.competency_id != null && selected.has(i.competency_id),
+    )
+})
+
+// The grades those implementations cover for one proficiency level, in
+// corporate grade order. A mapping that lists no grades of its own covers every
+// grade. Empty when no implementation maps the level at all.
+function gradesForLevel(levelId: number): string[] {
+    return gradesForLevelIn(implementationScopes.value, levelId, props.grades)
+}
+
+// Grades as compact ranges — `2-3` rather than `2, 3` — by collapsing runs that
+// sit next to each other in the corporate grade order. Anything outside that
+// order is listed as-is.
+function gradeRangeLabel(grades: string[]): string {
+    return gradeRangeLabelIn(grades, props.grades)
+}
+
+// Proficiency levels available to the program: the levels its competencies are
+// implemented at, each labelled with the grades that mapping covers —
+// "PL1 (Grade Level 2-3)". Empty until a competency with an implementation is
+// picked. The level the program was loaded with stays listed even if its
+// implementation has since gone, so an edit never silently drops it.
+const proficiencyLevelOptions = computed<Option[]>(() => {
+    const levelIds = new Set<number>()
+
+    for (const scope of implementationScopes.value) {
+        for (const id of scope.proficiency_level_ids) levelIds.add(id)
+    }
+
+    if (loadedProficiencyLevelId.value != null) {
+        levelIds.add(loadedProficiencyLevelId.value)
+    }
+
+    return [...levelIds]
+        .map((id) => proficiencyLevelById.value.get(id))
+        .filter((pl): pl is ProficiencyLevel => pl != null)
+        .map((pl) => {
+            const grades = gradeRangeLabel(gradesForLevel(pl.id))
+
+            return {
+                value: String(pl.id),
+                label: grades
+                    ? `${masterName(pl)} (${t.value.idp.settings.gradeLevel} ${grades})`
+                    : masterName(pl),
+                // What the rung means — the only thing telling PL1 from PL2
+                // apart on a form.
+                description: rowDescription(pl) || undefined,
+            }
+        })
+})
+
+// Grades offered to the program: exactly what the implementation map covers for
+// the chosen proficiency level — nothing at all until a level is chosen, and
+// nothing when no implementation covers it. Grades the program was loaded with
+// stay listed so an edit never silently drops them.
+const gradeOptions = computed<Option[]>(() => {
+    const levelId = masterForm.proficiency_level_id
+    const list = levelId == null ? [] : gradesForLevel(levelId)
+
+    return [
+        ...list,
+        ...loadedGrades.value.filter((g) => !list.includes(g)),
+    ].map((g) => ({ value: g, label: g }))
+})
+
+// Per-type snapshot of the competency-related fields, so switching competency
+// type resets the selection but returning to a type restores what was chosen
+// under it (kept only for the lifetime of one open drawer). Seeded on open.
+interface TypeSnapshot {
+    competencies: number[]
+    proficiencyLevelId: number | null
+    customProficiency: string
+}
+const typeCache = ref<Record<number, TypeSnapshot>>({})
+
+// Guards the watcher below while openMaster is seeding the form, so loading a
+// program for edit never wipes its stored competencies.
+const applyingOpen = ref(false)
+
+// Snapshot the competency-related fields as they currently stand in the form.
+function snapshotType(): TypeSnapshot {
+    return {
+        competencies: [...masterForm.related_competencies],
+        proficiencyLevelId: masterForm.proficiency_level_id,
+        customProficiency: masterForm.custom_proficiency_level,
+    }
+}
+
+// React to a change of competency type: stash the outgoing type's selection,
+// then restore (or reset) the incoming type's. The competency itself is picked
+// from the masters under every type, "Others" included; what "Others" swaps to
+// free typing is the proficiency level.
+watch(
+    () => masterForm.competency_type_id,
+    (typeId, oldTypeId) => {
+        if (applyingOpen.value) return
+
+        if (oldTypeId != null) {
+            typeCache.value[oldTypeId] = snapshotType()
+        }
+
+        const snap = typeId != null ? typeCache.value[typeId] : undefined
+
+        if (typeId == null) {
+            masterForm.related_competencies = []
+            masterForm.proficiency_level_id = null
+            masterForm.custom_proficiency_level = ''
+            return
+        }
+
+        // Restore the cached selection for this type, keeping only competencies
+        // that still belong to it; else start empty.
+        masterForm.related_competencies = (snap?.competencies ?? []).filter(
+            (id) =>
+                props.competencies.find((c) => c.id === id)?.competency_type_id ===
+                typeId,
+        )
+
+        if (isOthersType.value) {
+            // Free-typed level — restore any previously typed text.
+            masterForm.proficiency_level_id = null
+            masterForm.custom_proficiency_level = snap?.customProficiency ?? ''
+            return
+        }
+
+        masterForm.custom_proficiency_level = ''
+        masterForm.proficiency_level_id = snap?.proficiencyLevelId ?? null
+    },
+)
+
+// If the picked competencies are no longer implemented at the chosen
+// proficiency level, clear it so the form never submits an out-of-range level.
+watch(proficiencyLevelOptions, (opts) => {
+    if (
+        masterForm.proficiency_level_id != null &&
+        !opts.some((o) => o.value === String(masterForm.proficiency_level_id))
+    ) {
+        masterForm.proficiency_level_id = null
+    }
+})
+
+// Changing the proficiency level re-scopes the grades to that level's
+// implementation; drop any selection it no longer covers.
+watch(gradeOptions, (opts) => {
+    const offered = new Set(opts.map((o) => o.value))
+    masterForm.grades = masterForm.grades.filter((g) => offered.has(g))
+})
+
+/**
+ * --------------------------------------------------------------------------
+ * Program form: step completion
+ * --------------------------------------------------------------------------
+ * The form is a cascade (name → competency scope → placement), so each section
+ * reports whether it is settled — the step badge turns into a check.
+ */
+
+const isProgram = computed(() => masterType.value === 'development_program')
+
+const identityComplete = computed(() =>
+    usesMasterTraining.value
+        ? masterForm.training_id != null && masterForm.value_en.trim() !== ''
+        : masterForm.value_en.trim() !== '',
+)
+
+const scopeComplete = computed(
+    () =>
+        masterForm.competency_type_id != null &&
+        masterForm.related_competencies.length > 0,
+)
+
+const placementComplete = computed(
+    () => masterForm.development_model_id !== null,
+)
+
+defineExpose({ open: openMaster })
+</script>
+
+<template>
+    <Drawer
+        :show="masterModal"
+        :title="masterTitle()"
+        max-width="max-w-3xl"
+        @close="requestClose"
+    >
+        <form
+            id="master-form"
+            class="space-y-4"
+            @submit.prevent="submitMaster"
+        >
+            <!-- ========================================================
+                 1. Scope — what the program develops, and for whom
+            ========================================================= -->
+            <FormSection
+                v-if="isProgram"
+                :step="1"
+                :title="t.idp.settings.scope"
+                icon="fa-solid fa-bullseye"
+                :complete="scopeComplete"
+            >
+                <div class="grid gap-4 sm:grid-cols-2">
+                    <!-- Competency type (scopes everything below it) -->
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                            {{ t.idp.settings.competencyType }}
+                            <span class="text-red-500">*</span>
+                        </label>
+
+                        <SearchableSelect
+                            :model-value="
+                                masterForm.competency_type_id == null
+                                    ? ''
+                                    : String(masterForm.competency_type_id)
+                            "
+                            :options="competencyTypeOptions"
+                            :placeholder="t.idp.settings.selectCompetencyType"
+                            :invalid="!!masterForm.errors.competency_type_id"
+                            @update:model-value="
+                                masterForm.competency_type_id =
+                                    $event === '' ? null : Number($event)
+                            "
+                        />
+                        <p
+                            v-if="masterForm.errors.competency_type_id"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.competency_type_id }}
+                        </p>
+                    </div>
+
+                    <!-- Competency — a master filed under the chosen type -->
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                            {{ t.idp.settings.competency }}
+                            <span class="text-red-500">*</span>
+                        </label>
+
+                        <!-- Waiting on a competency type -->
+                        <p
+                            v-if="masterForm.competency_type_id == null"
+                            class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                        >
+                            <i class="fa-solid fa-lock mt-0.5 text-[10px] text-slate-300" />
+                            <span>{{ t.idp.settings.pickTypeFirst }}</span>
+                        </p>
+
+                        <template v-else>
+                            <SearchableSelect
+                                v-if="competencyOptions.length"
+                                v-model="selectedCompetencyValue"
+                                :options="competencyOptions"
+                                :placeholder="t.idp.settings.searchCompetency"
+                                :invalid="!!masterForm.errors.related_competencies"
+                            />
+                            <p
+                                v-else
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i
+                                    class="fa-solid fa-circle-info mt-0.5 text-[10px] text-slate-400"
+                                />
+                                <span>{{ t.idp.settings.noCompetenciesForType }}</span>
+                            </p>
+
+                            <p
+                                v-if="masterForm.errors.related_competencies"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ masterForm.errors.related_competencies }}
+                            </p>
+                        </template>
+                    </div>
+
+                    <!-- Proficiency level (from the master implementation) -->
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                            {{ t.idp.settings.proficiencyLevel }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
+
+                        <p
+                            v-if="masterForm.competency_type_id == null"
+                            class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                        >
+                            <i class="fa-solid fa-lock mt-0.5 text-[10px] text-slate-300" />
+                            <span>{{ t.idp.settings.pickTypeFirst }}</span>
+                        </p>
+
+                        <template v-else-if="!isOthersType">
+                            <SearchableSelect
+                                v-if="proficiencyLevelOptions.length"
+                                :model-value="
+                                    masterForm.proficiency_level_id == null
+                                        ? ''
+                                        : String(masterForm.proficiency_level_id)
+                                "
+                                :options="proficiencyLevelOptions"
+                                :placeholder="t.idp.settings.proficiencyLevelPickHint"
+                                :invalid="!!masterForm.errors.proficiency_level_id"
+                                @update:model-value="
+                                    masterForm.proficiency_level_id =
+                                        $event === '' ? null : Number($event)
+                                "
+                            />
+                            <p
+                                v-else
+                                class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                            >
+                                <i
+                                    class="mt-0.5 text-[10px] text-slate-300"
+                                    :class="
+                                        masterForm.related_competencies.length
+                                            ? 'fa-solid fa-circle-info'
+                                            : 'fa-solid fa-lock'
+                                    "
+                                />
+                                <span>
+                                    {{
+                                        masterForm.related_competencies.length
+                                            ? t.idp.settings.noImplementedProficiency
+                                            : t.idp.settings.pickCompetencyFirst
+                                    }}
+                                </span>
+                            </p>
+
+                            <p
+                                v-if="masterForm.errors.proficiency_level_id"
+                                class="mt-1 text-xs text-red-600"
+                            >
+                                {{ masterForm.errors.proficiency_level_id }}
+                            </p>
+                        </template>
+
+                        <!-- "Others" type → free-type the proficiency level -->
+                        <input
+                            v-else
+                            v-model="masterForm.custom_proficiency_level"
+                            type="text"
+                            :placeholder="t.idp.settings.customProficiencyPlaceholder"
+                            class="w-full rounded-md border border-border bg-white px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                    </div>
+
+                    <!-- Grades covered by that implementation -->
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                            {{ t.idp.settings.grade }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
+
+                        <MultiSelect
+                            v-if="gradeOptions.length"
+                            v-model="masterForm.grades"
+                            :options="gradeOptions"
+                            :placeholder="t.idp.settings.gradePickHint"
+                            :invalid="!!masterForm.errors.grades"
+                            select-all
+                            :select-all-label="t.idp.settings.selectAllGrades"
+                            :clear-all-label="t.idp.settings.clearAllGrades"
+                        />
+                        <p
+                            v-else
+                            class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                        >
+                            <i
+                                class="mt-0.5 text-[10px] text-slate-300"
+                                :class="
+                                    masterForm.proficiency_level_id == null
+                                        ? 'fa-solid fa-lock'
+                                        : 'fa-solid fa-circle-info'
+                                "
+                            />
+                            <span>
+                                {{
+                                    masterForm.proficiency_level_id == null
+                                        ? t.idp.settings.pickProficiencyFirst
+                                        : t.idp.settings.noGradesForProficiency
+                                }}
+                            </span>
+                        </p>
+
+                        <p
+                            v-if="masterForm.errors.grades"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.grades }}
+                        </p>
+                    </div>
+                </div>
+            </FormSection>
+
+            <!-- ========================================================
+                 2. Placement — package + development model
+            ========================================================= -->
+            <FormSection
+                v-if="isProgram"
+                :step="2"
+                :title="t.idp.settings.programPlacement"
+                icon="fa-solid fa-cubes"
+                :complete="placementComplete"
+            >
+                <div class="grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                            {{ t.idp.settings.modelPackage }}
+                        </label>
+
+                        <SearchableSelect
+                            :model-value="
+                                masterPackageId == null ? '' : String(masterPackageId)
+                            "
+                            :options="packageOptions"
+                            :placeholder="t.idp.settings.packagePickHint"
+                            @update:model-value="onProgramPackageChange($event)"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                            {{ t.idp.settings.model }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
+
+                        <SearchableSelect
+                            :model-value="
+                                masterForm.development_model_id == null
+                                    ? ''
+                                    : String(masterForm.development_model_id)
+                            "
+                            :options="packageModelOptions"
+                            :disabled="masterPackageId == null"
+                            :invalid="!!masterForm.errors.development_model_id"
+                            :placeholder="
+                                masterPackageId == null
+                                    ? t.idp.settings.selectPackageFirst
+                                    : t.idp.settings.selectModel
+                            "
+                            @update:model-value="
+                                masterForm.development_model_id =
+                                    $event === '' ? null : Number($event)
+                            "
+                        />
+                        <p
+                            v-if="masterForm.errors.development_model_id"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.development_model_id }}
+                        </p>
+                    </div>
+                </div>
+            </FormSection>
+
+            <!-- ========================================================
+                 3. Identity — what the program is called. Where the name
+                 and description come from is the development model's call
+                 (`uses_master_training`), not a choice made here.
+            ========================================================= -->
+            <FormSection
+                :step="3"
+                :title="isProgram ? t.idp.settings.programIdentity : t.idp.settings.name"
+                icon="fa-solid fa-tag"
+                :complete="identityComplete"
+            >
+                <!-- Says why the fields below look the way they do -->
+                <p
+                    v-if="usesMasterTraining"
+                    class="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-slate-600"
+                >
+                    <i class="fa-solid fa-graduation-cap mt-0.5 text-[10px] text-primary" />
+                    <span>{{ t.idp.settings.nameFromModelTraining }}</span>
+                </p>
+
+                <!-- 3a. Name + description taken from Master Training -->
+                <div v-if="usesMasterTraining">
+                    <label class="mb-1.5 block text-sm font-medium text-slate-700">
+                        {{ t.idp.settings.training }}
+                        <span class="text-red-500">*</span>
+                    </label>
+
+                    <SearchableSelect
+                        v-if="trainingOptions.length"
+                        v-model="selectedTrainingValue"
+                        :options="trainingOptions"
+                        :placeholder="t.idp.settings.searchTraining"
+                        :invalid="
+                            !!masterForm.errors.training_id ||
+                            !!masterForm.errors.value_en
+                        "
+                    />
+                    <p
+                        v-else
+                        class="flex items-start gap-2 rounded-md border border-dashed border-border bg-slate-50/60 px-3 py-2 text-xs text-slate-500"
+                    >
+                        <i class="fa-solid fa-circle-info mt-0.5 text-[10px] text-slate-400" />
+                        <span>{{ t.idp.settings.noTrainings }}</span>
+                    </p>
+
+                    <p
+                        v-if="masterForm.errors.training_id || masterForm.errors.value_en"
+                        class="mt-1 text-xs text-red-600"
+                    >
+                        {{ masterForm.errors.training_id || masterForm.errors.value_en }}
+                    </p>
+
+                    <!-- What the training resolves to — the name and the
+                         description, in both languages, exactly as they
+                         will be stored on the program. -->
+                    <div
+                        v-if="masterForm.training_id !== null"
+                        class="mt-3 space-y-3 rounded-lg border border-border bg-slate-50/60 px-3 py-2.5"
+                    >
+                        <div>
+                            <p
+                                class="text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+                            >
+                                {{ t.idp.settings.savedName }}
+                            </p>
+                            <div class="mt-1.5 space-y-1.5">
+                                <p class="flex items-start gap-2 text-sm text-slate-700">
+                                    <span
+                                        class="mt-0.5 inline-flex shrink-0 items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                    >
+                                        EN
+                                    </span>
+                                    <span class="min-w-0 break-words">
+                                        {{ masterForm.value_en || '—' }}
+                                    </span>
+                                </p>
+                                <p class="flex items-start gap-2 text-sm text-slate-700">
+                                    <span
+                                        class="mt-0.5 inline-flex shrink-0 items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                    >
+                                        ID
+                                    </span>
+                                    <span class="min-w-0 break-words">
+                                        {{ masterForm.value_id || '—' }}
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="border-t border-border/60 pt-2.5">
+                            <p
+                                class="text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+                            >
+                                {{ t.idp.settings.description }}
+                            </p>
+                            <div class="mt-1.5 space-y-1.5">
+                                <p class="flex items-start gap-2 text-sm text-slate-700">
+                                    <span
+                                        class="mt-0.5 inline-flex shrink-0 items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                                    >
+                                        EN
+                                    </span>
+                                    <span class="min-w-0 break-words">
+                                        {{ masterForm.description_en || '—' }}
+                                    </span>
+                                </p>
+                                <p class="flex items-start gap-2 text-sm text-slate-700">
+                                    <span
+                                        class="mt-0.5 inline-flex shrink-0 items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                                    >
+                                        ID
+                                    </span>
+                                    <span class="min-w-0 break-words">
+                                        {{ masterForm.description_id || '—' }}
+                                    </span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3b. Bilingual name, typed side by side. A program name is
+                     an activity description, often a full sentence, so it wraps
+                     in a textarea instead of scrolling sideways in a one-line
+                     input. Enter is swallowed: the name is stored verbatim in
+                     lists, exports and PDFs, where a line break has no meaning. -->
+                <div v-if="!usesMasterTraining" class="grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label
+                            class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                        >
+                            <span
+                                class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                            >
+                                EN
+                            </span>
+                            {{ t.idp.settings.english }}
+                            <span class="text-red-500">*</span>
+                        </label>
+                        <textarea
+                            v-model="masterForm.value_en"
+                            rows="3"
+                            :placeholder="t.idp.settings.namePlaceholderEn"
+                            class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            :class="
+                                masterForm.errors.value_en
+                                    ? 'border-red-500'
+                                    : 'border-border'
+                            "
+                            @keydown.enter.prevent
+                        />
+                        <p
+                            v-if="masterForm.errors.value_en"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.value_en }}
+                        </p>
+                    </div>
+
+                    <div>
+                        <label
+                            class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                        >
+                            <span
+                                class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                            >
+                                ID
+                            </span>
+                            {{ t.idp.settings.bahasa }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
+                        <textarea
+                            v-model="masterForm.value_id"
+                            rows="3"
+                            :placeholder="t.idp.settings.namePlaceholderId"
+                            class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            :class="
+                                masterForm.errors.value_id
+                                    ? 'border-red-500'
+                                    : 'border-border'
+                            "
+                            @keydown.enter.prevent
+                        />
+                        <p
+                            v-if="masterForm.errors.value_id"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.value_id }}
+                        </p>
+                    </div>
+                </div>
+
+                <!-- 3c. Bilingual description — what the activity covers.
+                     Only a program carries one; a review tool is a bare
+                     label. Line breaks are kept here: unlike the name, a
+                     description is only ever read as a block of text. -->
+                <div
+                    v-if="isProgram && !usesMasterTraining"
+                    class="grid gap-4 sm:grid-cols-2"
+                >
+                    <div>
+                        <label
+                            class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                        >
+                            <span
+                                class="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700"
+                            >
+                                EN
+                            </span>
+                            {{ t.idp.settings.description }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
+                        <textarea
+                            v-model="masterForm.description_en"
+                            rows="3"
+                            :placeholder="t.idp.settings.programDescriptionPlaceholderEn"
+                            class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            :class="
+                                masterForm.errors.description_en
+                                    ? 'border-red-500'
+                                    : 'border-border'
+                            "
+                        />
+                        <p
+                            v-if="masterForm.errors.description_en"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.description_en }}
+                        </p>
+                    </div>
+
+                    <div>
+                        <label
+                            class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                        >
+                            <span
+                                class="inline-flex items-center rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-rose-700"
+                            >
+                                ID
+                            </span>
+                            {{ t.idp.settings.description }}
+                            <span class="font-normal text-slate-400">
+                                ({{ t.idp.settings.optional }})
+                            </span>
+                        </label>
+                        <textarea
+                            v-model="masterForm.description_id"
+                            rows="3"
+                            :placeholder="t.idp.settings.programDescriptionPlaceholderId"
+                            class="w-full resize-y rounded-md border bg-white px-3 py-2 text-sm leading-relaxed focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            :class="
+                                masterForm.errors.description_id
+                                    ? 'border-red-500'
+                                    : 'border-border'
+                            "
+                        />
+                        <p
+                            v-if="masterForm.errors.description_id"
+                            class="mt-1 text-xs text-red-600"
+                        >
+                            {{ masterForm.errors.description_id }}
+                        </p>
+                    </div>
+                </div>
+            </FormSection>
+        </form>
+
+        <template #footer>
+            <button
+                type="button"
+                class="rounded-md border border-border px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                @click="requestClose"
+            >
+                {{ t.idp.form.cancel }}
+            </button>
+
+            <button
+                type="submit"
+                form="master-form"
+                :disabled="masterForm.processing"
+                class="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover disabled:opacity-60"
+            >
+                <i
+                    v-if="masterForm.processing"
+                    class="fa-solid fa-circle-notch fa-spin text-xs"
+                />
+                {{ t.idp.form.save }}
+            </button>
+        </template>
+    </Drawer>
+
+    <!-- ================================================================
+         UNSAVED-CHANGES CONFIRMATION
+    ================================================================= -->
+
+    <UnsavedChangesDialog
+        :show="confirming"
+        @confirm="discard"
+        @close="confirming = false"
+    />
+</template>

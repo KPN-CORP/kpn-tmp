@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Head, router, useForm } from '@inertiajs/vue3'
+import { Head, useForm } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -17,6 +17,7 @@ import { useLocale } from '@/Composables/useLocale'
 import { useActiveStateToggle } from '@/Composables/useActiveStateToggle'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
+import { useDeleteConfirm } from '@/Composables/useDeleteConfirm'
 
 const { t, locale } = useLocale()
 
@@ -178,8 +179,7 @@ function openHistory(tool: ReviewTool) {
  * --------------------------------------------------------------------------
  */
 
-const pendingDelete = ref<{ url: string; name?: string } | null>(null)
-const deleting = ref(false)
+const { pendingDelete, deleting, confirmDelete, cancelDelete } = useDeleteConfirm(reloadOnly)
 
 function deleteTool(tool: ReviewTool) {
     pendingDelete.value = {
@@ -188,18 +188,6 @@ function deleteTool(tool: ReviewTool) {
     }
 }
 
-function confirmDelete() {
-    if (!pendingDelete.value) return
-
-    router.delete(pendingDelete.value.url, {
-        preserveScroll: true,
-        preserveState: true,
-        only: reloadOnly,
-        onStart: () => (deleting.value = true),
-        onFinish: () => (deleting.value = false),
-        onSuccess: () => (pendingDelete.value = null),
-    })
-}
 </script>
 
 <template>
@@ -426,7 +414,7 @@ function confirmDelete() {
             variant="danger"
             :processing="deleting"
             @confirm="confirmDelete"
-            @close="pendingDelete = null"
+            @close="cancelDelete"
         >
             <p
                 v-if="pendingDelete?.name"

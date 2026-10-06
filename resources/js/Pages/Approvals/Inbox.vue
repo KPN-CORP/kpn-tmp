@@ -32,17 +32,9 @@ import { uomLabelMap } from '@/Components/Domain/Idp/uom'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
 import type { InboxRequest, UomOption } from '@/types/idp'
+import type { Paginator } from '@/types/pagination'
 
 const { t, locale } = useLocale()
-
-interface Paginator {
-    data: InboxRequest[]
-    links: { url: string | null; label: string; active: boolean }[]
-    total: number
-    from: number | null
-    to: number | null
-    per_page: number
-}
 
 interface Sort {
     key: string
@@ -50,7 +42,7 @@ interface Sort {
 }
 
 const props = defineProps<{
-    items: Paginator
+    items: Paginator<InboxRequest>
     /** Which desk is being read. */
     view: 'pending' | 'history'
     filters: { search: string; stage: string; type: string }
@@ -278,7 +270,14 @@ function toggleAll() {
                     "
                     @click="selectTab(tab.key)"
                 >
-                    <i :class="tab.icon" class="text-xs" />
+                    <!-- Same colour as the stage tag + stripe on the cards it lists -->
+                    <i
+                        :class="[
+                            tab.icon,
+                            tab.key === 'planning' ? 'text-primary' : tab.key === 'result' ? 'text-emerald-600' : '',
+                        ]"
+                        class="text-xs"
+                    />
                     {{ tab.label }}
                     <span
                         class="rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
@@ -379,7 +378,6 @@ function toggleAll() {
                     :open="expanded.has(item.step_id)"
                     @toggle="toggle(item.step_id)"
                 />
-
 
                 <p
                     v-if="!items.data.length"

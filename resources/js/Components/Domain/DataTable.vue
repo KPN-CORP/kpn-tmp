@@ -1,5 +1,6 @@
 <script setup lang="ts" generic="T extends Record<string, any>">
 import { computed, ref } from 'vue'
+import { useLocale } from '@/Composables/useLocale'
 
 /**
  * Lightweight data table with per-column sorting.
@@ -25,6 +26,8 @@ export interface Sort {
     key: string
     dir: 'asc' | 'desc'
 }
+
+const { t } = useLocale()
 
 const props = defineProps<{
     columns: Column[]
@@ -135,7 +138,7 @@ function arrow(col: Column): string {
                         :colspan="columns.length"
                         class="px-5 py-12 text-center text-sm text-slate-400"
                     >
-                        <slot name="empty">No records found.</slot>
+                        <slot name="empty">{{ t.common.noRecords }}</slot>
                     </td>
                 </tr>
             </tbody>

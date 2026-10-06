@@ -26,6 +26,18 @@
         <env name="DB_CONNECTION" value="sqlite"/>
         <env name="DB_DATABASE" value=":memory:"/>
         <env name="DB_URL" value=""/>
+        <!-- The corporate and shared-permission connections read their own
+             env vars, so DB_CONNECTION alone does not isolate them: a test
+             query would reach the dev kpncorp DB or the shared remote
+             permission DB. Point both at a closed local port so any such
+             query fails at once instead. -->
+        <env name="KPNCORP_DB_HOST" value="127.0.0.1"/>
+        <env name="KPNCORP_DB_PORT" value="1"/>
+        <env name="KPNCORP_DB_DATABASE" value="kpncorp_testing_disabled"/>
+        <env name="SYS_PERM_DB_HOST" value="127.0.0.1"/>
+        <env name="SYS_PERM_DB_PORT" value="1"/>
+        <env name="SYS_PERM_DB_DATABASE" value="sys_perm_testing_disabled"/>
+        <env name="DEV_LOGIN_KEY" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>

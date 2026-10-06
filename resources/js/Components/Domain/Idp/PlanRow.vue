@@ -12,7 +12,7 @@ import { computed } from 'vue'
 import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDate } from '@/Composables/useDate'
-import { planningKey, resultKey } from '@/Components/Domain/Idp/planStatus'
+import { daysLate, planningKey, resultKey } from '@/Components/Domain/Idp/planStatus'
 import { attainment, formatTarget } from '@/Components/Domain/Idp/uom'
 import type { Plan, Tone } from '@/types/idp'
 
@@ -30,6 +30,8 @@ const props = defineProps<{
     timeline: { key: string; label: string; late: string; badge: string; dot: string }
     canEdit: boolean
     submitting: boolean
+    /** Pointed at by a Task Box link: tinted, amber while it waits on the viewer. */
+    highlighted?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -42,6 +44,9 @@ const emit = defineEmits<{
 }>()
 
 const r = computed(() => t.value.idp.result)
+
+/** Days the realization date falls after the planned end, or null when it is on time. */
+const realizedLate = computed(() => (props.plan.realization_date ? daysLate(props.plan) : null))
 const s = computed(() => t.value.idp.stage)
 const stage = computed(() => props.plan.stage)
 const result = computed(() => stage.value.result)
@@ -112,9 +117,29 @@ const achievedPercent = computed(() => attainment(props.plan.target, props.plan.
 </script>
 
 <template>
-    <tr class="group border-b border-border/60 align-top transition last:border-0 hover:bg-slate-50/70">
-        <!-- What it develops -->
-        <td class="px-5 py-3.5">
+    <tr
+        :id="`plan-row-${plan.id}`"
+        class="group scroll-mt-24 border-b border-border/60 align-top transition-colors duration-500 last:border-0"
+        :class="
+            highlighted
+                ? result.can_act
+                    ? 'bg-amber-50 hover:bg-amber-50'
+                    : 'bg-primary/5 hover:bg-primary/5'
+                : 'hover:bg-slate-50/70'
+        "
+    >
+        <!-- What it develops. A highlighted row carries its mark on this edge. -->
+        <td
+            class="px-5 py-3.5"
+            :class="highlighted ? (result.can_act ? 'shadow-[inset_4px_0_0_0_#f59e0b]' : 'shadow-[inset_4px_0_0_0_var(--color-primary)]') : ''"
+        >
+            <span
+                v-if="highlighted && result.can_act"
+                class="mb-1.5 inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800"
+            >
+                <i class="fa-solid fa-hourglass-half text-[10px]" />
+                {{ t.approvalFlow.needsYourApproval }}
+            </span>
             <div class="font-medium text-slate-800">{{ competencyLabel }}</div>
             <div class="mt-1 flex flex-wrap items-center gap-1.5">
                 <span class="rounded bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700">
@@ -189,9 +214,19 @@ const achievedPercent = computed(() => attainment(props.plan.target, props.plan.
                             class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-slate-500"
                         >{{ achievedPercent }}%</span>
                     </p>
-                    <p class="text-[11px] text-slate-500">
-                        <i class="fa-regular fa-calendar-check mr-1 text-slate-300" />
-                        {{ formatDate(plan.realization_date) }}
+                    <p class="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                        <span>
+                            <i class="fa-regular fa-calendar-check mr-1 text-slate-300" />{{ formatDate(plan.realization_date) }}
+                        </span>
+                        <!-- Realized after the time frame ended -->
+                        <span
+                            v-if="realizedLate"
+                            class="inline-flex items-center gap-1 rounded bg-orange-50 px-1.5 py-0.5 font-semibold text-orange-700 ring-1 ring-orange-200"
+                            :title="t.idp.status.completedLate"
+                        >
+                            <i class="fa-solid fa-clock-rotate-left text-[9px]" />
+                            {{ realizedLate === 1 ? r.lateOneDay : r.lateDays.replace('{n}', String(realizedLate)) }}
+                        </span>
                     </p>
                     <a
                         v-if="isUrl(plan.result_evidence)"

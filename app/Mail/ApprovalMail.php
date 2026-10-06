@@ -25,7 +25,12 @@ class ApprovalMail extends Mailable implements ShouldQueue
         public string $bodyLine,
         public string $actionUrl,
         public string $actionText,
-    ) {}
+    ) {
+        // Every approval email is raised inside the transaction that records the
+        // decision. Queue it only once that commits, so a rolled-back action
+        // never mails anyone, and a worker never sends it before the row exists.
+        $this->afterCommit();
+    }
 
     public function envelope(): Envelope
     {

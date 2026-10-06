@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { Head, Link, router } from '@inertiajs/vue3'
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -10,6 +10,8 @@ import { useLocale } from '@/Composables/useLocale'
 import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
 import { route } from '@/Config/route'
 import type { PlanningStatus, Tone } from '@/types/idp'
+import type { Paginator } from '@/types/pagination'
+import { useBulkExport } from '@/Composables/useBulkExport'
 
 const { t } = useLocale()
 
@@ -30,17 +32,8 @@ interface EmployeeRow {
     cycle: CycleStatus | null
 }
 
-interface Paginator {
-    data: EmployeeRow[]
-    links: { url: string | null; label: string; active: boolean }[]
-    total: number
-    from: number | null
-    to: number | null
-    per_page: number
-}
-
 const props = defineProps<{
-    employees: Paginator
+    employees: Paginator<EmployeeRow>
     filters: {
         search: string
         business_unit: string
@@ -201,67 +194,15 @@ function onFilter(key: 'business_unit' | 'job_level' | 'designation', value: str
 }
 
 // --- Bulk PDF zip (background job + polling) ---
-const bulk = reactive({ running: false, progress: 0, error: '' })
-let poll: ReturnType<typeof setInterval> | undefined
+const { bulk, start: startBulk } = useBulkExport({
+    start: route('idp.bulk_download'),
+    status: (jobId) => route('idp.bulk_status', jobId),
+    file: (jobId) => route('idp.bulk_file', jobId),
+})
 
-async function startBulkDownload() {
-    bulk.running = true
-    bulk.progress = 0
-    bulk.error = ''
-    try {
-        const xsrf = decodeURIComponent(
-            document.cookie.split('; ').find((c) => c.startsWith('XSRF-TOKEN='))?.split('=')[1] ?? '',
-        )
-        const res = await fetch(route('idp.bulk_download'), {
-            method: 'POST',
-            headers: {
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                'X-XSRF-TOKEN': xsrf,
-            },
-            // The zip covers the cycle the list is showing, like the row links.
-            body: JSON.stringify({ employee_ids: selected.value }),
-        })
-        const { job_id } = await res.json()
-        pollStatus(job_id)
-    } catch {
-        bulk.error = 'Failed to start export.'
-        bulk.running = false
-    }
+function startBulkDownload() {
+    startBulk(selected.value)
 }
-
-function pollStatus(jobId: string) {
-    clearInterval(poll)
-    poll = setInterval(async () => {
-        try {
-            const res = await fetch(route('idp.bulk_status', jobId), { headers: { Accept: 'application/json' } })
-            const data = await res.json()
-            // Stopped — or the page was left — while this request was in flight.
-            if (poll === undefined) return
-            bulk.progress = data.progress ?? 0
-            if (data.error) {
-                bulk.error = data.error
-                stopBulk()
-            } else if (data.ready) {
-                stopBulk()
-                window.location.href = route('idp.bulk_file', jobId)
-            }
-        } catch {
-            bulk.error = 'Lost connection to the job.'
-            stopBulk()
-        }
-    }, 1500)
-}
-
-function stopBulk() {
-    clearInterval(poll)
-    poll = undefined
-    bulk.running = false
-}
-
-// Leaving the page must stop the polling; otherwise it keeps running and can
-// still redirect to the zip from whatever page the user moved on to.
-onBeforeUnmount(stopBulk)
 
 </script>
 

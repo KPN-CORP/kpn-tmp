@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useLocale } from '@/Composables/useLocale'
 
 /**
  * Date field that shows dd-mm-yyyy to the user but binds an ISO `yyyy-mm-dd`
  * value (what gets submitted and stored). Type it, or pick from the native
  * calendar via the button. An invalid/incomplete entry reverts on blur.
  */
+const { t } = useLocale()
+
 const props = defineProps<{
     modelValue: string | null
     invalid?: boolean
@@ -90,7 +93,7 @@ function onNative(event: Event) {
             type="button"
             class="absolute right-0 top-0 flex h-full w-10 items-center justify-center text-slate-400 transition hover:text-primary"
             tabindex="-1"
-            aria-label="Open calendar"
+            :aria-label="t.common.openCalendar"
             @click="openPicker"
         >
             <i class="fa-regular fa-calendar text-sm" />

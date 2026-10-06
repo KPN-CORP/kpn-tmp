@@ -21,6 +21,7 @@ use App\Models\IndividualDevelopmentPlan;
 use App\Models\JobStatus;
 use App\Models\ReviewTool;
 use App\Models\User;
+use App\Services\ApprovalChainService;
 use App\Services\EmployeeScopeService;
 use App\Services\Idp\IdpStageService;
 use App\Services\IdpService;
@@ -54,6 +55,7 @@ class IdpController extends Controller
         private readonly EmployeeScopeService $scope,
         private readonly IdpService $idp,
         private readonly IdpStageService $stage,
+        private readonly ApprovalChainService $chain,
     ) {}
 
     /**
@@ -82,7 +84,7 @@ class IdpController extends Controller
             ->withQueryString()
             ->through(fn ($employee) => (new EmployeeResource($employee))->resolve());
 
-        // Where each employee on THIS page stands in the chosen cycle, resolved
+        // Where each employee on THIS page stands in the active cycle, resolved
         // in two queries for the whole page rather than one pair per row.
         $employees->setCollection(
             $this->withCycleStatus($employees->getCollection(), $activePackageId),
@@ -133,8 +135,23 @@ class IdpController extends Controller
      */
     private function teamQuery(User $user, array $capability): Builder
     {
-        return $this->scope->accessibleQuery($user, ...$capability)
-            ->when($user->employee_id, fn ($q, $own) => $q->where('employee_id', '!=', $own));
+        $access = $this->scope->accessibleQuery($user, ...$capability);
+
+        // Layer-1 reports join the team for viewing and managing plans — the
+        // same rule as canManageIdp(). Not for downloads, which stay with the
+        // data-access permissions. An unrestricted query (Superadmin) already
+        // holds everyone, so there is nothing to add.
+        $layerOne = $capability === self::IDP_VIEW && filled($user->employee_id)
+            ? $this->chain->layerOneReports((string) $user->employee_id)
+            : [];
+
+        $query = $layerOne && $access->getQuery()->wheres
+            ? Employee::query()->where(fn (Builder $q) => $q
+                ->addNestedWhereQuery($access->getQuery())
+                ->orWhereIn('employee_id', $layerOne))
+            : $access;
+
+        return $query->when($user->employee_id, fn ($q, $own) => $q->where('employee_id', '!=', $own));
     }
 
     /**
@@ -240,28 +257,29 @@ class IdpController extends Controller
     public function show(Request $request, string $employeeId): Response
     {
         $user = $request->user();
-        $inScope = $this->scope->canAccess($user, $employeeId, ...self::IDP_VIEW);
+
+        // Editing and seeing are separate questions. Editing: the employee's
+        // own plan, a covering admin role, or being the FIRST approver on their
+        // chain (canManageIdp). Seeing also includes team visibility — which is
+        // how an L2 manager reaches a report's plan, read-only.
+        $canManage = $this->scope->canManageIdp($user, $employeeId);
+        $canSee = $canManage || $this->scope->canAccess($user, $employeeId, ...self::IDP_VIEW);
 
         // Approving happens on this screen (the Task Box only links here), and
-        // an approval chain may name someone the visibility rules do not cover
-        // — an L2 manager, or an override chain. Being named on any of this
-        // employee's approvals opens the screen READ-ONLY: they can decide what
-        // is theirs to decide, but not edit or submit the plan.
-        $isApprover = ! $inScope && $this->isApproverFor($user, $employeeId);
-        abort_unless($inScope || $isApprover, 403);
+        // an approval chain may name someone neither rule covers. Being named on
+        // any of this employee's approvals opens the screen READ-ONLY too: they
+        // can decide what is theirs to decide, but not edit or submit the plan.
+        abort_unless($canSee || $this->isApproverFor($user, $employeeId), 403);
 
-        $employee = $inScope
-            ? $this->scope->accessibleQuery($user, ...self::IDP_VIEW)->where('employee_id', $employeeId)->firstOrFail()
-            : Employee::where('employee_id', $employeeId)->firstOrFail();
+        $employee = Employee::where('employee_id', $employeeId)->firstOrFail();
 
         return Inertia::render('Idp/Manage', array_merge(
             [
                 'employee' => new EmployeeResource($employee),
-                'canManage' => $inScope,
+                'canManage' => $canManage,
             ],
-            // The manage screen may edit + submit the IDP for approval. It
-            // always shows the active cycle, so there is no closed-cycle case.
-            $this->idp->manageData($employeeId, $user, canManage: $inScope),
+            // It always shows the active cycle, so there is no closed-cycle case.
+            $this->idp->manageData($employeeId, $user, canManage: $canManage),
         ));
     }
 
@@ -289,7 +307,7 @@ class IdpController extends Controller
             ->where('employee_id', $employeeId)->firstOrFail();
         // The PDF covers the active cycle, which is the only one the screen
         // shows.
-        $data = $this->idp->manageData($employeeId);
+        $data = $this->idp->manageData($employeeId, withOptions: false);
 
         $pdf = Pdf::loadView('pdf.idp', [
             'employee' => $employee,
@@ -381,7 +399,7 @@ class IdpController extends Controller
         ]);
 
         // A plan can only be written into the ACTIVE cycle, so that is the only
-        // cycle an upload may target — whichever one the screen was showing.
+        // cycle an upload may target.
         $package = $this->stage->currentPackage();
 
         if (! $package) {
@@ -470,8 +488,8 @@ class IdpController extends Controller
             'progress' => 0,
         ]);
 
-        // The zip covers the cycle the list was showing, not always the active
-        // one — same rule as the per-employee PDF button.
+        // The zip covers the active cycle, the only one the list shows — same
+        // rule as the per-employee PDF button.
         GenerateIdpZip::dispatch($employeeIds, $status->id);
 
         return response()->json(['job_id' => $status->id]);
@@ -525,17 +543,23 @@ class IdpController extends Controller
             ->whereKey($data['development_model_id'])
             ->value('development_model_package_id');
 
+        // Under the plan-set lock, so the check and the write cannot straddle a
+        // planning submission, and the new row and the withdrawn sign-off commit
+        // together.
         try {
-            $this->stage->assertPlansEditable($employeeId, $packageId);
+            $withdrawn = $this->stage->withPlanSetLocked($employeeId, $packageId, function () use ($employeeId, $packageId, $data) {
+                $this->stage->assertPlansEditable($employeeId, $packageId);
+
+                IndividualDevelopmentPlan::create($data);
+
+                // A new program changes the set that was signed off, so the
+                // whole plan returns to "not approved" and has to be submitted
+                // again.
+                return $this->stage->withdrawPlanningApproval($employeeId, $packageId);
+            });
         } catch (ValidationException $e) {
             return back()->with('error', $e->validator->errors()->first());
         }
-
-        IndividualDevelopmentPlan::create($data);
-
-        // A new program changes the set that was signed off, so the whole plan
-        // returns to "not approved" and has to be submitted again.
-        $withdrawn = $this->stage->withdrawPlanningApproval($employeeId, $packageId);
 
         return back()->with('success', $withdrawn > 0
             ? 'Development plan added. The plan needs approval again.'
@@ -557,22 +581,30 @@ class IdpController extends Controller
         $packageBefore = $this->stage->packageIdFor($idp);
 
         try {
-            $this->stage->assertPlansEditable($idp->employee_id, $packageBefore);
-            $this->stage->assertResultNotSettled($idp);
+            $withdrawn = $this->stage->withPlanSetLocked($idp->employee_id, $packageBefore, function () use ($idp, $packageBefore, $request) {
+                $this->stage->assertPlansEditable($idp->employee_id, $packageBefore);
+                $this->stage->assertResultNotSettled($idp);
+
+                $idp->update($request->validated());
+
+                if (! $idp->wasChanged(IndividualDevelopmentPlan::PLANNING_FIELDS)) {
+                    return null;
+                }
+
+                $withdrawn = 0;
+
+                foreach (array_unique(array_filter([$packageBefore, $this->stage->packageIdFor($idp)])) as $packageId) {
+                    $withdrawn += $this->stage->withdrawPlanningApproval($idp->employee_id, $packageId);
+                }
+
+                return $withdrawn;
+            });
         } catch (ValidationException $e) {
             return back()->with('error', $e->validator->errors()->first());
         }
 
-        $idp->update($request->validated());
-
-        if (! $idp->wasChanged(IndividualDevelopmentPlan::PLANNING_FIELDS)) {
+        if ($withdrawn === null) {
             return back()->with('success', 'Development plan updated successfully.');
-        }
-
-        $withdrawn = 0;
-
-        foreach (array_unique(array_filter([$packageBefore, $this->stage->packageIdFor($idp)])) as $packageId) {
-            $withdrawn += $this->stage->withdrawPlanningApproval($idp->employee_id, $packageId);
         }
 
         return back()->with('success', $withdrawn > 0
@@ -587,17 +619,19 @@ class IdpController extends Controller
         $packageId = $this->stage->packageIdFor($idp);
 
         try {
-            $this->stage->assertPlansEditable($idp->employee_id, $packageId);
-            $this->stage->assertResultNotSettled($idp);
+            $withdrawn = $this->stage->withPlanSetLocked($idp->employee_id, $packageId, function () use ($idp, $packageId) {
+                $this->stage->assertPlansEditable($idp->employee_id, $packageId);
+                $this->stage->assertResultNotSettled($idp);
+
+                $idp->delete();
+
+                // Removing a program changes the set that was signed off,
+                // exactly as adding or editing one does.
+                return $this->stage->withdrawPlanningApproval($idp->employee_id, $packageId);
+            });
         } catch (ValidationException $e) {
             return back()->with('error', $e->validator->errors()->first());
         }
-
-        $idp->delete();
-
-        // Removing a program changes the set that was signed off, exactly as
-        // adding or editing one does.
-        $withdrawn = $this->stage->withdrawPlanningApproval($idp->employee_id, $packageId);
 
         return back()->with('success', $withdrawn > 0
             ? 'Development plan deleted. The plan needs approval again.'

@@ -16,6 +16,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 use Maatwebsite\Excel\Facades\Excel;
@@ -156,18 +157,23 @@ class ApprovalSettingController extends Controller
             ->values()
             ->all();
 
-        ApprovalSuperior::updateOrCreate(
-            ['employee_id' => $employeeId],
-            ['layers' => $layers, 'updated_by' => $request->user()->id],
-        );
+        // The chain and its history row are written together: a history that
+        // misses a change (or records one that never happened) is worse than
+        // no history.
+        DB::transaction(function () use ($employeeId, $layers, $request) {
+            ApprovalSuperior::updateOrCreate(
+                ['employee_id' => $employeeId],
+                ['layers' => $layers, 'updated_by' => $request->user()->id],
+            );
 
-        ApprovalSuperiorHistory::create([
-            'employee_id' => $employeeId,
-            'layers' => $layers,
-            'changed_by' => $request->user()->id,
-            'changed_by_name' => $request->user()->name,
-            'created_at' => now(),
-        ]);
+            ApprovalSuperiorHistory::create([
+                'employee_id' => $employeeId,
+                'layers' => $layers,
+                'changed_by' => $request->user()->id,
+                'changed_by_name' => $request->user()->name,
+                'created_at' => now(),
+            ]);
+        });
 
         // Whether an approver "has a team" is cached for the shell's menu.
         AccessCache::flush();

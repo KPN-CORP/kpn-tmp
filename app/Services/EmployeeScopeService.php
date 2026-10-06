@@ -106,8 +106,12 @@ class EmployeeScopeService
      *
      * A user reached by neither source sees nothing (deny by default).
      */
-    public function accessibleQuery(User $user, string $selfPermission, string $teamPermission): Builder
-    {
+    public function accessibleQuery(
+        User $user,
+        string $selfPermission,
+        string $teamPermission,
+        bool $includeTeam = true,
+    ): Builder {
         $query = Employee::query();
 
         if ($this->isSuperadmin($user)) {
@@ -122,7 +126,9 @@ class EmployeeScopeService
         // (2) Data-access capabilities that auto-apply to this user.
         $dataPermissions = $this->effectiveDataPermissions($user);
         $hasSelf = $user->employee_id && in_array($selfPermission, $dataPermissions);
-        $hasTeam = in_array($teamPermission, $dataPermissions);
+        // Off for "may manage" questions: team visibility lets a manager READ
+        // their reports' records, not change them (see canManageIdp()).
+        $hasTeam = $includeTeam && in_array($teamPermission, $dataPermissions);
         $teamIds = $hasTeam ? $this->teamIds($user) : [];
 
         if ($scopedRoles->isEmpty() && ! $hasSelf && ! $hasTeam) {
@@ -163,7 +169,25 @@ class EmployeeScopeService
      */
     public function canManageIdp(User $user, string $employeeId): bool
     {
-        return $this->canAccess($user, $employeeId, ...self::IDP_VIEW);
+        // Their own plan, an admin whose scoped role covers the employee, or
+        // a Superadmin — every visibility source EXCEPT the team one.
+        $managesDirectly = $this->accessibleQuery($user, ...[...self::IDP_VIEW, false])
+            ->where('employee_id', $employeeId)
+            ->exists();
+
+        if ($managesDirectly) {
+            return true;
+        }
+
+        // Of the people above the employee, only the FIRST approver on their
+        // chain looks after the plan. Team access (pm_view_idp) reaches L2 as
+        // well, so on its own it only lets a manager read the plan and decide
+        // what is theirs to decide — never add or edit. Layer 1 may manage
+        // even when the data-access rules do not reach them at all (an
+        // Approval Layer override naming someone outside the hierarchy).
+        return filled($user->employee_id)
+            && $user->employee_id !== $employeeId
+            && app(ApprovalChainService::class)->isLayerOne((string) $user->employee_id, $employeeId);
     }
 
     /**

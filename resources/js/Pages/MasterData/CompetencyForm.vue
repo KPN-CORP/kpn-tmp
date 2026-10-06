@@ -11,8 +11,10 @@ import MasterStatusHistory from '@/Components/Domain/MasterStatusHistory.vue'
 import { type Option } from '@/Components/UI/MultiSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
+import { useMasterLabels } from '@/Composables/useMasterLabels'
 
-const { t, locale } = useLocale()
+const { t } = useLocale()
+const { masterName } = useMasterLabels()
 
 /**
  * The nested rows a competency owns: the parts it breaks down into, and the
@@ -88,16 +90,6 @@ const props = defineProps<{
 const listUrl = route('master_data.competency')
 
 const editing = computed(() => props.competency !== null)
-
-// Localized name for a master row, falling back to the canonical `value`.
-function masterName(item: {
-    value: string
-    value_en?: string | null
-    value_id?: string | null
-}): string {
-    const preferred = locale.value === 'id' ? item.value_id : item.value_en
-    return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
-}
 
 /**
  * --------------------------------------------------------------------------

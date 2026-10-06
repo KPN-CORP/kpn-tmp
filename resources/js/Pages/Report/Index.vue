@@ -8,6 +8,7 @@ import DataTable, { type Column, type Sort } from '@/Components/Domain/DataTable
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
+import type { Paginator } from '@/types/pagination'
 
 const { t } = useLocale()
 
@@ -23,17 +24,8 @@ interface ReportRow {
     idp_progress: string
 }
 
-interface Paginator {
-    data: ReportRow[]
-    links: { url: string | null; label: string; active: boolean }[]
-    total: number
-    from: number | null
-    to: number | null
-    per_page: number
-}
-
 const props = defineProps<{
-    rows: Paginator
+    rows: Paginator<ReportRow>
     filters: {
         search: string
         year: string

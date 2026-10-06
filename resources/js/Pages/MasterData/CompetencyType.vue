@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Head, router, useForm } from '@inertiajs/vue3'
+import { Head, useForm } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -13,8 +13,11 @@ import MultiSelect, { type Option } from '@/Components/UI/MultiSelect.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
+import { useDeleteConfirm } from '@/Composables/useDeleteConfirm'
+import { useMasterLabels } from '@/Composables/useMasterLabels'
 
 const { t, locale } = useLocale()
+const { masterName } = useMasterLabels()
 
 interface CompetencyType {
     id: number
@@ -47,16 +50,6 @@ const props = defineProps<{
  * approval counts, notification feed) are not re-evaluated on each mutation.
  */
 const reloadOnly = ['competencyTypes', 'flash']
-
-// Localized name for a competency type, falling back to the canonical `value`.
-function masterName(item: {
-    value: string
-    value_en?: string | null
-    value_id?: string | null
-}): string {
-    const preferred = locale.value === 'id' ? item.value_id : item.value_en
-    return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
-}
 
 // Localized description (falls back to the other language).
 function typeDescription(ct: CompetencyType): string {
@@ -173,24 +166,10 @@ const masterTitle = () => {
  * --------------------------------------------------------------------------
  */
 
-const pendingDelete = ref<{ url: string; name?: string } | null>(null)
-const deleting = ref(false)
+const { pendingDelete, deleting, confirmDelete, cancelDelete } = useDeleteConfirm(reloadOnly)
 
 function deleteMaster(id: number, name?: string) {
     pendingDelete.value = { url: route('idp.setting.masters.destroy', [MASTER_TYPE, id]), name }
-}
-
-function confirmDelete() {
-    if (!pendingDelete.value) return
-
-    router.delete(pendingDelete.value.url, {
-        preserveScroll: true,
-        preserveState: true,
-        only: reloadOnly,
-        onStart: () => (deleting.value = true),
-        onFinish: () => (deleting.value = false),
-        onSuccess: () => (pendingDelete.value = null),
-    })
 }
 
 /**
@@ -586,7 +565,7 @@ const typeColumns = computed<Column[]>(() => [
             variant="danger"
             :processing="deleting"
             @confirm="confirmDelete"
-            @close="pendingDelete = null"
+            @close="cancelDelete"
         >
             <p
                 v-if="pendingDelete?.name"

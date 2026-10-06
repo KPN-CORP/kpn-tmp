@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { Head, router, useForm } from '@inertiajs/vue3'
+import { Head, useForm } from '@inertiajs/vue3'
 
 import AppLayout from '@/Layouts/AppLayout.vue'
 import PageHeader from '@/Components/UI/PageHeader.vue'
@@ -21,8 +21,11 @@ import { useLocale } from '@/Composables/useLocale'
 import { useActiveStateToggle } from '@/Composables/useActiveStateToggle'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
+import { useDeleteConfirm } from '@/Composables/useDeleteConfirm'
+import { useMasterLabels } from '@/Composables/useMasterLabels'
 
 const { t, locale } = useLocale()
+const { masterName, rowDescription } = useMasterLabels()
 
 interface Localized {
     id: number
@@ -90,26 +93,6 @@ const props = defineProps<{
  * so each save is a lightweight Inertia partial reload.
  */
 const reloadOnly = ['trainings', 'flash']
-
-// Localized name for a master row, falling back to the canonical `value`.
-function masterName(
-    item: { value: string; value_en?: string | null; value_id?: string | null } | null | undefined,
-): string {
-    if (!item) return ''
-    const preferred = locale.value === 'id' ? item.value_id : item.value_en
-    return (preferred ?? '').trim() !== '' ? (preferred as string) : item.value
-}
-
-// Localized description (falls back to the other language). Read by both the
-// trainings table and the proficiency-level picker.
-function rowDescription(item: {
-    description_en?: string | null
-    description_id?: string | null
-}): string {
-    const preferred = locale.value === 'id' ? item.description_id : item.description_en
-    const fallback = locale.value === 'id' ? item.description_en : item.description_id
-    return (preferred ?? '').trim() !== '' ? (preferred as string) : (fallback ?? '')
-}
 
 /**
  * --------------------------------------------------------------------------
@@ -810,8 +793,7 @@ const columns = computed<Column[]>(() => [
  * --------------------------------------------------------------------------
  */
 
-const pendingDelete = ref<{ url: string; name?: string } | null>(null)
-const deleting = ref(false)
+const { pendingDelete, deleting, confirmDelete, cancelDelete } = useDeleteConfirm(reloadOnly)
 
 function deleteTraining(item: Training) {
     pendingDelete.value = {
@@ -820,18 +802,6 @@ function deleteTraining(item: Training) {
     }
 }
 
-function confirmDelete() {
-    if (!pendingDelete.value) return
-
-    router.delete(pendingDelete.value.url, {
-        preserveScroll: true,
-        preserveState: true,
-        only: reloadOnly,
-        onStart: () => (deleting.value = true),
-        onFinish: () => (deleting.value = false),
-        onSuccess: () => (pendingDelete.value = null),
-    })
-}
 </script>
 
 <template>
@@ -1488,7 +1458,6 @@ function confirmDelete() {
             @close="historyTraining = null"
         />
 
-
         <ConfirmDialog
             :show="pendingDelete !== null"
             :title="t.idp.settings.deleteTitle"
@@ -1498,7 +1467,7 @@ function confirmDelete() {
             variant="danger"
             :processing="deleting"
             @confirm="confirmDelete"
-            @close="pendingDelete = null"
+            @close="cancelDelete"
         >
             <p
                 v-if="pendingDelete?.name"

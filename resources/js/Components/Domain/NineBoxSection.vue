@@ -118,6 +118,7 @@ const {
 } = useUnsavedGuard(editForm, closeEdit)
 
 function submitEdit() {
+    if (editingId.value === null) return
     editForm.put(route('ninebox.update', editingId.value), {
         preserveScroll: true,
         onSuccess: () => closeEdit(),

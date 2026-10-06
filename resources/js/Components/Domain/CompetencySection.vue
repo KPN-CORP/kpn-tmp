@@ -16,7 +16,7 @@ function priorityLabel(value: string | null | undefined): string {
     return (t.value.competency.priorityLabels as Record<string, string>)[value] ?? value
 }
 
-interface Assessment {
+export interface Assessment {
     id: number
     period: number
     assessment_date: string | null
@@ -26,7 +26,7 @@ interface Assessment {
     [key: string]: any
 }
 
-interface MatrixConfig {
+export interface MatrixConfig {
     period: number
     grade_level: string
     [key: string]: any

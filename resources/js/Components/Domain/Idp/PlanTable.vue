@@ -58,6 +58,10 @@ const props = defineProps<{
     /** Show the per-row edit / delete column. */
     rowsEditable: boolean
     submittingResultId: number | null
+    /** A Task Box link pointed at this program: open the page that holds it. */
+    focusPlanId?: number | null
+    /** The row to mark — the focused one, while it still matters. */
+    highlightPlanId?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -161,6 +165,13 @@ watch(
 watch(totalPages, (n) => {
     if (page.value > n) page.value = n
 })
+
+// Arriving from a Task Box link: start on the page that holds that program,
+// so the panel can scroll straight to it. Decided once, before first render.
+if (props.focusPlanId != null) {
+    const index = sorted.value.findIndex((row) => row.plan.id === props.focusPlanId)
+    if (index >= 0) page.value = Math.floor(index / perPage.value) + 1
+}
 
 const pageRows = computed(() => {
     const start = (page.value - 1) * perPage.value
@@ -282,6 +293,7 @@ const countLabel = computed(() => {
                         :timeline="row.timeline"
                         :can-edit="rowsEditable"
                         :submitting="submittingResultId === row.plan.id"
+                        :highlighted="highlightPlanId === row.plan.id"
                         @edit="emit('edit', row.plan)"
                         @delete="emit('delete', row.plan)"
                         @file-result="emit('file-result', row.plan)"

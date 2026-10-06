@@ -14,6 +14,7 @@ import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.
 import { useLocale } from '@/Composables/useLocale'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { route } from '@/Config/route'
+import type { Paginator } from '@/types/pagination'
 
 const { t } = useLocale()
 
@@ -32,22 +33,13 @@ interface EmployeeRow {
     has_override: boolean
 }
 
-interface Paginator {
-    data: EmployeeRow[]
-    links: { url: string | null; label: string; active: boolean }[]
-    total: number
-    from: number | null
-    to: number | null
-    per_page: number
-}
-
 interface Sort {
     key: string
     dir: 'asc' | 'desc'
 }
 
 const props = defineProps<{
-    employees: Paginator
+    employees: Paginator<EmployeeRow>
     filters: { search: string; bu: string; area: string; pt: string }
     sort: Sort
     filterOptions: {
