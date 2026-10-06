@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Services\CorporateScopeService;
 use App\Services\EmployeeScopeService;
+use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -40,5 +41,16 @@ class AppServiceProvider extends ServiceProvider
         if (str_starts_with((string) config('app.url'), 'https://')) {
             URL::forceScheme('https');
         }
+
+        // Page links are RELATIVE (path + query, no scheme or host). Laravel
+        // builds them from `$request->url()`, which reflects how the request
+        // reached PHP — `http://` behind a TLS proxy that does not forward the
+        // scheme — and forceScheme() above does not reach it. An absolute
+        // http link on an https page is blocked by the browser as mixed
+        // content, so every "next page" failed with a network error. Relative
+        // links take the page's own scheme and host wherever it is served.
+        Paginator::currentPathResolver(
+            fn () => $this->app['request']->getBaseUrl().$this->app['request']->getPathInfo(),
+        );
     }
 }

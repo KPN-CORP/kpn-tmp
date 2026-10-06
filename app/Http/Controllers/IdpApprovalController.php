@@ -20,6 +20,7 @@ use App\Services\IdpApprovalService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
@@ -290,7 +291,9 @@ class IdpApprovalController extends Controller
             $matched->count(),
             $perPage,
             $page,
-            ['path' => $request->url(), 'query' => $request->query()],
+            // The shared relative path (see AppServiceProvider) — `$request->url()`
+            // is http:// behind the staging proxy, which the browser blocks.
+            ['path' => Paginator::resolveCurrentPath(), 'query' => $request->query()],
         );
 
         // The tab counts describe the whole desk, so each view has to supply
