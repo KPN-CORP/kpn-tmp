@@ -19,6 +19,7 @@ import ConfirmDialog from '@/Components/Domain/ConfirmDialog.vue'
 import DateInput from '@/Components/UI/DateInput.vue'
 import ApprovalChain from '@/Components/Domain/Idp/ApprovalChain.vue'
 import { useLocale } from '@/Composables/useLocale'
+import { classifyEvidence } from '@/Components/Domain/Idp/evidence'
 import { seedForm, useUnsavedGuard } from '@/Composables/useUnsavedGuard'
 import { formatDate } from '@/Composables/useDate'
 import { attainment, formatTarget, uomLabel } from '@/Components/Domain/Idp/uom'
@@ -104,32 +105,9 @@ const percent = computed(() => attainment(props.plan?.target, form.achievement))
 
 // --- Field state ------------------------------------------------------------
 
-/**
- * Evidence has to be a link. Mirrors SubmitIdpResultRequest: a bare host is
- * accepted here because the server completes it to https:// — so the button is
- * not disabled on something the server would have taken.
- */
-function looksLikeUrl(value: string): boolean {
-    const trimmed = value.trim()
-
-    if (trimmed === '') return false
-
-    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
-        ? trimmed
-        : /^[\w-]+(\.[\w-]+)+([/?#].*)?$/.test(trimmed)
-            ? `https://${trimmed}`
-            : trimmed
-
-    try {
-        const url = new URL(withScheme)
-
-        return url.protocol === 'http:' || url.protocol === 'https:'
-    } catch {
-        return false
-    }
-}
-
-const evidenceIsUrl = computed(() => looksLikeUrl(form.result_evidence))
+// A web link or a shared-folder path (mirrors SubmitIdpResultRequest).
+const evidenceKind = computed(() => classifyEvidence(form.result_evidence))
+const evidenceIsUrl = computed(() => evidenceKind.value !== null)
 
 /** Only complain once they have typed something. */
 const evidenceInvalid = computed(
@@ -310,11 +288,16 @@ function send(forApproval: boolean) {
                         {{ t.idp.form.resultEvidence }} <span class="text-red-500">*</span>
                     </label>
                     <div class="relative">
-                        <i class="fa-solid fa-link pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-300" />
+                        <i
+                            :class="evidenceKind === 'network' ? 'fa-solid fa-folder-open text-amber-500' : 'fa-solid fa-link text-slate-300'"
+                            class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs"
+                        />
+                        <!-- text, not url: a shared-folder path is valid evidence and
+                             the browser's own url check would refuse it -->
                         <input
                             v-model="form.result_evidence"
-                            type="url"
-                            inputmode="url"
+                            type="text"
+                            spellcheck="false"
                             maxlength="1000"
                             :placeholder="t.idp.form.resultEvidencePlaceholder"
                             class="w-full rounded-lg border py-2 pl-8 pr-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"

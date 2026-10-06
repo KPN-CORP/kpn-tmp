@@ -39,9 +39,19 @@ class SubmitIdpResultRequest extends FormRequest
             // judged against the target it was filed for. The column stays
             // nullable because the results filed before this have none.
             'achievement' => ['required', 'numeric', 'min:0', 'max:9999999999'],
-            // Evidence has to be a LINK: something an approver can open and
-            // check. A sentence describing the evidence is not evidence.
-            'result_evidence' => ['required', 'string', 'max:1000', 'url:http,https'],
+            // Evidence has to be something an approver can OPEN and check: a web
+            // link, or a path on the office network (a shared folder). A
+            // sentence describing the evidence is not evidence.
+            'result_evidence' => [
+                'required',
+                'string',
+                'max:1000',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if (! self::isEvidenceLocation((string) $value)) {
+                        $fail('The evidence must be a link or a shared-folder path an approver can open, e.g. https://drive.google.com/… or \\\\fileserver\\HR\\certificate.pdf');
+                    }
+                },
+            ],
             // Whether to send it up the approval chain now, or only save the
             // result so it can be finished later. Not named `submit`: that is an
             // Inertia form method, and a data field by that name never arrives.
@@ -57,7 +67,6 @@ class SubmitIdpResultRequest extends FormRequest
             'achievement.required' => 'Enter what was actually achieved.',
             'achievement.numeric' => 'The achievement must be a number.',
             'result_evidence.required' => 'Paste the link to the evidence for this result.',
-            'result_evidence.url' => 'The evidence must be a link an approver can open, e.g. https://drive.google.com/…',
         ];
     }
 
@@ -67,6 +76,29 @@ class SubmitIdpResultRequest extends FormRequest
      * completed to `https://` rather than rejected; anything that does not look
      * like a host is left alone and fails the rule with its own message.
      */
+    /**
+     * A web link (http / https only — this value is rendered as a link, so
+     * javascript: and friends must never pass), or a path on the office
+     * network: a UNC path (\\\\server\\share\\…), a mapped drive (S:\\…) or a
+     * file:// link. Folder and file names may contain spaces, so only the
+     * start of a path is checked. The UI never renders a path as a link — it
+     * shows it with a Copy button — so a path is inert text however it reads.
+     */
+    public static function isEvidenceLocation(string $value): bool
+    {
+        $value = trim($value);
+
+        if (preg_match('#^(\\\\\\\\|//)[^\\\\/\s]+[\\\\/][^\\\\/]+#', $value)
+            || preg_match('#^[a-z]:[\\\\/]\S#i', $value)
+            || preg_match('#^file://\S#i', $value)) {
+            return true;
+        }
+
+        $scheme = strtolower((string) parse_url($value, PHP_URL_SCHEME));
+
+        return in_array($scheme, ['http', 'https'], true) && filter_var($value, FILTER_VALIDATE_URL) !== false;
+    }
+
     protected function prepareForValidation(): void
     {
         // An empty number input posts `''`, which would fail `numeric` with a

@@ -15,6 +15,7 @@
  * nothing of that kind, so it does not expand at all.
  */
 import { computed } from 'vue'
+import EvidenceLink from '@/Components/Domain/Idp/EvidenceLink.vue'
 import { Link } from '@inertiajs/vue3'
 
 import StatusPill from './StatusPill.vue'
@@ -229,9 +230,6 @@ const groups = computed<Array<{ model: string; plans: InboxPlan[] }>>(() => {
     return [...map.entries()].map(([model, plans]) => ({ model, plans }))
 })
 
-function isUrl(value: string | null): boolean {
-    return !!value && /^https?:\/\//i.test(value.trim())
-}
 
 /**
  * The chip at the top right: what this card wants from the reader. On the
@@ -594,17 +592,9 @@ const outcome = computed<{ label: string; tone: Tone }>(() => {
 
                     <div class="mt-2 text-xs leading-relaxed text-slate-600">
                         <span class="font-medium text-slate-500">{{ t.idp.evidenceLabel }}:</span>
-                        <a
-                            v-if="isUrl(single.result_evidence)"
-                            :href="single.result_evidence!"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="ml-1 inline-flex items-center gap-1 break-all font-medium text-primary hover:underline"
-                        >
-                            <i class="fa-solid fa-link text-[10px]" />
-                            {{ single.result_evidence }}
-                        </a>
-                        <span v-else-if="single.result_evidence" class="ml-1 whitespace-pre-line">{{ single.result_evidence }}</span>
+                        <span v-if="single.result_evidence" class="ml-1">
+                            <EvidenceLink :value="single.result_evidence" />
+                        </span>
                         <span v-else class="ml-1 text-slate-400">—</span>
                     </div>
                 </section>

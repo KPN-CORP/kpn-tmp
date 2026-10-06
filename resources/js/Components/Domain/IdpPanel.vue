@@ -496,7 +496,10 @@ const highlightPlanId = computed<number | null>(() => {
     if (focusPlanId === null) return null
     const plan = props.developmentModels.flatMap((m) => m.plans).find((p) => p.id === focusPlanId)
 
-    return plan && (focusFlash.value || plan.stage.result.can_act) ? focusPlanId : null
+    // Waits on this viewer: theirs to decide, or (the owner) theirs to revise.
+    const waiting = plan && (plan.stage.result.can_act || (plan.stage.result.status === 'rejected' && plan.stage.can_edit))
+
+    return plan && (focusFlash.value || waiting) ? focusPlanId : null
 })
 
 onMounted(async () => {
@@ -1055,7 +1058,15 @@ defineExpose({ openUpload })
                 v-if="signOffMode"
                 id="plan-signoff"
                 class="scroll-mt-24 transition"
-                :class="focusSignOff && (focusFlash || signOffMode === 'decide') ? 'ring-2 ring-amber-300 ring-offset-2' : ''"
+                :class="
+                    !focusSignOff
+                        ? ''
+                        : signOffMode === 'submit' && planning.status === 'rejected'
+                            ? 'ring-2 ring-red-300 ring-offset-2'
+                            : focusFlash || signOffMode === 'decide'
+                                ? 'ring-2 ring-amber-300 ring-offset-2'
+                                : ''
+                "
                 :mode="signOffMode"
                 :planning="planning"
                 :models="developmentModels"

@@ -13,6 +13,7 @@ import StatusPill from '@/Components/Domain/Idp/StatusPill.vue'
 import { useLocale } from '@/Composables/useLocale'
 import { formatDate } from '@/Composables/useDate'
 import { daysLate, planningKey, resultKey } from '@/Components/Domain/Idp/planStatus'
+import EvidenceLink from '@/Components/Domain/Idp/EvidenceLink.vue'
 import { attainment, formatTarget } from '@/Components/Domain/Idp/uom'
 import type { Plan, Tone } from '@/types/idp'
 
@@ -98,9 +99,6 @@ const lockReason = computed(() => {
     return ''
 })
 
-function isUrl(value: string | null): boolean {
-    return !!value && /^https?:\/\//i.test(value.trim())
-}
 
 const hasChain = computed(() => (result.value.approval?.steps.length ?? 0) > 0)
 
@@ -114,6 +112,16 @@ const achievementLabel = computed(
 
 /** How far that got. Null when there is nothing to divide by. */
 const achievedPercent = computed(() => attainment(props.plan.target, props.plan.achievement))
+
+/**
+ * How a pointed-at row is marked: amber while it waits on this viewer's
+ * decision, red while it waits on the owner's revision, otherwise a plain tint.
+ */
+const mark = computed<'decide' | 'revise' | 'plain'>(() => {
+    if (result.value.can_act) return 'decide'
+    if (result.value.status === 'rejected' && stage.value.can_edit) return 'revise'
+    return 'plain'
+})
 </script>
 
 <template>
@@ -122,23 +130,40 @@ const achievedPercent = computed(() => attainment(props.plan.target, props.plan.
         class="group scroll-mt-24 border-b border-border/60 align-top transition-colors duration-500 last:border-0"
         :class="
             highlighted
-                ? result.can_act
+                ? mark === 'decide'
                     ? 'bg-amber-50 hover:bg-amber-50'
-                    : 'bg-primary/5 hover:bg-primary/5'
+                    : mark === 'revise'
+                        ? 'bg-red-50/70 hover:bg-red-50/70'
+                        : 'bg-primary/5 hover:bg-primary/5'
                 : 'hover:bg-slate-50/70'
         "
     >
         <!-- What it develops. A highlighted row carries its mark on this edge. -->
         <td
             class="px-5 py-3.5"
-            :class="highlighted ? (result.can_act ? 'shadow-[inset_4px_0_0_0_#f59e0b]' : 'shadow-[inset_4px_0_0_0_var(--color-primary)]') : ''"
+            :class="
+                highlighted
+                    ? mark === 'decide'
+                        ? 'shadow-[inset_4px_0_0_0_#f59e0b]'
+                        : mark === 'revise'
+                            ? 'shadow-[inset_4px_0_0_0_#ef4444]'
+                            : 'shadow-[inset_4px_0_0_0_var(--color-primary)]'
+                    : ''
+            "
         >
             <span
-                v-if="highlighted && result.can_act"
+                v-if="highlighted && mark === 'decide'"
                 class="mb-1.5 inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800"
             >
                 <i class="fa-solid fa-hourglass-half text-[10px]" />
                 {{ t.approvalFlow.needsYourApproval }}
+            </span>
+            <span
+                v-else-if="highlighted && mark === 'revise'"
+                class="mb-1.5 inline-flex items-center gap-1 rounded-md bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-700"
+            >
+                <i class="fa-solid fa-rotate-left text-[10px]" />
+                {{ t.approvalFlow.reviseBadge }}
             </span>
             <div class="font-medium text-slate-800">{{ competencyLabel }}</div>
             <div class="mt-1 flex flex-wrap items-center gap-1.5">
@@ -228,18 +253,8 @@ const achievedPercent = computed(() => attainment(props.plan.target, props.plan.
                             {{ realizedLate === 1 ? r.lateOneDay : r.lateDays.replace('{n}', String(realizedLate)) }}
                         </span>
                     </p>
-                    <a
-                        v-if="isUrl(plan.result_evidence)"
-                        :href="plan.result_evidence!"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
-                    >
-                        <i class="fa-solid fa-link text-[10px]" />
-                        {{ t.idp.evidenceLabel }}
-                    </a>
-                    <p v-else-if="plan.result_evidence" class="max-w-[16rem] text-[11px] text-slate-400">
-                        {{ plan.result_evidence }}
+                    <p v-if="plan.result_evidence" class="max-w-[16rem] text-[11px]">
+                        <EvidenceLink :value="plan.result_evidence" compact />
                     </p>
                 </template>
 

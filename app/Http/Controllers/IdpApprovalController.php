@@ -43,7 +43,8 @@ class IdpApprovalController extends Controller
 
     /**
      * The desk sorts on one thing: the date that matters on it — when a request
-     * was submitted (pending), or when it was decided (history). Only the
+     * was submitted (pending), or when it was decided (history). An owner's
+     * revision row sorts by when it was rejected / resubmitted. Only the
      * direction is the reader's choice.
      */
     private const PENDING_SORT_KEY = 'submitted_at';
@@ -225,6 +226,10 @@ class IdpApprovalController extends Controller
      *    newest first, each with the note they left and where the request ended
      *    up afterwards.
      *
+     * Both views also carry the OWNER's side (`kind: 'revise'`): their own plan
+     * set or result an approver rejected. While it waits to be corrected it sits
+     * on the pending desk under its stage; once resubmitted it moves to history.
+     *
      * A planning request carries the whole plan set it covers, so the approver
      * reads the plan in one place rather than opening the IDP; a result request
      * carries its one program plus what was filed against it.
@@ -236,7 +241,8 @@ class IdpApprovalController extends Controller
     public function inbox(Request $request): Response
     {
         $user = $request->user();
-        $history = $request->string('view')->value() === 'history';
+        $view = $request->string('view')->value() === 'history' ? 'history' : 'pending';
+        $history = $view === 'history';
 
         $filters = [
             'search' => $request->string('search')->trim()->value(),
@@ -252,7 +258,9 @@ class IdpApprovalController extends Controller
             $sort['dir'] = 'desc';
         }
 
-        $rows = $history ? $this->historyRows($user) : $this->inboxRows($user);
+        $rows = $history
+            ? $this->historyRows($user)->concat($this->revisionRows($user, resolved: true))
+            : $this->inboxRows($user)->concat($this->revisionRows($user, resolved: false));
 
         $path = $dateKey;
 
@@ -266,7 +274,9 @@ class IdpApprovalController extends Controller
                 fn (Collection $c, string $term) => $c->filter(fn (array $row) => $this->matches($row, $term)),
             )
             ->sortBy(
-                fn (array $row) => data_get($row, $path),
+                // A revision row sorts by its own date: when it was rejected
+                // (pending) or resubmitted (history).
+                fn (array $row) => $row['sort_at'] ?? data_get($row, $path),
                 SORT_NATURAL | SORT_FLAG_CASE,
                 $sort['dir'] === 'desc',
             )
@@ -286,29 +296,34 @@ class IdpApprovalController extends Controller
         // The tab counts describe the whole desk, so each view has to supply
         // the other's total. Only the view being read is resolved into rows;
         // the counterpart is a count.
-        $pending = $history ? collect() : $rows;
+        $pending = $view === 'pending' ? $rows : null;
 
         return Inertia::render('Approvals/Inbox', [
             'items' => $items,
-            'view' => $history ? 'history' : 'pending',
+            'view' => $view,
             'filters' => $filters,
             'sort' => $sort,
             // The unit catalogue, so a card can name the target's unit in the
             // reader's own language - the same payload the manage screen gets.
             'unitsOfMeasurement' => UnitOfMeasurement::options(),
-            'pendingTotal' => $history ? $this->approvals->pendingCountFor($user) : $pending->count(),
-            // Of those, the ones this user may decide right now — what the menu
-            // badge counts. The rest are on the desk to be read, not acted on.
-            'actionableTotal' => $history
-                ? $this->approvals->actionableCountFor($user)
-                : $pending->where('can_act', true)->count(),
-            'stageTotals' => $history
-                ? $this->pendingStageTotals($user)
-                : [
+            'pendingTotal' => $pending
+                ? $pending->count()
+                : $this->approvals->pendingCountFor($user) + $this->approvals->revisionCountFor($user),
+            // Of those, the ones waiting on this user right now — a decision, or
+            // a revision of their own. What the menu badge counts; the rest are
+            // on the desk to be read, not acted on.
+            'actionableTotal' => $pending
+                ? $pending->where('can_act', true)->count()
+                : $this->approvals->actionableCountFor($user) + $this->approvals->revisionCountFor($user),
+            'stageTotals' => $pending
+                ? [
                     'planning' => $pending->where('stage', IdpApproval::STAGE_PLANNING)->count(),
                     'result' => $pending->where('stage', IdpApproval::STAGE_RESULT)->count(),
-                ],
-            'historyTotal' => $history ? $rows->count() : $this->approvals->decidedCountFor($user),
+                ]
+                : $this->pendingStageTotals($user),
+            'historyTotal' => $history
+                ? $rows->count()
+                : $this->approvals->decidedCountFor($user) + $this->approvals->revisedCountFor($user),
         ]);
     }
 
@@ -320,7 +335,13 @@ class IdpApprovalController extends Controller
      */
     private function pendingStageTotals(User $user): array
     {
-        return $this->approvals->pendingStageCountsFor($user);
+        $requests = $this->approvals->pendingStageCountsFor($user);
+        $revisions = $this->approvals->revisionStageCountsFor($user);
+
+        return [
+            'planning' => $requests['planning'] + $revisions['planning'],
+            'result' => $requests['result'] + $revisions['result'],
+        ];
     }
 
     /**
@@ -367,6 +388,81 @@ class IdpApprovalController extends Controller
                 'chain' => $presenter->approval($approval, $user->employee_id),
             ];
         })->filter()->values();
+    }
+
+    /**
+     * The owner's own rejected requests, shaped as desk rows (`kind: 'revise'`):
+     * what was rejected — the program as it stands now, or the plan set's
+     * package — and who rejected it, when and why; the note is what the
+     * revision has to answer.
+     *
+     * Unresolved, they are tasks on the pending desk. Resolved, they are history
+     * entries dated by the resubmission, with where that round stands now.
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function revisionRows(User $user, bool $resolved): Collection
+    {
+        $approvals = $resolved
+            ? $this->approvals->revisedBy($user)
+            : $this->approvals->revisionsFor($user);
+
+        if ($approvals->isEmpty()) {
+            return collect();
+        }
+
+        $presenter = new ApprovalPresenter;
+        $presenter->prime(
+            $approvals->flatMap(fn (IdpApproval $a) => $a->steps->pluck('approver_employee_id'))
+                ->push($user->employee_id),
+        );
+
+        // A result covers its one program: the live row while it exists, else
+        // what was submitted.
+        $live = collect(ApprovalSnapshot::of($approvals->pluck('plan')->filter()->values()))->keyBy('id');
+
+        return $approvals->map(function (IdpApproval $approval) use ($presenter, $live, $resolved) {
+            $step = $approval->steps->firstWhere('status', 'rejected');
+            $planning = $approval->isPlanning();
+
+            $plans = $planning ? [] : array_values(array_filter([
+                $live->get($approval->individual_development_plan_id)
+                    ?? ($approval->snapshot[0] ?? null),
+            ]));
+
+            $answered = $resolved ? $approval->getRelation('answeredBy') : null;
+            $rejectedAt = $step?->acted_at?->toDateTimeString();
+
+            return [
+                'kind' => 'revise',
+                'approval_id' => $approval->id,
+                'plan_id' => $approval->individual_development_plan_id,
+                'stage' => $approval->stage,
+                'owner_id' => $approval->employee_id,
+                'owner_name' => $presenter->name($approval->employee_id),
+                'title' => $planning ? $approval->package?->name : ($plans[0]['development_program'] ?? null),
+                'package' => $approval->package
+                    ? ['id' => $approval->package->id, 'name' => $approval->package->name]
+                    : null,
+                'plans' => $plans,
+                'submitted_at' => $approval->submitted_at?->toDateTimeString(),
+                'rejected_at' => $rejectedAt,
+                'rejected' => $step ? [
+                    'level' => $step->level,
+                    'name' => $step->acted_by_name
+                        ?: $presenter->name($step->approver_employee_id)
+                        ?: $step->approver_employee_id,
+                ] : null,
+                // Searched like a history row's own note.
+                'note' => $step?->note,
+                // A task is the owner's to act on — counted with the decisions.
+                'can_act' => ! $resolved,
+                'resubmitted_at' => $answered?->submitted_at?->toDateTimeString(),
+                // Where the resubmitted round stands now.
+                'outcome' => $answered?->status,
+                'sort_at' => $resolved ? $answered?->submitted_at?->toDateTimeString() : $rejectedAt,
+            ];
+        })->values();
     }
 
     /**

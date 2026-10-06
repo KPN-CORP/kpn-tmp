@@ -452,6 +452,139 @@ class IdpApprovalService
     }
 
     /**
+     * The owner's side of the desk: their OWN requests an approver rejected —
+     * a plan set or a program's result — that are waiting to be revised and
+     * submitted again.
+     *
+     * A rejection is a task while it is the LATEST round of its subject (same
+     * employee + package for a plan, same program for a result); resubmitting
+     * opens a new round, which is what moves it to the owner's history. Only
+     * the active cycle, since no screen reaches a closed one.
+     *
+     * @return Collection<int, IdpApproval>
+     */
+    public function revisionsFor(User $user): Collection
+    {
+        return $this->revisionQuery($user, resolved: false)
+            ?->with(['plan', 'package', 'steps'])
+            ->get() ?? collect();
+    }
+
+    /**
+     * Rejections the owner has since revised and resubmitted — their side of the
+     * history. Each is paired with the round that answered it (`answeredBy`).
+     *
+     * @return Collection<int, IdpApproval>
+     */
+    public function revisedBy(User $user): Collection
+    {
+        $rejected = $this->revisionQuery($user, resolved: true)
+            ?->with(['plan', 'package', 'steps'])
+            ->get() ?? collect();
+
+        if ($rejected->isEmpty()) {
+            return $rejected;
+        }
+
+        // The round that followed each rejection: the next one for the same subject.
+        $later = IdpApproval::query()
+            ->where('employee_id', $user->employee_id)
+            ->where('id', '>', $rejected->min('id'))
+            ->orderBy('id')
+            ->get();
+
+        return $rejected->each(function (IdpApproval $approval) use ($later) {
+            $approval->setRelation('answeredBy', $later->first(fn (IdpApproval $next) => $next->id > $approval->id
+                && $next->stage === $approval->stage
+                && ($approval->isPlanning()
+                    ? $next->development_model_package_id === $approval->development_model_package_id
+                    : $next->individual_development_plan_id === $approval->individual_development_plan_id)));
+        });
+    }
+
+    /** How many rejections this user has to revise — part of the menu badge. */
+    public function revisionCountFor(User $user): int
+    {
+        return $this->revisionQuery($user, resolved: false)?->count() ?? 0;
+    }
+
+    public function revisedCountFor(User $user): int
+    {
+        return $this->revisionQuery($user, resolved: true)?->count() ?? 0;
+    }
+
+    /** @return array{planning: int, result: int} */
+    public function revisionStageCountsFor(User $user): array
+    {
+        $counts = $this->revisionQuery($user, resolved: false)
+            ?->groupBy('idp_approvals.stage')
+            ->selectRaw('idp_approvals.stage, count(*) as total')
+            ->pluck('total', 'stage')
+            ?? collect();
+
+        return [
+            'planning' => (int) ($counts[IdpApproval::STAGE_PLANNING] ?? 0),
+            'result' => (int) ($counts[IdpApproval::STAGE_RESULT] ?? 0),
+        ];
+    }
+
+    /**
+     * Rejected rounds of this owner's requests: still the latest of their
+     * subject (`resolved: false`, a task), or answered by a later round
+     * (`resolved: true`, history).
+     */
+    private function revisionQuery(User $user, bool $resolved): ?Builder
+    {
+        if (blank($user->employee_id)) {
+            return null;
+        }
+
+        $package = $this->stage->currentPackage();
+
+        // A task is only one the owner can reach: the active cycle's.
+        if (! $resolved && ! $package) {
+            return null;
+        }
+
+        $modelIds = $package ? $this->stage->modelIdsFor($package->id) : [];
+
+        $laterResult = fn ($q) => $q->from('idp_approvals as later')
+            ->whereColumn('later.individual_development_plan_id', 'idp_approvals.individual_development_plan_id')
+            ->whereColumn('later.id', '>', 'idp_approvals.id');
+
+        $laterPlanning = fn ($q) => $q->from('idp_approvals as later')
+            ->where('later.stage', IdpApproval::STAGE_PLANNING)
+            ->whereColumn('later.employee_id', 'idp_approvals.employee_id')
+            ->whereColumn('later.development_model_package_id', 'idp_approvals.development_model_package_id')
+            ->whereColumn('later.id', '>', 'idp_approvals.id');
+
+        return IdpApproval::query()
+            ->where('idp_approvals.employee_id', $user->employee_id)
+            ->where('idp_approvals.status', 'rejected')
+            ->where(function (Builder $query) use ($resolved, $package, $modelIds, $laterResult, $laterPlanning) {
+                $query->where(function (Builder $result) use ($resolved, $modelIds, $laterResult) {
+                    $result->where('idp_approvals.stage', IdpApproval::STAGE_RESULT);
+
+                    if ($resolved) {
+                        $result->whereExists($laterResult);
+                    } else {
+                        $result->whereNotExists($laterResult)
+                            ->whereHas('plan', fn (Builder $q) => $q->whereIn('development_model_id', $modelIds));
+                    }
+                })->orWhere(function (Builder $planning) use ($resolved, $package, $laterPlanning) {
+                    $planning->where('idp_approvals.stage', IdpApproval::STAGE_PLANNING);
+
+                    if ($resolved) {
+                        $planning->whereExists($laterPlanning);
+                    } else {
+                        $planning->whereNotExists($laterPlanning)
+                            ->where('idp_approvals.development_model_package_id', $package->id);
+                    }
+                });
+            });
+    }
+
+    /**
      * The approval steps this user has already decided — their approval
      * history, newest decision first.
      *
@@ -624,10 +757,18 @@ class IdpApprovalService
             $title = $approved ? 'IDP result approved' : 'IDP result rejected';
             $message = "The result for {$ownerName}"
                 .($program ? " on \"{$program}\"" : '')
-                ." was {$decided}.";
+                ." was {$decided}."
+                .($approved ? '' : ' Revise the result and submit it again — it is in your Task Box under Result approvals.');
         }
 
-        $link = '/idp/'.$approval->employee_id;
+        // A rejection lands on what is corrected — the program's own row, or
+        // the plan's sign-off card — marked until it is resubmitted.
+        $focus = match (true) {
+            $approved => null,
+            $approval->isPlanning() => 'plan',
+            default => $approval->individual_development_plan_id,
+        };
+        $link = '/idp/'.$approval->employee_id.($focus ? '?focus='.$focus : '');
         $url = $this->absoluteUrl($link);
 
         // Recipients: whoever submitted it, plus the IDP owner. Keyed by user_id

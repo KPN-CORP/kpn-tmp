@@ -42,6 +42,13 @@ class SubmitIdpResultRequestTest extends TestCase
             'no scheme' => ['drive.google.com/file/d/abc', 'https://drive.google.com/file/d/abc'],
             'bare host' => ['www.gdrive.com', 'https://www.gdrive.com'],
             'padded' => ['  example.com/x  ', 'https://example.com/x'],
+            // A path on the office network is evidence too, stored as typed.
+            'UNC path' => ['\\\\fileserver\\HR\\Training\\certificate.pdf', '\\\\fileserver\\HR\\Training\\certificate.pdf'],
+            'UNC path with spaces' => ['\\\\fs01\\HR Share\\Cert 2026.pdf', '\\\\fs01\\HR Share\\Cert 2026.pdf'],
+            'UNC, forward slashes' => ['//fs01/HR/cert.pdf', '//fs01/HR/cert.pdf'],
+            'mapped drive' => ['S:\\HR\\Training\\cert.pdf', 'S:\\HR\\Training\\cert.pdf'],
+            'file link' => ['file://fs01/HR/cert.pdf', 'file://fs01/HR/cert.pdf'],
+            'server alone, no share' => ['\\\\fileserver', null],
             'a sentence' => ['Certificate of completion attached', null],
             'ftp' => ['ftp://files.example.com/x', null],
             'javascript' => ['javascript:alert(1)', null],
@@ -49,7 +56,7 @@ class SubmitIdpResultRequestTest extends TestCase
     }
 
     #[DataProvider('evidence')]
-    public function test_evidence_must_be_an_http_link(string $typed, ?string $stored): void
+    public function test_evidence_must_be_a_link_or_a_network_path(string $typed, ?string $stored): void
     {
         $validator = $this->validate($this->payload(['result_evidence' => $typed]));
 

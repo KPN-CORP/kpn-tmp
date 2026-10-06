@@ -10,6 +10,10 @@
  *  - HISTORY — the decisions they have already recorded, newest first, each
  *    with the note they left and where the request went afterwards.
  *
+ * Both desks also hold the OWNER's side: their own plan set or result an
+ * approver rejected (`kind: 'revise'`). It waits under its stage tab until it
+ * is corrected and resubmitted, then moves to history.
+ *
  * This page owns the desk: the tabs, the filters, the sorting, which cards are
  * open. What one request looks like is RequestCard's
  * job — it is the same card on both views, so a state reads the same wherever
@@ -28,10 +32,11 @@ import PageHeader from '@/Components/UI/PageHeader.vue'
 import Pagination from '@/Components/UI/Pagination.vue'
 import SearchableSelect, { type Option } from '@/Components/UI/SearchableSelect.vue'
 import RequestCard from '@/Components/Domain/Idp/RequestCard.vue'
+import RevisionCard from '@/Components/Domain/Idp/RevisionCard.vue'
 import { uomLabelMap } from '@/Components/Domain/Idp/uom'
 import { useLocale } from '@/Composables/useLocale'
 import { route } from '@/Config/route'
-import type { InboxRequest, UomOption } from '@/types/idp'
+import type { InboxRequest, InboxRevision, UomOption } from '@/types/idp'
 import type { Paginator } from '@/types/pagination'
 
 const { t, locale } = useLocale()
@@ -42,7 +47,8 @@ interface Sort {
 }
 
 const props = defineProps<{
-    items: Paginator<InboxRequest>
+    /** Requests to decide / decided, mixed with the owner's own revisions. */
+    items: Paginator<InboxRequest | InboxRevision>
     /** Which desk is being read. */
     view: 'pending' | 'history'
     filters: { search: string; stage: string }
@@ -59,6 +65,13 @@ const props = defineProps<{
 }>()
 
 const isHistory = computed(() => props.view === 'history')
+
+function isRevision(item: InboxRequest | InboxRevision): item is InboxRevision {
+    return 'kind' in item && item.kind === 'revise'
+}
+
+/** The approver's rows — the ones that expand. */
+const requests = computed(() => props.items.data.filter((i): i is InboxRequest => !isRevision(i)))
 
 // value => unit label in the active language, handed to every card.
 const uomLabels = computed(() => uomLabelMap(props.unitsOfMeasurement, locale.value))
@@ -184,7 +197,7 @@ function toggle(id: number) {
  * (it holds the plan as decided), a pending one only when it is a resubmission.
  */
 const expandableIds = computed(() =>
-    props.items.data.filter((i) => isHistory.value || !!i.previous).map((i) => i.step_id),
+    requests.value.filter((i) => isHistory.value || !!i.previous).map((i) => i.step_id),
 )
 
 /** Open when anything is closed; otherwise close everything. */
@@ -326,15 +339,18 @@ function toggleAll() {
             </div>
 
             <div class="space-y-3">
-                <RequestCard
-                    v-for="item in items.data"
-                    :key="item.step_id"
-                    :item="item"
-                    :history="isHistory"
-                    :uom-labels="uomLabels"
-                    :open="expanded.has(item.step_id)"
-                    @toggle="toggle(item.step_id)"
-                />
+                <!-- One list, in the desk's order: requests to decide and the viewer's own revisions -->
+                <template v-for="item in items.data" :key="isRevision(item) ? `revise-${item.approval_id}` : item.step_id">
+                    <RevisionCard v-if="isRevision(item)" :item="item" :history="isHistory" />
+                    <RequestCard
+                        v-else
+                        :item="item"
+                        :history="isHistory"
+                        :uom-labels="uomLabels"
+                        :open="expanded.has(item.step_id)"
+                        @toggle="toggle(item.step_id)"
+                    />
+                </template>
 
                 <p
                     v-if="!items.data.length"

@@ -192,6 +192,33 @@ export interface InboxPlan {
     result_evidence: string | null
 }
 
+/**
+ * One of the owner's own requests an approver rejected, on their Task Box: a
+ * task on the pending desk until resubmitted, then a history entry. A result
+ * carries its one program in `plans`; a plan set carries none (its package
+ * names it).
+ */
+export interface InboxRevision {
+    kind: 'revise'
+    approval_id: number
+    plan_id: number | null
+    stage: 'planning' | 'result'
+    package: { id: number; name: string } | null
+    owner_id: string
+    owner_name: string
+    title: string | null
+    plans: InboxPlan[]
+    submitted_at: string | null
+    total_levels: number
+    rejected_at: string | null
+    rejected: { level: number; name: string | null } | null
+    note: string | null
+    can_act: boolean
+    /** History only: when the corrected round was submitted, and where it stands now. */
+    resubmitted_at: string | null
+    outcome: 'pending' | 'approved' | 'rejected' | null
+}
+
 /** Plan fields compared between two rounds of the same request. */
 export type InboxPlanField = Exclude<keyof InboxPlan, 'id'>
 
