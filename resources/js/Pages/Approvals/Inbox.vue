@@ -45,9 +45,9 @@ const props = defineProps<{
     items: Paginator<InboxRequest>
     /** Which desk is being read. */
     view: 'pending' | 'history'
-    filters: { search: string; stage: string; type: string }
+    filters: { search: string; stage: string }
+    /** Always the desk's date — submitted (pending) or decided (history); only `dir` varies. */
     sort: Sort
-    filterOptions: { types: string[] }
     /** The unit catalogue, for naming a plan's target unit. */
     unitsOfMeasurement: UomOption[]
     /** Everything on the desk, at every layer. */
@@ -68,7 +68,6 @@ const uomLabels = computed(() => uomLabelMap(props.unitsOfMeasurement, locale.va
 const state = reactive({
     search: props.filters.search ?? '',
     stage: props.filters.stage ?? '',
-    type: props.filters.type ?? '',
     per_page: props.items.per_page,
 })
 
@@ -79,7 +78,6 @@ function reload(sort: Sort = props.sort, view: string = props.view) {
             view: view === 'history' ? 'history' : undefined,
             search: state.search || undefined,
             stage: state.stage || undefined,
-            type: state.type || undefined,
             sort: sort.key,
             direction: sort.dir,
             per_page: state.per_page,
@@ -98,12 +96,11 @@ watch(
     },
 )
 
-const hasFilters = computed(() => !!(state.search || state.stage || state.type))
+const hasFilters = computed(() => !!(state.search || state.stage))
 
 function resetFilters(view: string = props.view) {
     state.search = ''
     state.stage = ''
-    state.type = ''
     reload(props.sort, view)
 }
 
@@ -112,14 +109,9 @@ function onStage(value: string) {
     reload()
 }
 
-function onType(value: string) {
-    state.type = value
-    reload()
-}
-
-function changeSort(key: string) {
-    const dir: 'asc' | 'desc' = props.sort.key === key && props.sort.dir === 'asc' ? 'desc' : 'asc'
-    reload({ key, dir })
+/** Flip between oldest-first and newest-first on the desk's date. */
+function toggleSortDirection() {
+    reload({ key: props.sort.key, dir: props.sort.dir === 'asc' ? 'desc' : 'asc' })
 }
 
 function changePerPage(perPage: number) {
@@ -149,7 +141,6 @@ function selectTab(key: string) {
     }
 
     state.search = ''
-    state.type = ''
     state.stage = key === 'history' ? '' : key
 
     reload(
@@ -169,28 +160,6 @@ const stageOptions = computed<Option[]>(() => [
     { value: 'planning', label: t.value.approvalFlow.planningRequests },
     { value: 'result', label: t.value.approvalFlow.resultRequests },
 ])
-
-const typeOptions = computed<Option[]>(() => [
-    { value: '', label: t.value.approvalFlow.allTypes },
-    ...props.filterOptions.types.map((v) => ({ value: v, label: v })),
-])
-
-const sortOptions = computed<Option[]>(() =>
-    isHistory.value
-        ? [
-            { value: 'decided_at', label: t.value.approvalFlow.decidedAt },
-            { value: 'submitted_at', label: t.value.approvalFlow.submittedAt },
-            { value: 'owner_name', label: t.value.approvalFlow.owner },
-            { value: 'stage', label: t.value.approvalFlow.type },
-            { value: 'decision', label: t.value.approvalFlow.decision },
-        ]
-        : [
-            { value: 'submitted_at', label: t.value.approvalFlow.submittedAt },
-            { value: 'owner_name', label: t.value.approvalFlow.owner },
-            { value: 'stage', label: t.value.approvalFlow.type },
-            { value: 'level', label: t.value.approvalFlow.yourLayer },
-        ],
-)
 
 /** Whether this desk holds anything at all, before any filter is applied. */
 const hasAnything = computed(() => (isHistory.value ? props.historyTotal > 0 : props.pendingTotal > 0))
@@ -296,8 +265,8 @@ function toggleAll() {
             </p>
 
             <!-- Filters -->
-            <div class="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div class="relative" :class="isHistory ? '' : 'sm:col-span-2'">
+            <div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div class="relative flex-1">
                     <i class="fa-solid fa-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400" />
                     <input
                         v-model="state.search"
@@ -310,35 +279,23 @@ function toggleAll() {
                 <!-- On the pending desk the tab strip already narrows by stage. -->
                 <SearchableSelect
                     v-if="isHistory"
+                    class="sm:w-64"
                     :model-value="state.stage"
                     :options="stageOptions"
                     :placeholder="t.approvalFlow.allStages"
                     @update:model-value="onStage"
                 />
 
-                <SearchableSelect
-                    :model-value="state.type"
-                    :options="typeOptions"
-                    :placeholder="t.approvalFlow.allTypes"
-                    @update:model-value="onType"
-                />
-
-                <div class="flex items-center gap-2">
-                    <SearchableSelect
-                        class="flex-1"
-                        :model-value="sort.key"
-                        :options="sortOptions"
-                        @update:model-value="(key: string) => changeSort(key)"
-                    />
-                    <button
-                        type="button"
-                        class="shrink-0 rounded-md border border-border bg-white px-3 py-2.5 text-sm text-slate-500 transition hover:bg-slate-50"
-                        :title="sort.dir === 'asc' ? 'A → Z' : 'Z → A'"
-                        @click="changeSort(sort.key)"
-                    >
-                        <i :class="sort.dir === 'asc' ? 'fa-solid fa-arrow-up-short-wide' : 'fa-solid fa-arrow-down-wide-short'" />
-                    </button>
-                </div>
+                <!-- Sorted by the desk's date; only the direction is chosen. -->
+                <button
+                    type="button"
+                    class="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-border bg-white px-3.5 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                    :title="isHistory ? t.approvalFlow.sortByDecided : t.approvalFlow.sortBySubmitted"
+                    @click="toggleSortDirection"
+                >
+                    <i :class="sort.dir === 'asc' ? 'fa-solid fa-arrow-up-short-wide' : 'fa-solid fa-arrow-down-wide-short'" class="text-slate-400" />
+                    {{ sort.dir === 'asc' ? t.approvalFlow.oldestFirst : t.approvalFlow.newestFirst }}
+                </button>
             </div>
 
             <div v-if="hasFilters" class="mb-4">

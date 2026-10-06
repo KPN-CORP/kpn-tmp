@@ -42,29 +42,13 @@ class IdpApprovalController extends Controller
     use ReadsSort;
 
     /**
-     * Sortable inbox columns → the path of the row value they sort on.
+     * The desk sorts on one thing: the date that matters on it — when a request
+     * was submitted (pending), or when it was decided (history). Only the
+     * direction is the reader's choice.
      */
-    private const SORT_PATHS = [
-        'owner_id' => 'owner_id',
-        'owner_name' => 'owner_name',
-        'stage' => 'stage',
-        'title' => 'title',
-        'submitted_at' => 'submitted_at',
-        'level' => 'level',
-    ];
+    private const PENDING_SORT_KEY = 'submitted_at';
 
-    /**
-     * The same, for the history view — which sorts on when the decision was
-     * made, not on which layer is waiting. A separate whitelist so neither view
-     * can be asked to sort on a column its rows do not carry.
-     */
-    private const HISTORY_SORT_PATHS = [
-        'decided_at' => 'decided_at',
-        'submitted_at' => 'submitted_at',
-        'owner_name' => 'owner_name',
-        'stage' => 'stage',
-        'decision' => 'decision',
-    ];
+    private const HISTORY_SORT_KEY = 'decided_at';
 
     public function __construct(
         private readonly EmployeeScopeService $scope,
@@ -257,37 +241,25 @@ class IdpApprovalController extends Controller
         $filters = [
             'search' => $request->string('search')->trim()->value(),
             'stage' => $request->string('stage')->value(),
-            'type' => $request->string('type')->value(),
         ];
 
-        $paths = $history ? self::HISTORY_SORT_PATHS : self::SORT_PATHS;
+        $dateKey = $history ? self::HISTORY_SORT_KEY : self::PENDING_SORT_KEY;
+        $sort = $this->readSort($request, [$dateKey], $dateKey);
 
-        $sort = $this->readSort($request, array_keys($paths), $history ? 'decided_at' : 'submitted_at');
-
-        // A log reads newest-first; readSort only ever defaults to ascending.
+        // What is waiting longest first; a log reads newest first. readSort
+        // only ever defaults to ascending.
         if ($history && ! $request->filled('direction')) {
             $sort['dir'] = 'desc';
         }
 
         $rows = $history ? $this->historyRows($user) : $this->inboxRows($user);
 
-        // Competency types across the whole list, not just the current page.
-        $types = $rows
-            ->flatMap(fn (array $row) => collect($row['plans'])->pluck('competency_type'))
-            ->filter()->unique()->sort()->values();
-
-        $path = $paths[$sort['key']];
+        $path = $dateKey;
 
         $matched = $rows
             ->when(
                 $filters['stage'],
                 fn (Collection $c, string $stage) => $c->where('stage', $stage),
-            )
-            ->when(
-                $filters['type'],
-                fn (Collection $c, string $type) => $c->filter(
-                    fn (array $row) => collect($row['plans'])->contains('competency_type', $type),
-                ),
             )
             ->when(
                 $filters['search'],
@@ -321,7 +293,6 @@ class IdpApprovalController extends Controller
             'view' => $history ? 'history' : 'pending',
             'filters' => $filters,
             'sort' => $sort,
-            'filterOptions' => ['types' => $types],
             // The unit catalogue, so a card can name the target's unit in the
             // reader's own language - the same payload the manage screen gets.
             'unitsOfMeasurement' => UnitOfMeasurement::options(),
