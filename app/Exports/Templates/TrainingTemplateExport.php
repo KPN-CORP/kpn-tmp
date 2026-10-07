@@ -36,7 +36,7 @@ class TrainingTemplateExport implements WithMultipleSheets
                 '1. Master Training',
                 [
                     'name_en', 'name_id', 'description_en', 'description_id',
-                    'competency_type', 'competency', 'proficiency_levels',
+                    'period', 'competency_type', 'competency', 'proficiency_levels',
                     'business_units', 'work_locations', 'is_active',
                 ],
                 $this->samples($competencies, $locations['byBusinessUnit']),
@@ -107,7 +107,7 @@ class TrainingTemplateExport implements WithMultipleSheets
                 'heading' => 'HOW TO FILL IT IN',
                 'columns' => ['Step', 'Do this', ''],
                 'rows' => [
-                    ['Step 1', 'Name the training in name_en.', ''],
+                    ['Step 1', 'Name the training in name_en, and put the year it applies to in period.', ''],
                     ['Step 2', 'On "Ref - Competencies", find the competency this training builds. Copy its type and the competency itself onto your row.', ''],
                     ['Step 3', 'From the same reference row, copy the proficiency levels you want to target — they must belong to that competency.', ''],
                     ['Step 4', 'If the training is only offered in certain places, copy the units from "Ref - Business Units" and the sites from "Ref - Work Locations".', ''],
@@ -121,6 +121,7 @@ class TrainingTemplateExport implements WithMultipleSheets
                     ['name_en', 'Required', 'The English name. This is also how the row is matched.'],
                     ['name_id', 'Optional', 'The Indonesian name.'],
                     ['description_en / description_id', 'Optional', 'A sentence describing the training.'],
+                    ['period', 'Required', 'The year this training applies to, as four digits — for example 2026. The catalogue is planned per year.'],
                     ['competency_type', 'Required', 'From "Ref - Competencies" — its Code, or its Name if it has none.'],
                     ['competency', 'Required', 'The competency this training builds. It must be filed under the type above.'],
                     [
@@ -161,6 +162,10 @@ class TrainingTemplateExport implements WithMultipleSheets
      */
     private function samples(array $competencies, array $byBusinessUnit): array
     {
+        // This year, so a downloaded workbook is uploadable as-is whenever it
+        // is downloaded — the same reason the scope samples are read live.
+        $year = (string) now()->year;
+
         $usable = collect($competencies)->firstWhere('levels', '!=', []) ?? ($competencies[0] ?? null);
 
         $type = $usable['type'] ?? 'Soft Competency';
@@ -178,14 +183,14 @@ class TrainingTemplateExport implements WithMultipleSheets
                 'Lokakarya Komunikasi Efektif',
                 'Two-day workshop on getting a message across clearly.',
                 'Lokakarya dua hari tentang menyampaikan pesan dengan jelas.',
-                $type, $competency, $levels, $unit, $sites, 'yes',
+                $year, $type, $competency, $levels, $unit, $sites, 'yes',
             ],
             [
                 'Problem Solving Fundamentals',
                 'Dasar Pemecahan Masalah',
                 'Self-paced introduction, open to everyone.',
                 'Pengenalan mandiri, terbuka untuk semua.',
-                $type, $competency, '', '', '', 'yes',
+                $year, $type, $competency, '', '', '', 'yes',
             ],
         ];
     }

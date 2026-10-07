@@ -66,6 +66,9 @@ interface ProficiencyLevel extends Localized {
 interface Training extends Localized {
     description_en: string | null
     description_id: string | null
+    // The year this training is filed under. Null on the rows that predate the
+    // column — the form requires one, so they acquire it on their next save.
+    period: number | null
     // An inactive training stays listed here but is not offered as the name
     // source for a new development program.
     is_active: boolean
@@ -230,6 +233,9 @@ function blankTraining() {
         value_id: '',
         description_en: '',
         description_id: '',
+        // Bound to a number input, so an emptied field reads as ''. The server
+        // requires a year, which is what reports it.
+        period: '' as number | string,
         competency_type_id: null as number | null,
         competency_id: null as number | null,
         // MultiSelect binds string[]; converted to ints server-side.
@@ -324,6 +330,7 @@ function openModal(item?: Training) {
         value_id: item?.value_id ?? '',
         description_en: item?.description_en ?? '',
         description_id: item?.description_id ?? '',
+        period: item?.period ?? '',
         competency_type_id: item?.competency_type_id ?? null,
         competency_id: item?.competency_id ?? null,
         proficiency_level_ids: (item?.proficiency_level_ids ?? []).map(String),
@@ -402,7 +409,11 @@ const scopeComplete = computed(
     () => form.competency_type_id != null && form.competency_id != null,
 )
 
-const identityComplete = computed(() => form.value_en.trim() !== '')
+// The period says which year's catalogue this row belongs to, so the identity
+// step is not settled without it.
+const identityComplete = computed(
+    () => form.value_en.trim() !== '' && String(form.period).trim() !== '',
+)
 
 /**
  * --------------------------------------------------------------------------
@@ -437,6 +448,7 @@ const search = ref('')
  * narrowed by something the dropdown does not show.
  */
 
+const periodFilter = ref('')
 const typeFilter = ref('')
 const competencyFilter = ref('')
 const businessUnitFilter = ref('')
@@ -444,6 +456,7 @@ const workLocationFilter = ref('')
 
 const hasFilters = computed(
     () =>
+        periodFilter.value !== '' ||
         typeFilter.value !== '' ||
         competencyFilter.value !== '' ||
         businessUnitFilter.value !== '' ||
@@ -451,6 +464,7 @@ const hasFilters = computed(
 )
 
 function clearFilters() {
+    periodFilter.value = ''
     typeFilter.value = ''
     competencyFilter.value = ''
     businessUnitFilter.value = ''
@@ -464,6 +478,25 @@ function withAllOption(label: string, options: Option[]): Option[] {
         ...options.sort((a, b) => a.label.localeCompare(b.label)),
     ]
 }
+
+/**
+ * The years the catalogue actually holds, newest first — a year reads as a
+ * sequence rather than as a name, so this one does not sort by label like the
+ * rest. A training with no period yet is not a year and offers no option; the
+ * search box is how those are found.
+ */
+const periodFilterOptions = computed<Option[]>(() => {
+    const years = [...new Set(
+        props.trainings
+            .map((tr) => tr.period)
+            .filter((p): p is number => p != null),
+    )].sort((a, b) => b - a)
+
+    return [
+        { value: '', label: t.value.idp.settings.allPeriods },
+        ...years.map((year) => ({ value: String(year), label: String(year) })),
+    ]
+})
 
 const typeFilterOptions = computed<Option[]>(() => {
     const seen = new Map<number, string>()
@@ -564,6 +597,10 @@ watch(workLocationFilterOptions, (options) => {
 // Whole trainings are filtered, never single proficiency lines — keeping only
 // the matching line would break the group it belongs to.
 function matchesFilters(tr: Training): boolean {
+    if (periodFilter.value !== '' && String(tr.period ?? '') !== periodFilter.value) {
+        return false
+    }
+
     if (typeFilter.value !== '' && String(tr.competency_type_id ?? '') !== typeFilter.value) {
         return false
     }
@@ -599,6 +636,9 @@ interface TrainingRow {
     typeKey: string
     competencyKey: string
     trainingKey: string
+    // The year, as a number so the column sorts chronologically, and 0 for a
+    // row with none — which is what keeps those together at one end.
+    period: number
     type_name: string
     type_code: string
     competency_name: string
@@ -659,6 +699,7 @@ const filtered = computed<TrainingRow[]>(() => {
                       r.competency_code,
                       ...r.levels.map((l) => masterName(l)),
                       ...r.levels.map((l) => l.code ?? ''),
+                      String(r.training.period ?? ''),
                       ...(r.training.business_units ?? []),
                       ...(r.training.work_locations ?? []),
                   ].some((v) => v.toLowerCase().includes(q))
@@ -687,6 +728,7 @@ const filtered = computed<TrainingRow[]>(() => {
             typeKey: tr.competency_type_id == null ? `t${tr.id}` : `T${tr.competency_type_id}`,
             competencyKey: tr.competency_id == null ? `c${tr.id}` : `C${tr.competency_id}`,
             trainingKey: String(tr.id),
+            period: tr.period ?? 0,
             type_name: r.type_name,
             type_code: r.type_code,
             competency_name: r.competency_name,
@@ -749,6 +791,17 @@ const columns = computed<Column[]>(() => [
         merge: true,
         mergeKey: 'competencyKey',
         thClass: 'w-48',
+    },
+    // A property of the training rather than of the group above it, so it
+    // merges with the name beside it. Not sortable for the same reason the
+    // name is not: sorting anything below the outermost group would interleave
+    // the types and shatter the merged cells.
+    {
+        key: 'period',
+        label: t.value.idp.settings.period,
+        merge: true,
+        mergeKey: 'trainingKey',
+        thClass: 'w-24',
     },
     {
         key: 'name',
@@ -857,11 +910,18 @@ function deleteTraining(item: Training) {
                     </div>
                 </div>
 
-                <!-- Filters: competency type -> competency, business unit ->
-                     work location. Each child's options are narrowed by its
-                     parent; either can still be picked on its own. -->
+                <!-- Filters: the year, then competency type -> competency and
+                     business unit -> work location. Each child's options are
+                     narrowed by its parent; either can still be picked on its
+                     own. The period stands alone — a year narrows nothing. -->
                 <div class="border-b border-border/60 bg-slate-50/60 px-5 py-4">
-                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                        <SearchableSelect
+                            v-model="periodFilter"
+                            :options="periodFilterOptions"
+                            :placeholder="t.idp.settings.allPeriods"
+                        />
+
                         <SearchableSelect
                             v-model="typeFilter"
                             :options="typeFilterOptions"
@@ -939,6 +999,18 @@ function deleteTraining(item: Training) {
                             </span>
                             <div class="font-medium text-slate-700">{{ row.competency_name }}</div>
                         </div>
+                        <span v-else class="text-xs italic text-slate-300">&#8212;</span>
+                    </template>
+
+                    <!-- 0 is the stand-in for a training saved before the
+                         column existed; it reads as "none", not as a year. -->
+                    <template #cell-period="{ row }">
+                        <span
+                            v-if="row.period"
+                            class="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs font-semibold text-slate-600"
+                        >
+                            {{ row.period }}
+                        </span>
                         <span v-else class="text-xs italic text-slate-300">&#8212;</span>
                     </template>
 
@@ -1209,6 +1281,32 @@ function deleteTraining(item: Training) {
                     icon="fa-solid fa-tag"
                     :complete="identityComplete"
                 >
+                    <!-- The year this training belongs to. Above the two
+                         language blocks because it belongs to neither, the
+                         same place the masters' codes sit. -->
+                    <div class="sm:max-w-[12rem]">
+                        <label
+                            class="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-700"
+                        >
+                            {{ t.idp.settings.period }}
+                            <span class="text-red-500">*</span>
+                        </label>
+                        <input
+                            v-model="form.period"
+                            type="number"
+                            inputmode="numeric"
+                            min="2000"
+                            max="2100"
+                            step="1"
+                            :placeholder="t.idp.settings.periodPlaceholder"
+                            class="w-full rounded-md border bg-white px-3 py-2 font-mono text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            :class="form.errors.period ? 'border-red-500' : 'border-border'"
+                        >
+                        <p v-if="form.errors.period" class="mt-1 text-xs text-red-600">
+                            {{ form.errors.period }}
+                        </p>
+                    </div>
+
                     <!-- Bilingual name, side by side -->
                     <div class="grid gap-4 sm:grid-cols-2">
                         <div>

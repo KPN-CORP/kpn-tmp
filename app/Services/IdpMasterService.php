@@ -219,10 +219,10 @@ class IdpMasterService
     }
 
     /**
-     * What a master training is scoped to: the competency it builds, through
-     * its type. Everything else it carries is a list — the proficiency levels
-     * it targets, and the business units / work locations it is offered in —
-     * and those are synced in {@see syncLinks()}.
+     * What a master training is scoped to: the year it is filed under, and the
+     * competency it builds, through its type. Everything else it carries is a
+     * list — the proficiency levels it targets, and the business units / work
+     * locations it is offered in — and those are synced in {@see syncLinks()}.
      *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
@@ -230,6 +230,7 @@ class IdpMasterService
     private function trainingAttributes(array $data): array
     {
         return [
+            'period' => isset($data['period']) ? (int) $data['period'] : null,
             'competency_type_id' => $data['competency_type_id'] ?? null,
             'competency_id' => $data['competency_id'] ?? null,
         ];

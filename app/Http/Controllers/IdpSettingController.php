@@ -115,6 +115,9 @@ class IdpSettingController extends Controller
             ->map(fn (Training $t) => $this->options->option($t) + [
                 'description_en' => $t->description_en,
                 'description_id' => $t->description_id,
+                // The year this training is filed under. Null on the rows that
+                // predate the column; they acquire one on their next save.
+                'period' => $t->period,
                 // What the training builds, and who it is offered to. Every
                 // part of the scope but the competency is a list.
                 'competency_type_id' => $t->competency_type_id,

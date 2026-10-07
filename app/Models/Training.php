@@ -10,9 +10,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * A training in the master training catalogue: a bilingual name + description,
- * scoped to the competency it builds (through its competency type) at any
- * number of proficiency levels, and to the corporate business units / work
- * locations it is offered in. Every part of the scope is optional.
+ * filed under the year it belongs to, scoped to the competency it builds
+ * (through its competency type) at any number of proficiency levels, and to the
+ * corporate business units / work locations it is offered in. Every part of the
+ * scope is optional.
  *
  * A training can be switched off without being deleted; who flipped it is
  * recorded outside the database.
@@ -28,10 +29,12 @@ class Training extends Model
         'name_id',
         'description_en',
         'description_id',
+        'period',
         'is_active',
     ];
 
     protected $casts = [
+        'period' => 'integer',
         'is_active' => 'boolean',
     ];
 

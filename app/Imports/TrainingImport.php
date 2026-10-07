@@ -20,9 +20,9 @@ use Maatwebsite\Excel\Concerns\WithHeadingRow;
 
 /**
  * Bulk-import master trainings. One row per training, keyed by header:
- * `name_en`, `name_id`, `description_en`, `description_id`, `competency_type`,
- * `competency`, `proficiency_levels`, `business_units`, `work_locations` and
- * `is_active`.
+ * `name_en`, `name_id`, `description_en`, `description_id`, `period`,
+ * `competency_type`, `competency`, `proficiency_levels`, `business_units`,
+ * `work_locations` and `is_active`.
  *
  * Unlike a competency, a training's three lists — the rungs it targets and the
  * business units / work locations it is offered in — are plain lists of names
@@ -144,6 +144,12 @@ class TrainingImport implements ReportsImportOutcome, ToCollection, WithHeadingR
             return;
         }
 
+        $period = $this->period($row, $line);
+
+        if ($period === false) {
+            return;
+        }
+
         // The name is the only identifier a training has.
         $existing = Training::where('name_en', $nameEn)->first();
 
@@ -177,6 +183,7 @@ class TrainingImport implements ReportsImportOutcome, ToCollection, WithHeadingR
             'value_id' => $this->cell($row, 'name_id'),
             'description_en' => $this->cell($row, 'description_en'),
             'description_id' => $this->cell($row, 'description_id'),
+            'period' => $period,
             'is_active' => $this->flag($row),
             'competency_type_id' => $typeId,
             'competency_id' => $competencyId,
@@ -380,6 +387,46 @@ class TrainingImport implements ReportsImportOutcome, ToCollection, WithHeadingR
         }
 
         return ! in_array(mb_strtolower($value), ['0', 'no', 'false', 'n', 'inactive', 'tidak'], true);
+    }
+
+    /**
+     * The year this training is filed under. Required, like it is on the form
+     * — a training that names no year cannot be found by the screen's period
+     * filter, and the catalogue is planned per year.
+     *
+     * The window matches the form's rule rather than the column, which holds
+     * any year. False when the cell is missing or is not a usable year (the
+     * row's error is recorded).
+     *
+     * ⚠️ A spreadsheet may hand the cell back as `2026.0` — Excel stores every
+     * number as a float — so it is read as a number and then checked for being
+     * whole, not matched as digits.
+     */
+    private function period(Collection $row, int $line): int|false
+    {
+        $raw = $this->cell($row, 'period');
+
+        if ($raw === null) {
+            $this->errors[] = "Row {$line}: period is required — the year this training applies to, for example 2026.";
+
+            return false;
+        }
+
+        if (! is_numeric($raw) || (float) $raw !== floor((float) $raw)) {
+            $this->errors[] = "Row {$line}: period '{$raw}' is not a year.";
+
+            return false;
+        }
+
+        $year = (int) (float) $raw;
+
+        if ($year < 2000 || $year > 2100) {
+            $this->errors[] = "Row {$line}: period '{$raw}' must be a year between 2000 and 2100.";
+
+            return false;
+        }
+
+        return $year;
     }
 
     private function cell(Collection $row, string $key): ?string

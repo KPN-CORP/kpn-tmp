@@ -547,6 +547,10 @@ const id: LocaleMessages = {
             noTrainingsMatch: 'Tidak ada pelatihan yang cocok.',
             // Filter di atas tabel pelatihan. Pilihan kompetensi menyempit
             // sesuai tipe yang dipilih, lokasi kerja sesuai unit bisnis.
+            // Tahun berlakunya master training, beserta filternya.
+            period: 'Periode',
+            periodPlaceholder: 'mis. 2026',
+            allPeriods: 'Semua periode',
             allCompetencyTypes: 'Semua tipe kompetensi',
             allProficiencyLevels: 'Semua level kemahiran',
             allWorkLocations: 'Semua lokasi kerja',

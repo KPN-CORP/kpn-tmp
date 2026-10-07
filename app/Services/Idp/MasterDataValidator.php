@@ -136,6 +136,14 @@ class MasterDataValidator
             'value_id' => ['nullable', 'string', $nameLength],
             'description_en' => ['nullable', 'string'],
             'description_id' => ['nullable', 'string'],
+            // The year a master training is filed under. Only trainings carry
+            // one, so every other kind must not send the field at all — the
+            // same treatment `code` gets above. The window is a validation
+            // rule rather than a column constraint, so widening it is a
+            // one-line change here.
+            'period' => $isTraining
+                ? ['required', 'integer', 'min:2000', 'max:2100']
+                : ['prohibited'],
             // Active/inactive (competencies / trainings / review tools). Absent
             // means active.
             'is_active' => ['nullable', 'boolean'],
@@ -241,6 +249,11 @@ class MasterDataValidator
             'code.required' => "A {$coded} needs a code.",
             'code.unique' => "Another {$coded} already uses this code.",
             'code.prohibited' => 'Only a competency or a competency type carries a code.',
+            'period.required' => 'A training needs the year it applies to.',
+            'period.integer' => 'The period must be a year, for example 2026.',
+            'period.min' => 'The period must be a year between 2000 and 2100.',
+            'period.max' => 'The period must be a year between 2000 and 2100.',
+            'period.prohibited' => 'Only a master training carries a period.',
             'training_id.required' => 'The selected development model takes its programs from Master Training, so a training must be chosen.',
             'sub_competencies.*.name_en.required' => 'Every sub competency needs an English name.',
             'sub_competencies.*.name_en.max' => 'A sub competency name may not be longer than 255 characters.',

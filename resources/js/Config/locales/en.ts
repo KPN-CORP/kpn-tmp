@@ -550,6 +550,10 @@ export default {
             // Filter dropdowns above the trainings table. A competency's
             // options narrow to the chosen type, a work location's to the
             // chosen business unit.
+            // The year a master training is filed under, and its filter.
+            period: 'Period',
+            periodPlaceholder: 'e.g. 2026',
+            allPeriods: 'All periods',
             allCompetencyTypes: 'All competency types',
             allProficiencyLevels: 'All proficiency levels',
             allWorkLocations: 'All work locations',

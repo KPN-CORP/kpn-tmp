@@ -1,1 +1,0 @@
-import{y as o,r as n}from"./app-C6NR6iwz.js";function s(r){const e=n(null),l=n(!1);function t(){e.value&&o.delete(e.value.url,{preserveScroll:!0,preserveState:!0,only:r,onStart:()=>l.value=!0,onFinish:()=>l.value=!1,onSuccess:()=>e.value=null})}function u(){e.value=null}return{pendingDelete:e,deleting:l,confirmDelete:t,cancelDelete:u}}export{s as u};
